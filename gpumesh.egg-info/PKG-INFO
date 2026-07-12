@@ -1,3 +1,42 @@
+Metadata-Version: 2.4
+Name: gpumesh
+Version: 0.5.0
+Summary: Borrow your friends' GPUs: a terminal-based distributed compute mesh in pure Python
+License-Expression: MIT
+Project-URL: Homepage, https://github.com/Samurai007AK/gpumesh
+Project-URL: Documentation, https://github.com/Samurai007AK/gpumesh#readme
+Project-URL: Repository, https://github.com/Samurai007AK/gpumesh
+Project-URL: Issues, https://github.com/Samurai007AK/gpumesh/issues
+Keywords: gpu,distributed,compute,mesh,ml,pytorch,cuda
+Classifier: Development Status :: 4 - Beta
+Classifier: Intended Audience :: Developers
+Classifier: Intended Audience :: Science/Research
+Classifier: Operating System :: OS Independent
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.9
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Programming Language :: Python :: 3.12
+Classifier: Topic :: Scientific/Engineering :: Artificial Intelligence
+Classifier: Topic :: System :: Distributed Computing
+Requires-Python: >=3.9
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Provides-Extra: gpu
+Requires-Dist: torch; extra == "gpu"
+Provides-Extra: tunnel
+Requires-Dist: pyngrok; extra == "tunnel"
+Provides-Extra: sysinfo
+Requires-Dist: psutil; extra == "sysinfo"
+Provides-Extra: notebook
+Requires-Dist: cloudpickle; extra == "notebook"
+Requires-Dist: pandas; extra == "notebook"
+Provides-Extra: dev
+Requires-Dist: pytest; extra == "dev"
+Requires-Dist: build; extra == "dev"
+Requires-Dist: twine; extra == "dev"
+Dynamic: license-file
+
 # gpumesh
 
 Borrow your friends' GPUs. A distributed compute mesh that lets you share GPU power across machines using Python.
