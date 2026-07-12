@@ -142,6 +142,36 @@ def cmd_disconnect(args):
     print("[mesh] connection cleared")
 
 
+def cmd_show_connection(args):
+    """Show saved connection details for easy sharing."""
+    saved = connection_manager.load_connection()
+    if not saved:
+        print("[mesh] No saved connection found.")
+        print("[mesh] Run 'gpumesh join' or 'gpumesh setup' first.")
+        return
+
+    url = saved["url"]
+    token = saved["token"]
+
+    print()
+    print("=" * 50)
+    print("  SAVED CONNECTION DETAILS")
+    print("=" * 50)
+    print()
+    print(f"  URL:   {url}")
+    print(f"  Token: {token}")
+    print()
+    print("=" * 50)
+    print()
+    print("  Share these with your workers!")
+    print()
+    print("  Workers can join by running:")
+    print(f"    gpumesh quickjoin {url} --token {token}")
+    print()
+    print("  Or run 'gpumesh setup' and enter the URL and Token.")
+    print()
+
+
 def cmd_setup(args):
     from .setup_wizard import run_setup_wizard
     run_setup_wizard()
@@ -282,6 +312,9 @@ def main():
 
     p = sub.add_parser("disconnect", help="clear saved connection")
     p.set_defaults(func=cmd_disconnect)
+
+    p = sub.add_parser("show-connection", help="show saved URL and token for sharing")
+    p.set_defaults(func=cmd_show_connection)
 
     p = sub.add_parser("setup", help="interactive setup wizard")
     p.set_defaults(func=cmd_setup)
