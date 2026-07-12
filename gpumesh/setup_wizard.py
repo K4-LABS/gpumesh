@@ -138,8 +138,8 @@ def run_setup_wizard():
     # --- Ask the ONE question ---
     print(_c("bold", "  What do you want to do?"))
     print()
-    print(_c("cyan", "    1) Set up this machine to MANAGE jobs"))
-    print(_c("cyan", "    2) Add this machine to someone else's mesh"))
+    print(_c("cyan", "    1) Set up this machine to MANAGE jobs (Coordinator)"))
+    print(_c("cyan", "    2) Add this machine to someone else's mesh (Worker)"))
     print()
 
     choice = _ask("Enter 1 or 2:")
@@ -164,6 +164,7 @@ def _setup_coordinator(device: str):
 
     # Detect network options
     tailscale_ok = _has_tailscale()
+    tailscale_ip = _get_tailscale_ip() if tailscale_ok else None
     from .utils import get_lan_ip
     lan_ip = get_lan_ip()
 
@@ -171,65 +172,89 @@ def _setup_coordinator(device: str):
     print(_c("bold", "  How will other machines connect to this one?"))
     print()
     if tailscale_ok:
-        print(_c("cyan", "    1) Tailscale (works even on different networks)"))
-        print(_c("cyan", "    2) Same WiFi / LAN (no extra setup)"))
+        print(_c("cyan", "    1) Same WiFi / LAN (both on same network)"))
+        print(_c("cyan", "    2) Tailscale (machines on different networks)"))
     else:
-        print(_c("cyan", "    1) Same WiFi / LAN (no extra setup)"))
+        print(_c("cyan", "    1) Same WiFi / LAN (both on same network)"))
+        print()
+        print(_c("yellow", "  Tailscale not found. Install from: https://tailscale.com/download"))
+        print(_c("yellow", "  Then run 'gpumesh setup' again to use remote connections."))
     print()
 
     net_choice = _ask("Enter 1 or 2:")
 
-    use_tailscale = tailscale_ok and net_choice == "1"
+    use_tailscale = tailscale_ok and net_choice == "2"
 
     # Generate token
     token = secrets.token_urlsafe(16)
 
-    # Build the command
-    if use_tailscale:
-        cmd = f"gpumesh serve --port 8000 --token {token} --tailscale"
+    # Determine URL
+    if use_tailscale and tailscale_ip:
+        coordinator_url = f"http://{tailscale_ip}:8000"
+        network_type = "tailscale"
+    elif tailscale_ip and not use_tailscale:
+        # User chose same network but has tailscale - use LAN IP
+        coordinator_url = f"http://{lan_ip}:8000"
+        network_type = "lan"
     else:
-        cmd = f"gpumesh serve --port 8000 --token {token}"
+        coordinator_url = f"http://{lan_ip}:8000"
+        network_type = "lan"
 
-    # Show the command they need to run
+    # Show connection details PROMINENTLY
     print()
-    print(_c("bold", "  Run this command:"))
-    print()
-    print(_c("green", f"    {cmd}"))
-    print()
+    _print_box([
+        "  YOUR CONNECTION DETAILS",
+        "",
+        f"  URL:   {coordinator_url}",
+        f"  Token: {token}",
+        "",
+        "  Save this! Workers need it to join.",
+    ])
 
-    # Show what friends need to run
-    print(_c("bold", "  Give this command to your friend to join:"))
-    print()
-    if use_tailscale:
+    # Different instructions based on network type
+    if network_type == "tailscale":
+        # --- TAILSCALE FLOW ---
+        print(_c("bold", "  STEP-BY-STEP INSTRUCTIONS:"))
+        print()
+        print(_c("cyan", "  Step 1: Start the coordinator on this machine:"))
+        print(_c("green", f"    gpumesh serve --port 8000 --token {token} --tailscale"))
+        print()
+        print(_c("cyan", "  Step 2: Tell your friend to install Tailscale:"))
+        print(_c("green", "    https://tailscale.com/download"))
+        print(_c("yellow", "    (They must log into the SAME Tailscale account)"))
+        print()
+        print(_c("cyan", "  Step 3: Tell your friend to run this command:"))
         print(_c("green", f"    gpumesh quickjoin --token {token} --tailscale"))
         print()
-        print(_c("yellow", "  (They need Tailscale installed too)"))
+        print(_c("cyan", "  Step 4: Or tell them to run 'gpumesh setup' and enter:"))
+        print(_c("cyan", f"    URL:   {coordinator_url}"))
+        print(_c("cyan", f"    Token: {token}"))
     else:
-        tailscale_ip = _get_tailscale_ip()
-        if tailscale_ip:
-            friend_cmd = f"gpumesh quickjoin http://{tailscale_ip}:8000 --token {token}"
-        else:
-            friend_cmd = f"gpumesh quickjoin http://{lan_ip}:8000 --token {token}"
-        print(_c("green", f"    {friend_cmd}"))
+        # --- SAME NETWORK FLOW ---
+        print(_c("bold", "  STEP-BY-STEP INSTRUCTIONS:"))
+        print()
+        print(_c("cyan", "  Step 1: Start the coordinator on this machine:"))
+        print(_c("green", f"    gpumesh serve --port 8000 --token {token}"))
+        print()
+        print(_c("cyan", "  Step 2: Make sure your friend is on the SAME WiFi/LAN"))
+        print(_c("yellow", "    (Both machines must be connected to the same network)"))
+        print()
+        print(_c("cyan", "  Step 3: Tell your friend to run this command:"))
+        print(_c("green", f"    gpumesh quickjoin {coordinator_url} --token {token}"))
+        print()
+        print(_c("cyan", "  Step 4: Or tell them to run 'gpumesh setup' and enter:"))
+        print(_c("cyan", f"    URL:   {coordinator_url}"))
+        print(_c("cyan", f"    Token: {token}"))
     print()
 
     # Save connection locally
     from . import connection_manager
-    if use_tailscale:
-        tailscale_ip = _get_tailscale_ip()
-        if tailscale_ip:
-            connection_manager.save_connection(f"http://{tailscale_ip}:8000", token)
-    else:
-        connection_manager.save_connection(f"http://{lan_ip}:8000", token)
+    connection_manager.save_connection(coordinator_url, token)
 
     # Next steps
-    print(_c("bold", "  What happens next:"))
+    print(_c("bold", "  After workers join, submit jobs with:"))
     print()
-    print(_c("cyan", "  1. Your friend runs the command above on their machine"))
-    print(_c("cyan", "  2. They join automatically"))
-    print(_c("cyan", "  3. You submit jobs with:"))
-    print()
-    print(_c("green", "      gpumesh submit your_script.py --payloads params.json --wait"))
+    print(_c("green", "    gpumesh submit your_script.py --payloads params.json --wait"))
     print()
     print(_c("yellow", "  (Your script reads JSON from stdin, prints JSON result)"))
     print()
@@ -242,21 +267,93 @@ def _setup_worker():
     print(_c("bold", "  Let's add this machine to the mesh."))
     print()
 
-    # Ask for coordinator address
-    print(_c("bold", "  Ask the person running the coordinator for:"))
-    print(_c("cyan", "    - Their IP address or URL"))
-    print(_c("cyan", "    - The token (password)"))
+    # Detect network options
+    tailscale_ok = _has_tailscale()
+    tailscale_ip = _get_tailscale_ip() if tailscale_ok else None
+
+    # Ask how they're connecting
+    print(_c("bold", "  How are you connecting to the coordinator?"))
+    print()
+    if tailscale_ok:
+        print(_c("cyan", "    1) Same WiFi / LAN (both on same network)"))
+        print(_c("cyan", "    2) Tailscale (coordinator is on a different network)"))
+    else:
+        print(_c("cyan", "    1) Same WiFi / LAN (both on same network)"))
+        print()
+        print(_c("yellow", "  Tailscale not found. If you need remote access,"))
+        print(_c("yellow", "  install Tailscale: https://tailscale.com/download"))
     print()
 
-    url = _ask("Coordinator address (e.g. http://192.168.1.10:8000):")
-    if not url:
-        print(_c("red", "  No address provided. Try again: gpumesh setup"))
-        return
+    net_choice = _ask("Enter 1 or 2:")
 
+    use_tailscale = tailscale_ok and net_choice == "2"
+
+    # Get coordinator details
+    print()
+    if use_tailscale:
+        # --- TAILSCALE WORKER FLOW ---
+        print(_c("bold", "  TAILSCALE MODE"))
+        print()
+        print(_c("cyan", "  Ask the coordinator person for their Token."))
+        print(_c("cyan", "  (They can find it by running 'gpumesh serve' on their machine)"))
+        print()
+
+        # Option to auto-detect
+        print(_c("cyan", "  How do you want to connect?"))
+        print(_c("cyan", "    1) Auto-detect coordinator (recommended)"))
+        print(_c("cyan", "    2) Enter URL manually"))
+        print()
+
+        connect_choice = _ask("Enter 1 or 2:")
+
+        if connect_choice == "1":
+            if not tailscale_ip:
+                print(_c("red", "  Could not detect Tailscale IP."))
+                print(_c("yellow", "  Make sure Tailscale is running and you're logged in."))
+                print(_c("yellow", "  Try: tailscale status"))
+                print()
+                url = _ask("Enter coordinator Tailscale URL manually:")
+                if not url:
+                    return
+            else:
+                # Auto-detect - try to connect
+                print()
+                print(_c("bold", "  Searching for coordinator on Tailscale..."))
+                url = f"http://{tailscale_ip}:8000"
+                print(_c("cyan", f"  Found: {url}"))
+        else:
+            # Manual entry
+            print()
+            print(_c("cyan", "  Enter the coordinator's Tailscale URL:"))
+            print(_c("cyan", "  (Looks like: http://100.x.x.x:8000)"))
+            url = _ask("URL:")
+            if not url:
+                print(_c("red", "  No URL provided. Try again: gpumesh setup"))
+                return
+    else:
+        # --- SAME NETWORK WORKER FLOW ---
+        print(_c("bold", "  SAME NETWORK MODE"))
+        print()
+        print(_c("cyan", "  Ask the coordinator person for:"))
+        print(_c("cyan", "    - Their IP address (looks like: 192.168.1.10)"))
+        print(_c("cyan", "    - The Token (a random code)"))
+        print(_c("yellow", "  They can find this by running 'gpumesh serve' on their machine"))
+        print()
+
+        ip = _ask("Coordinator IP address (e.g. 192.168.1.10):")
+        if not ip:
+            print(_c("red", "  No IP provided. Try again: gpumesh setup"))
+            return
+        url = f"http://{ip}:8000"
+        print(_c("cyan", f"  Connecting to: {url}"))
+
+    # Get token (same for both modes)
+    print()
     token = _ask("Token:")
     if not token:
         print(_c("red", "  No token provided. Try again: gpumesh setup"))
         return
+    token = token.strip()
 
     # Save connection
     from . import connection_manager

@@ -93,6 +93,81 @@ gpumesh submit examples/grid_search.py --payloads examples/payloads.json --wait
 
 ---
 
+## Setup Flow Diagram
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                          GPUMESH SETUP FLOW                                 │
+│                          gpumesh setup                                      │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+                    ┌───────────────────────────────┐
+                    │   What do you want to do?     │
+                    │                               │
+                    │   1) Coordinator (Manage)     │
+                    │   2) Worker (Join)            │
+                    └───────────────────────────────┘
+                           │                 │
+            ┌──────────────┘                 └──────────────┐
+            ▼                                               ▼
+┌───────────────────────────┐                 ┌───────────────────────────┐
+│    COORDINATOR FLOW       │                 │       WORKER FLOW         │
+│                           │                 │                           │
+│  "How will others         │                 │  "How are you             │
+│   connect to this one?"   │                 │   connecting?"            │
+│                           │                 │                           │
+│   1) Same WiFi/LAN       │                 │   1) Same WiFi/LAN       │
+│   2) Tailscale            │                 │   2) Tailscale            │
+└───────────────────────────┘                 └───────────────────────────┘
+            │                                               │
+     ┌──────┴──────┐                                 ┌──────┴──────┐
+     ▼             ▼                                 ▼             ▼
+┌─────────┐   ┌─────────┐                       ┌─────────┐   ┌─────────┐
+│ SAME    │   │ TAIL-   │                       │ SAME    │   │ TAIL-   │
+│ NETWORK │   │ SCALE   │                       │ NETWORK │   │ SCALE   │
+└─────────┘   └─────────┘                       └─────────┘   └─────────┘
+     │             │                                 │             │
+     ▼             ▼                                 ▼             ▼
+┌───────────────────────────┐                 ┌───────────────────────────┐
+│ COORDINATOR:              │                 │ WORKER:                   │
+│                           │                 │                           │
+│ Shows:                    │                 │ SAME NETWORK:             │
+│ ┌───────────────────────┐ │                 │   Enter coordinator IP    │
+│ │ YOUR CONNECTION INFO  │ │                 │   (e.g. 192.168.1.10)    │
+│ │                       │ │                 │   Then enter token        │
+│ │ URL: http://IP:8000   │ │                 │                           │
+│ │ Token: xyz123         │ │                 │ TAILSCALE:                │
+│ └───────────────────────┘ │                 │   Auto-detect coordinator │
+│                           │                 │   OR enter URL manually   │
+│ Command to run:           │                 │   Then enter token        │
+│ $ gpumesh serve \         │                 └───────────────────────────┘
+│   --port 8000 \           │                                 │
+│   --token xyz123          │                                 ▼
+│                           │                 ┌───────────────────────────┐
+│ For friends to join:      │                 │ WORKER JOINS MESH         │
+│ $ gpumesh quickjoin \     │                 │                           │
+│   http://IP:8000 \        │                 │ Shows:                    │
+│   --token xyz123          │                 │ - Device detected         │
+└───────────────────────────┘                 │ - GPU info                │
+                                              │ - Score (GFLOP/s)         │
+                                              │ - Status: Connected ✓     │
+                                              └───────────────────────────┘
+```
+
+### Quick Cheat Sheet
+
+| Step | Coordinator | Worker |
+|------|-------------|--------|
+| **Setup** | `gpumesh setup` → Choose 1 | `gpumesh setup` → Choose 2 |
+| **Start** | `gpumesh serve --port 8000 --token TOKEN --tailscale` | (auto-joins) |
+| **Connect** | (runs server) | `gpumesh quickjoin --token TOKEN --tailscale` |
+| **Check** | `gpumesh workers` | `gpumesh status` |
+| **Share** | `gpumesh show-connection` | - |
+| **Submit** | `gpumesh submit script.py --payloads data.json --wait` | - |
+
+---
+
 ## CLI Commands
 
 | Command | What it does |
