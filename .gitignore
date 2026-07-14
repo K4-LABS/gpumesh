@@ -26,7 +26,6 @@ venv/
 # OS
 .DS_Store
 Thumbs.db
-nul
 
 # Testing
 .pytest_cache/
@@ -35,3 +34,14 @@ htmlcov/
 
 # Jupyter
 .ipynb_checkpoints/
+
+# Agent/Ralph Loop (do not commit)
+.agent/
+.mcp.json
+AGENTS.md
+CLAUDE.md
+ralph.sh
+start-ralph.sh
+fix-sbx.sh
+scripts/lib/
+scripts/assets/

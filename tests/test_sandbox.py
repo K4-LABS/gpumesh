@@ -42,3 +42,29 @@ sys.stdin.read()
 print(json.dumps({"device": os.environ["GPUMESH_DEVICE"]}))
 """
     assert run_task(script, {}, device="mps") == {"device": "mps"}
+
+
+def test_run_task_timeout_kills_subprocesses():
+    """Timeout kills the process tree, not just the parent."""
+    script = """
+import json, subprocess, sys, time
+sys.stdin.read()
+# Spawn a child that sleeps
+p = subprocess.Popen(["python", "-c", "import time; time.sleep(60)"])
+time.sleep(60)
+print(json.dumps({"done": True}))
+"""
+    with pytest.raises(TaskError, match="timed out"):
+        run_task(script, {}, timeout=2.0)
+
+
+def test_run_task_binary_output():
+    """Binary output doesn't crash the runner."""
+    script = """
+import json, sys
+sys.stdin.read()
+sys.stdout.buffer.write(b"\\xff\\xfe\\x00\\x01\\n")
+print(json.dumps({"ok": True}))
+"""
+    result = run_task(script, {})
+    assert result == {"ok": True}

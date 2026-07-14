@@ -16,6 +16,7 @@ def probe_device() -> dict:
         "hostname": socket.gethostname(),
         "platform": platform.platform(),
         "cpu_count": os.cpu_count() or 1,
+        "cpu_cores": os.cpu_count() or 1,
         "device": "cpu",
         "device_name": platform.processor() or "cpu",
     }
@@ -25,10 +26,20 @@ def probe_device() -> dict:
         if torch.cuda.is_available():
             info["device"] = "cuda"
             info["device_name"] = torch.cuda.get_device_name(0)
+            try:
+                props = torch.cuda.get_device_properties(0)
+                info["gpu_memory_total_mb"] = round(props.total_mem / (1024**2), 1)
+            except (RuntimeError, OSError):
+                pass
+            try:
+                free, total = torch.cuda.mem_get_info(0)
+                info["gpu_memory_free_mb"] = round(free / (1024**2), 1)
+            except (RuntimeError, OSError):
+                pass
         elif getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
             info["device"] = "mps"
             info["device_name"] = "Apple Silicon GPU"
-    except ImportError:
+    except (ImportError, RuntimeError, OSError):
         pass
     try:
         import psutil
@@ -37,6 +48,27 @@ def probe_device() -> dict:
     except ImportError:
         pass
     return info
+
+
+def get_gpu_memory_info(device_index: int = 0) -> dict | None:
+    """Get GPU memory info for a specific device. Returns None if no GPU."""
+    try:
+        import torch
+
+        if not torch.cuda.is_available():
+            return None
+        props = torch.cuda.get_device_properties(device_index)
+        total = props.total_mem / (1024**2)
+        free, total2 = torch.cuda.mem_get_info(device_index)
+        return {
+            "device_index": device_index,
+            "device_name": torch.cuda.get_device_name(device_index),
+            "total_mb": round(total, 1),
+            "free_mb": round(free / (1024**2), 1),
+            "used_mb": round((total2 - free) / (1024**2), 1),
+        }
+    except (ImportError, RuntimeError, OSError):
+        return None
 
 
 def _bench_torch(device: str) -> float:
@@ -76,11 +108,16 @@ def _bench_python() -> float:
 def benchmark(device: str) -> float:
     try:
         return round(_bench_torch(device), 3)
-    except ImportError:
+    except (ImportError, RuntimeError, OSError):
         return round(_bench_python(), 3)
 
 
 def full_probe() -> dict:
     info = probe_device()
     info["score"] = benchmark(info["device"])
+    gpu_info = get_gpu_memory_info(0)
+    if gpu_info:
+        info["gpu_memory_total_mb"] = gpu_info["total_mb"]
+        info["gpu_memory_free_mb"] = gpu_info["free_mb"]
+        info["gpu_memory_used_mb"] = gpu_info["used_mb"]
     return info

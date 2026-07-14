@@ -123,3 +123,34 @@ def test_reaper_requeues_expired_lease(db, monkeypatch):
     assert db.reap_expired_leases() == 1
     job_tasks = db.job_status(task["job_id"])["tasks"]
     assert job_tasks[0]["status"] == "pending"
+
+
+def test_db_close(tmp_path):
+    """close() flushes WAL and closes connection."""
+    db_path = str(tmp_path / "close_test.db")
+    db = Database(db_path)
+    db.register_worker("h", "cpu", 1.0)
+    db.close()
+    # After close, a new connection should see the data
+    db2 = Database(db_path)
+    workers = db2.list_workers()
+    assert len(workers) == 1
+    db2.close()
+
+
+def test_db_corruption_recovery(tmp_path):
+    """Corrupted DB file is recreated automatically."""
+    import os
+    db_path = str(tmp_path / "corrupt.db")
+    # Create a valid DB first
+    db = Database(db_path)
+    db.register_worker("h", "cpu", 1.0)
+    db.close()
+    # Corrupt the file
+    with open(db_path, "wb") as f:
+        f.write(b"not a valid sqlite database")
+    # Open should recreate it (old data lost, but no crash)
+    db2 = Database(db_path)
+    workers = db2.list_workers()
+    assert len(workers) == 0  # fresh DB
+    db2.close()

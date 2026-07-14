@@ -35,6 +35,11 @@ from . import capability, sandbox, serializer, utils
 from .worker import MeshClient
 
 
+class GPUMeshError(Exception):
+    """Raised when a GPUMesh operation fails."""
+    pass
+
+
 class GPUMesh:
     """Python API for distributing compute across a GPU mesh.
     
@@ -162,17 +167,26 @@ class GPUMesh:
                 {'id': 'w2', 'device': 'cuda', 'name': 'T4', 'score': 12.0},
             ]
         """
-        resp = self._client.call("GET", "/api/workers")
+        try:
+            resp = self._client.call("GET", "/api/workers")
+        except (urllib.error.URLError, OSError) as exc:
+            raise GPUMeshError(
+                f"Failed to list workers: {exc}. "
+                f"Check that the coordinator is running at {self.url}"
+            ) from exc
         workers = resp.get("workers", [])
         
         return [
             {
                 "id": w["id"],
                 "device": w["device"],
+                "device_name": w.get("device_name") or w["device"],
                 "hostname": w["hostname"],
                 "score": w["score"],
+                "alive": True,
             }
             for w in workers
+            if w.get("alive", True)
         ]
     
     def distribute(
@@ -222,17 +236,31 @@ class GPUMesh:
             })
         
         # Submit job
-        resp = self._client.call("POST", "/api/jobs", {
-            "name": name or f"distribute_{function.__name__}",
-            "script": "__gpumesh_function__",  # Marker for function-based job
-            "payloads": payloads,
-        })
+        callable_name = getattr(function, "__name__", type(function).__name__)
+        try:
+            resp = self._client.call("POST", "/api/jobs", {
+                "name": name or f"distribute_{callable_name}",
+                "script": "__gpumesh_function__",  # Marker for function-based job
+                "payloads": payloads,
+            })
+        except (urllib.error.URLError, OSError) as exc:
+            raise GPUMeshError(
+                f"Failed to submit job to coordinator: {exc}. "
+                f"Check that the coordinator is running at {self.url}"
+            ) from exc
         job_id = resp["job_id"]
         
         # Poll for completion
         start_time = time.time()
         while True:
-            job = self.job_status(job_id)
+            try:
+                job = self.job_status(job_id)
+            except (urllib.error.URLError, OSError) as exc:
+                elapsed = time.time() - start_time
+                if elapsed > timeout:
+                    raise TimeoutError(f"Job {job_id} timed out after {timeout}s") from exc
+                time.sleep(poll_interval)
+                continue
             
             if job["finished"]:
                 break
@@ -254,19 +282,16 @@ class GPUMesh:
         # Collect results
         results = []
         for task in job["tasks"]:
-            if task["status"] == "done" and task["result"]:
-                results.append(task["result"])
+            if task["status"] == "done":
+                results.append(task["result"] if task["result"] is not None else {})
             elif task["status"] == "failed":
-                results.append({
-                    "_error": task.get("error", "unknown"),
-                    "_task_index": task["id"],
-                })
+                results.append({"_error": task.get("error", "unknown")})
             else:
                 results.append({"_error": "task did not complete"})
-        
-        # Sort by original task index
-        results.sort(key=lambda r: r.get("_task_index", 0))
-        
+
+        # Tasks are returned in database row order, which is submission order.
+        # Remove the worker's internal ordering key without re-sorting mixed
+        # success and failure records.
         # Remove internal keys
         for r in results:
             r.pop("_task_index", None)
@@ -333,5 +358,78 @@ class GPUMesh:
             )
         
         return pd.DataFrame(results)
+
+    # ── Device access methods ─────────────────────────────────────────
+
+    def devices(self) -> list[dict]:
+        """List all compute devices (local + remote) as one unified pool.
+
+        Returns:
+            List of device dicts with index, hostname, device, device_name,
+            score, and status.
+
+        Example:
+            >>> mesh.devices()
+            [
+                {'index': 0, 'hostname': 'laptop-a', 'device': 'cuda',
+                 'device_name': 'RTX 3080', 'score': 85.2, 'status': 'alive'},
+                {'index': 1, 'hostname': 'laptop-b', 'device': 'cuda',
+                 'device_name': 'RTX 4090', 'score': 120.5, 'status': 'alive'},
+            ]
+        """
+        try:
+            resp = self._client.call("GET", "/api/devices")
+            return resp.get("devices", [])
+        except (urllib.error.URLError, OSError) as exc:
+            raise GPUMeshError(f"Failed to list devices: {exc}") from exc
+
+    def device_count(self) -> int:
+        """Return the total number of alive GPUs across all machines.
+
+        Example:
+            >>> mesh.device_count()
+            2
+        """
+        try:
+            resp = self._client.call("GET", "/api/devices")
+            return resp.get("total_gpus", 0)
+        except (urllib.error.URLError, OSError) as exc:
+            raise GPUMeshError(f"Failed to get device count: {exc}") from exc
+
+    def total_score(self) -> float:
+        """Return the total compute score across all alive devices.
+
+        Example:
+            >>> mesh.total_score()
+            205.7
+        """
+        try:
+            resp = self._client.call("GET", "/api/devices")
+            return resp.get("total_score", 0.0)
+        except (urllib.error.URLError, OSError) as exc:
+            raise GPUMeshError(f"Failed to get total score: {exc}") from exc
+
+    def auto_device(self) -> dict | None:
+        """Pick the most powerful alive device automatically.
+
+        Returns:
+            Device dict or None if no devices available.
+
+        Example:
+            >>> device = mesh.auto_device()
+            >>> print(device['device_name'])
+            RTX 4090
+        """
+        try:
+            devices = self.devices()
+            alive = [d for d in devices if d["status"] == "alive"]
+            if not alive:
+                return None
+            # Pick device with highest score (most powerful)
+            return max(alive, key=lambda d: d["score"])
+        except GPUMeshError:
+            raise
+        except (urllib.error.URLError, OSError) as exc:
+            raise GPUMeshError(f"Failed to auto-select device: {exc}") from exc
 
 

@@ -37,10 +37,17 @@ def run_task(script: str, payload, timeout: float = 240.0,
     """Execute `script` with `payload`; return the parsed JSON result."""
     with tempfile.TemporaryDirectory(prefix="gpumesh-task-") as workdir:
         script_path = os.path.join(workdir, "task.py")
-        with open(script_path, "w") as f:
+        with open(script_path, "w", encoding="utf-8", newline="\n") as f:
             f.write(script)
 
-        env = dict(os.environ, GPUMESH_DEVICE=device)
+        env = {
+            "PATH": os.environ.get("PATH", ""),
+            "PYTHONPATH": os.environ.get("PYTHONPATH", ""),
+            "HOME": os.environ.get("HOME", ""),
+            "TEMP": os.environ.get("TEMP", ""),
+            "TMP": os.environ.get("TMP", ""),
+            "GPUMESH_DEVICE": device or "cpu",
+        }
         kwargs = {}
         if os.name == "posix":
             kwargs["preexec_fn"] = _posix_limits(cpu_seconds)
@@ -54,6 +61,8 @@ def run_task(script: str, payload, timeout: float = 240.0,
             cwd=workdir,
             env=env,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             **kwargs,
         )
         try:
@@ -77,18 +86,27 @@ def run_task(script: str, payload, timeout: float = 240.0,
             raise TaskError(f"last stdout line is not JSON: {lines[-1][:200]}")
 
 
+
 def _kill_tree(proc):
     if os.name == "posix":
         try:
             os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            proc.wait(timeout=5)
             return
         except (ProcessLookupError, PermissionError):
             pass
-    proc.kill()
-    # On Windows, wait for process to fully terminate so file handles
-    # are released before TemporaryDirectory cleanup
     if os.name == "nt":
         try:
+            subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                capture_output=True, timeout=5,
+            )
             proc.wait(timeout=5)
+            return
         except (subprocess.TimeoutExpired, OSError):
             pass
+    proc.kill()
+    try:
+        proc.wait(timeout=5)
+    except (subprocess.TimeoutExpired, OSError):
+        pass

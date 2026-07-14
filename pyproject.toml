@@ -1,14 +1,14 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=68,<77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "gpumesh"
-version = "0.5.0"
+version = "0.8.1"
 description = "Borrow your friends' GPUs: a terminal-based distributed compute mesh in pure Python"
 readme = "README.md"
 requires-python = ">=3.9"
-license = "MIT"
+license = {text = "MIT"}
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
@@ -35,7 +35,9 @@ gpu = ["torch"]
 tunnel = ["pyngrok"]
 sysinfo = ["psutil"]
 notebook = ["cloudpickle", "pandas"]
+ui = ["rich", "questionary"]
 dev = ["pytest", "build", "twine"]
+all = ["gpumesh[gpu,tunnel,sysinfo,notebook,ui]"]
 
 [project.scripts]
 gpumesh = "gpumesh.cli:main"

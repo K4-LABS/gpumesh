@@ -1,122 +1,84 @@
 # Changelog
 
-All notable changes to gpumesh will be documented in this file.
+All notable changes to gpumesh are documented here.
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
-
-## [0.5.0] - 2026-07-12
-
-### Added
-- **Python API for Jupyter/Colab notebooks** — `GPUMesh` class with `distribute()`, `workers()`, `start_coordinator()`, `add_worker()`, `results_to_dataframe()`
-- **Function serialization** — cloudpickle primary, inspect.getsource fallback for sending functions to workers
-- **Smart scheduling** — Heavy tasks automatically go to fast GPUs, light tasks to slow GPUs
-- **CLI progress bar** — Real-time progress display with visual bars, per-worker status, and recent results
-- **Enhanced Python API docs** — Comprehensive Jupyter/Colab examples in README including closures, lambdas, task costs, and error handling
-- **Unit tests for progress bar** — 24 tests covering `_esc()`, `_bar()`, `_get_workers()`, `print_job()`, and `wait_for_job()`
-- **Edge case tests** — Timeout, function errors, empty params, multi-worker distribute, closures, lambdas, auth failures
-- **New test files** — `tests/test_api.py`, `tests/test_serializer.py`, `tests/test_api_edge_cases.py`, `tests/test_client.py`
-
-### Changed
-- Worker wraps function exceptions in `sandbox.TaskError` for proper error reporting
-- Database queries use `ORDER BY rowid` for consistent task ordering
-- `pyproject.toml` now includes `notebook = ["cloudpickle", "pandas"]` optional dependency
-- README rewritten to be simpler, more precise, and include all limitations
-- Added `device_name` column to workers table for better progress display
-- Refactored `_get_lan_ip()` to shared utility `utils.py` to remove duplication across api.py, setup_wizard.py, and cli.py
+## [0.8.1] — 2026-07-14
 
 ### Fixed
-- Results ordering bug in `distribute()` method (added `_task_index` to result)
-- Empty params list handling (returns empty list early)
-- Function timeout detection in worker
-- Removed dead code (`run_function()`) from `sandbox.py`
-- Fixed flaky Windows socket test with `@pytest.mark.xfail`
-
-## [0.4.1] - 2026-07-12
-
-### Added
-- **Saved connections** - After first `gpumesh join`, coordinator URL and token are saved to `~/.gpumesh/config.json` so subsequent commands don't need `--url`/`--token` flags
-- **Unit tests for connection_manager** - 20 tests covering save, load, clear, and get_connection functions
+- Setup wizard crashed on Python 3.10 due to import issues. Fixed module-level imports.
+- Setup wizard showed "requires optional dependencies" even when packages were installed.
+- ANSI escape codes displayed incorrectly on Windows terminals.
+- Welcome messages in `__init__.py` now use proper color helpers.
 
 ### Changed
-- Updated README with saved connections documentation and examples
-- Updated command examples to show `--url`/`--token` are optional after first join
-- Clarified that coordinators need environment variables or explicit flags since they don't run `gpumesh join`
+- Version bump to 0.8.1.
+
+## [0.8.0] — 2026-07-14
+
+### Added
+- **`@accelerate` decorator** — Add `@accelerate(mesh)` to any function to use all connected GPUs automatically. Single calls run locally; `.map([...])` spreads across all mesh devices.
+- **Hardware selection** — `@accelerate(mesh, gpu="A100")` targets specific GPU types.
+- **Resource specs** — `@accelerate(mesh, cores=8, memory="16GB", timeout=300)` declares resource requirements.
+- **Resource validation** — Checks worker capabilities before distributing; raises `ValueError` with clear message when requirements can't be met.
+- **GPU memory detection** — `probe_device()` now reports `gpu_memory_total_mb`, `gpu_memory_free_mb`, `cpu_cores`. New `get_memory_info(device_index)` function for CUDA devices.
+- **Auto device placement** — PyTorch `nn.Module` arguments are automatically placed on the best device.
+- **`.to(device)` method** — `func.to("cuda")` returns new function bound to specific device.
+- **`install(mesh)` hook** — Thread-safe global mesh setter; after `accelerate.install(mesh)`, use `@accelerate` without parentheses.
+- **`setup_torch(mesh, min_memory_mb=0)`** — Auto-detects best device, optionally filtering by minimum free VRAM.
+- **Safe printing for Windows** — `safe_print()` and `_safe_str()` handle cp1252 encoding gracefully; Unicode chars fall back to ASCII on terminals that don't support UTF-8.
+- **Setup wizard UI polish** — Replaced raw ANSI escape codes with `rich` (panels, tables, live radar) and `questionary` (select, text, confirm prompts) for a beautiful terminal experience.
+- **Claim-based connection model** — Workers broadcast their presence; coordinator discovers and claims them. No more manual IP configuration.
+- **Timing-safe token comparison** — Uses `hmac.compare_digest()` to prevent timing attacks on token verification.
+- **Race condition fixes** — Fixed claim port probing, worker re-claim, and shutdown handling.
+- **Worker key collision fix** — Workers now use unique keys to prevent collisions when multiple workers join.
+
+### Changed
+- Version bump to 0.8.0.
+- README rewritten for PyPI with accurate CLI commands and API examples.
+
+## [0.7.4] — 2026-07-13
 
 ### Fixed
-- Fixed docstring in connection_manager.py to show correct config path (`~/.gpumesh/config.json` instead of `~/.gpumesh_config`)
-
-## [0.4.0] - 2026-07-11
-
-### Added
-- **Comprehensive beginner-friendly README** - Complete rewrite with step-by-step guides, all commands documented, troubleshooting section, and examples
-- **Security hardening** - Removed hardcoded example tokens from documentation
+- Coordinator lifecycle issues. Server now stays alive after setup wizard completes.
 
 ### Changed
-- Version bumped to 0.4.0 for PyPI release
-- README now includes: installation guide, quick start, complete user guide, all commands reference, task script writing guide, network options, security best practices, troubleshooting, and architecture details
+- Version bump to 0.7.4.
 
-## [0.3.0] - 2026-07-11
-
-### Added
-- **Tailscale auto-detection** - Auto-detect Tailscale and use its private network
-- `--tailscale` flag for `serve` and `quickjoin` commands
-- `--port` flag for `quickjoin` command (configurable port)
-- Improved tunnel error handling with graceful fallbacks
-- 6 new tunnel tests (ngrok success, timeout, OS error)
-
-### Changed
-- Updated `pyproject.toml` URLs to use actual GitHub repository (Samurai007AK)
-- Added CHANGELOG.md
-- Updated CLI docstring with new options
+## [0.7.3] — 2026-07-13
 
 ### Fixed
-- Fixed ngrok download error on Windows (now falls back gracefully)
-- Fixed tunnel.py to handle `PyngrokNgrokInstallError` and `OSError`
-- Fixed URL validation for `quickjoin --tailscale`
-
-## [0.2.0] - 2026-07-11
-
-### Added
-- **Security features**:
-  - Token hashing with SHA-256 and random salt
-  - Rate limiting (5 attempts per 5 minutes, 15 minute lockout)
-  - Optional IP allowlist for access control
-- **Job cancellation** - Cancel running jobs with `gpumesh cancel JOB_ID`
-- **One-click join** - `gpumesh quickjoin` command for easy worker setup
-- **Auto GPU detection** - Detects NVIDIA GPUs via nvidia-smi
-- **Auto PyTorch installation** - Installs PyTorch with CUDA when GPU detected
-- **Version bump script** - `scripts/bump_version.py` for easy version management
-- **Security tests** - 23 new tests for security features
-- **PyPI metadata** - Added classifiers, keywords, and project URLs
+- Worker heartbeat reliability. Workers now maintain stable connection to coordinator.
 
 ### Changed
-- Updated `tunnel.py` with better error handling
-- Updated `README.md` with security documentation
-- Updated `pyproject.toml` with MIT license (PEP 639 format)
+- Version bump to 0.7.3.
 
-### Fixed
-- Fixed Windows process isolation in `sandbox.py`
-- Fixed Unicode crash in `bump_version.py` on Windows
-
-## [0.1.0] - 2026-07-10
+## [0.7.2] — 2026-07-12
 
 ### Added
-- **Initial release**
-- Coordinator server with threaded HTTP API
-- Worker agent with heartbeat and task leasing
-- SQLite database with WAL mode
-- Capability-based scheduler (GFLOP/s scoring)
-- Sandboxed subprocess execution
-- Job submission and status polling
-- Optional ngrok tunneling for NAT traversal
-- CLI interface (serve, join, submit, status, workers)
-- Example hyperparameter search task
-- Basic tests
+- Connection manager for persistent URL/token storage.
+- Auto-reconnection on worker disconnect.
+- Better error messages for common issues.
 
-### Architecture
-- Pure Python implementation (stdlib only for core)
-- Optional dependencies: torch, psutil, pyngrok
-- Process isolation with timeout and CPU limits
-- Fault tolerance with lease reaper and bounded retries
-- Pull-based model (workers fetch work)
+### Changed
+- Version bump to 0.7.2.
+
+## [0.7.1] — 2026-07-12
+
+### Added
+- Claim-based connection model for easier setup.
+- Worker broadcasting on local network.
+- Coordinator auto-discovery of workers.
+
+### Changed
+- Version bump to 0.7.1.
+
+## [0.7.0] — 2026-07-11
+
+### Added
+- Basic distributed compute mesh.
+- Coordinator/worker architecture.
+- Task distribution and result collection.
+- Token authentication.
+
+### Changed
+- Initial stable release.
