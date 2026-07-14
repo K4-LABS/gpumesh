@@ -529,3 +529,34 @@ class TestDistributeEdgeCases:
         finally:
             httpd.gpumesh_stop.set()
             httpd.shutdown()
+
+    def test_content_length_limit(self, tmp_path):
+        """Requests exceeding Content-Length limit get 413."""
+        import json
+        import urllib.request
+        httpd = serve("127.0.0.1", 0, str(tmp_path / "cl.db"), TOKEN)
+        port = httpd.server_address[1]
+        t = threading.Thread(target=httpd.serve_forever, daemon=True)
+        t.start()
+
+        try:
+            # Send a request with Content-Length > 10MB
+            big_body = "x" * (11 * 1024 * 1024)
+            req = urllib.request.Request(
+                f"http://127.0.0.1:{port}/api/register",
+                data=big_body.encode(),
+                method="POST",
+                headers={
+                    "Content-Type": "application/json",
+                    "X-Auth-Token": TOKEN,
+                    "Content-Length": str(len(big_body)),
+                },
+            )
+            try:
+                urllib.request.urlopen(req, timeout=10)
+                assert False, "Expected 413 or error"
+            except urllib.error.HTTPError as e:
+                assert e.code == 413
+        finally:
+            httpd.gpumesh_stop.set()
+            httpd.shutdown()

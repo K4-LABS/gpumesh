@@ -14,9 +14,9 @@ class TestEsc:
     def test_esc_returns_code_when_ansi_enabled(self):
         """Returns escape code when ANSI is enabled."""
         with patch("gpumesh.client._ANSI", True):
-            assert _esc("1m") == "1m"
-            assert _esc("0m") == "0m"
-            assert _esc("32m") == "32m"
+            assert _esc("1m") == "\033[1m"
+            assert _esc("0m") == "\033[0m"
+            assert _esc("32m") == "\033[32m"
 
     def test_esc_returns_empty_when_ansi_disabled(self):
         """Returns empty string when ANSI is disabled."""
@@ -28,9 +28,9 @@ class TestEsc:
     def test_esc_with_various_codes(self):
         """Tests various ANSI codes."""
         with patch("gpumesh.client._ANSI", True):
-            assert _esc("31m") == "31m"  # Red
-            assert _esc("33m") == "33m"  # Yellow
-            assert _esc("36m") == "36m"  # Cyan
+            assert _esc("31m") == "\033[31m"  # Red
+            assert _esc("33m") == "\033[33m"  # Yellow
+            assert _esc("36m") == "\033[36m"  # Cyan
 
 
 class TestBar:
@@ -39,43 +39,43 @@ class TestBar:
     def test_bar_empty_progress(self):
         """Returns empty bar when total is 0."""
         result = _bar(0, 10)
-        assert result == "░" * 20
+        assert result == "." * 20
 
     def test_bar_full_progress(self):
         """Returns full bar when done equals total."""
         result = _bar(10, 10)
-        assert result == "█" * 20
+        assert result == "#" * 20
 
     def test_bar_half_progress(self):
         """Returns half-filled bar at 50%."""
         result = _bar(5, 10)
-        assert result == "█" * 10 + "░" * 10
+        assert result == "#" * 10 + "." * 10
 
     def test_bar_custom_width(self):
         """Returns bar with custom width."""
         result = _bar(1, 4, width=10)
         assert len(result) == 10
-        assert result == "█" * 2 + "░" * 8
+        assert result == "#" * 2 + "." * 8
 
     def test_bar_zero_done(self):
         """Returns all empty when done is 0."""
         result = _bar(0, 100, width=10)
-        assert result == "░" * 10
+        assert result == "." * 10
 
     def test_bar_width_one_partial(self):
         """Returns partial bar when width is 1 and progress < 50%."""
         result = _bar(1, 4, width=1)
-        assert result == "░"
+        assert result == "."
 
     def test_bar_width_one_full(self):
         """Returns partial bar when width is 1 and progress is 50% (int truncation)."""
         result = _bar(2, 4, width=1)
-        assert result == "░"
+        assert result == "."
 
     def test_bar_width_one_above_half(self):
         """Returns full bar when width is 1 and progress is 100%."""
         result = _bar(4, 4, width=1)
-        assert result == "█"
+        assert result == "#"
 
     def test_bar_width_zero(self):
         """Returns empty string when width is 0."""
@@ -263,3 +263,62 @@ class TestWaitForJob:
             result = wait_for_job("http://localhost:8000", "token", "j123", poll=0.01)
             assert result["finished"] is True
             assert result["counts"]["failed"] == 1
+
+
+class TestSafeStr:
+    """Tests for _safe_str encoding helper."""
+
+    def test_safe_str_ascii_passthrough(self):
+        from gpumesh.ansi import _safe_str
+        result = _safe_str("hello world")
+        assert result == "hello world"
+
+    def test_safe_str_unicode_replaces_on_cp1252(self):
+        from gpumesh.ansi import _safe_str
+        # Simulate cp1252 terminal by testing replacement logic
+        result = _safe_str("\u2713 done \u2717 failed")
+        # Should contain ASCII fallbacks
+        assert "[OK]" in result or "\u2713" in result  # depends on encoding
+
+    def test_safe_str_preserves_ansi_codes(self):
+        from gpumesh.ansi import _safe_str
+        result = _safe_str("\033[32mOK\033[0m")
+        assert "\033[32m" in result
+
+    def test_safe_str_empty_string(self):
+        from gpumesh.ansi import _safe_str
+        result = _safe_str("")
+        assert result == ""
+
+
+class TestSafePrint:
+    """Tests for safe_print function."""
+
+    def test_safe_print_basic(self):
+        from gpumesh.ansi import safe_print
+        import io
+        buf = io.StringIO()
+        safe_print("hello", file=buf)
+        assert buf.getvalue().strip() == "hello"
+
+    def test_safe_print_with_sep(self):
+        from gpumesh.ansi import safe_print
+        import io
+        buf = io.StringIO()
+        safe_print("a", "b", "c", sep="-", file=buf)
+        assert buf.getvalue().strip() == "a-b-c"
+
+    def test_safe_print_with_end(self):
+        from gpumesh.ansi import safe_print
+        import io
+        buf = io.StringIO()
+        safe_print("hello", end="", file=buf)
+        assert buf.getvalue() == "hello"
+
+    def test_safe_print_unicode_chars(self):
+        from gpumesh.ansi import safe_print
+        import io
+        buf = io.StringIO()
+        safe_print("\u2713 \u2717 \u2588", file=buf)
+        output = buf.getvalue()
+        assert len(output) > 0

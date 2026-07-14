@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """SQLite persistence layer for the coordinator.
 
 Single connection guarded by a lock (the coordinator's HTTP server is
@@ -52,18 +54,72 @@ MAX_ATTEMPTS = 3
 
 class Database:
     def __init__(self, path: str):
-        self._conn = sqlite3.connect(path, check_same_thread=False)
-        self._conn.execute("PRAGMA journal_mode=WAL")
-        self._conn.execute("PRAGMA foreign_keys=ON")
-        self._conn.executescript(SCHEMA)
-        # Migrate: add device_name column to existing databases
-        try:
-            self._conn.execute("SELECT device_name FROM workers LIMIT 1")
-        except sqlite3.OperationalError:
-            self._conn.execute(
-                "ALTER TABLE workers ADD COLUMN device_name TEXT NOT NULL DEFAULT ''"
-            )
+        self._path = path
+        self._conn = self._open_db(path)
         self._lock = threading.Lock()
+
+    @staticmethod
+    def _open_db(path: str):
+        try:
+            conn = sqlite3.connect(path, check_same_thread=False)
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA foreign_keys=ON")
+            conn.executescript(SCHEMA)
+            # Migrate: add device_name column to existing databases
+            try:
+                conn.execute("SELECT device_name FROM workers LIMIT 1")
+            except sqlite3.OperationalError:
+                conn.execute(
+                    "ALTER TABLE workers ADD COLUMN device_name TEXT NOT NULL DEFAULT ''"
+                )
+            return conn
+        except sqlite3.DatabaseError as exc:
+            import os, shutil
+            backup_path = path + ".corrupted"
+            print(f"[gpumesh] WARNING: Database corrupted ({exc})")
+            try:
+                conn.close()
+            except (NameError, Exception):
+                pass
+            # Backup the corrupted file before deleting
+            try:
+                shutil.copy2(path, backup_path)
+                print(f"[gpumesh] Backup saved to: {backup_path}")
+                for suffix in ("-wal", "-shm", "-journal"):
+                    try:
+                        shutil.copy2(path + suffix, backup_path + suffix)
+                    except FileNotFoundError:
+                        pass
+            except Exception:
+                pass
+            # Remove corrupted files
+            try:
+                os.remove(path)
+                for suffix in ("-wal", "-shm", "-journal"):
+                    try:
+                        os.remove(path + suffix)
+                    except FileNotFoundError:
+                        pass
+            except (FileNotFoundError, PermissionError):
+                pass
+            print(f"[gpumesh] Creating fresh database...")
+            conn = sqlite3.connect(path, check_same_thread=False)
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA foreign_keys=ON")
+            conn.executescript(SCHEMA)
+            return conn
+
+    def close(self):
+        """Close the database connection and flush WAL."""
+        with self._lock:
+            try:
+                self._conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
+            except Exception:
+                pass
+            try:
+                self._conn.close()
+            except Exception:
+                pass
 
     # -- workers ------------------------------------------------------------
 
@@ -80,12 +136,19 @@ class Database:
             )
         return worker_id
 
-    def heartbeat(self, worker_id: str) -> bool:
+    def heartbeat(self, worker_id: str, task_id: str | None = None) -> bool:
+        now = time.time()
         with self._lock, self._conn:
             cur = self._conn.execute(
                 "UPDATE workers SET last_seen = ? WHERE id = ?",
-                (time.time(), worker_id),
+                (now, worker_id),
             )
+            if cur.rowcount > 0 and task_id:
+                self._conn.execute(
+                    "UPDATE tasks SET lease_expires = ?"
+                    " WHERE id = ? AND worker_id = ? AND status = 'running'",
+                    (now + LEASE_SECONDS, task_id, worker_id),
+                )
         return cur.rowcount > 0
 
     def list_workers(self) -> list:
@@ -114,6 +177,47 @@ class Database:
         ).fetchall()
         return [r[0] for r in rows]
 
+    def list_devices(self) -> list:
+        """Return all devices (workers) as a unified pool.
+
+        Each device includes: id, hostname, device, device_name, score,
+        status (alive/dead), and a virtual device index for the user.
+        """
+        cutoff = time.time() - WORKER_DEAD_AFTER
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT id, hostname, device, device_name, score, last_seen"
+                " FROM workers ORDER BY last_seen DESC"
+            ).fetchall()
+        devices = []
+        for idx, r in enumerate(rows):
+            devices.append({
+                "index": idx,
+                "id": r[0],
+                "hostname": r[1],
+                "device": r[2],
+                "device_name": r[3],
+                "score": r[4],
+                "status": "alive" if r[5] >= cutoff else "dead",
+            })
+        return devices
+
+    def device_summary(self) -> dict:
+        """Return a summary of all available compute resources."""
+        devices = self.list_devices()
+        alive = [d for d in devices if d["status"] == "alive"]
+        total_gpus = sum(1 for d in alive if d["device"] in ("cuda", "mps"))
+        total_cpus = sum(1 for d in alive if d["device"] == "cpu")
+        total_score = sum(d["score"] for d in alive)
+        return {
+            "total_devices": len(devices),
+            "alive_devices": len(alive),
+            "total_gpus": total_gpus,
+            "total_cpus": total_cpus,
+            "total_score": round(total_score, 2),
+            "devices": devices,
+        }
+
     # -- jobs ---------------------------------------------------------------
 
     def create_job(self, name: str, script: str, payloads: list) -> str:
@@ -124,7 +228,10 @@ class Database:
                 (job_id, name, script, time.time()),
             )
             for item in payloads:
-                cost = float(item.get("cost", 1.0)) if isinstance(item, dict) else 1.0
+                try:
+                    cost = float(item.get("cost", 1.0)) if isinstance(item, dict) else 1.0
+                except (ValueError, TypeError):
+                    cost = 1.0
                 self._conn.execute(
                     "INSERT INTO tasks (id, job_id, payload, cost) VALUES (?, ?, ?, ?)",
                     (uuid.uuid4().hex[:12], job_id, json.dumps(item), cost),
@@ -143,18 +250,21 @@ class Database:
                 " FROM tasks WHERE job_id = ? ORDER BY rowid",
                 (job_id,),
             ).fetchall()
-        task_list = [
-            {
+        task_list = []
+        for t in tasks:
+            try:
+                result = json.loads(t[4]) if t[4] else None
+            except json.JSONDecodeError:
+                result = {"_error": "malformed result"}
+            task_list.append({
                 "id": t[0],
                 "status": t[1],
                 "cost": t[2],
                 "worker_id": t[3],
-                "result": json.loads(t[4]) if t[4] else None,
+                "result": result,
                 "error": t[5],
                 "attempts": t[6],
-            }
-            for t in tasks
-        ]
+            })
         counts = {}
         for t in task_list:
             counts[t["status"]] = counts.get(t["status"], 0) + 1
@@ -166,6 +276,34 @@ class Database:
             "finished": done,
             "counts": counts,
             "tasks": task_list,
+        }
+
+    def cancel_job(self, job_id: str) -> dict | None:
+        """Cancel all pending and running tasks for a job.
+
+        Returns {"pending": N, "running": N} or None if job not found.
+        """
+        with self._lock, self._conn:
+            job = self._conn.execute(
+                "SELECT id FROM jobs WHERE id = ?", (job_id,)
+            ).fetchone()
+            if job is None:
+                return None
+
+            cur_pending = self._conn.execute(
+                "UPDATE tasks SET status = 'failed', error = 'cancelled'"
+                " WHERE job_id = ? AND status = 'pending'",
+                (job_id,),
+            )
+            cur_running = self._conn.execute(
+                "UPDATE tasks SET status = 'failed', error = 'cancelled',"
+                " worker_id = NULL"
+                " WHERE job_id = ? AND status = 'running'",
+                (job_id,),
+            )
+        return {
+            "pending": cur_pending.rowcount,
+            "running": cur_running.rowcount,
         }
 
     # -- scheduling ---------------------------------------------------------
@@ -213,10 +351,14 @@ class Database:
                 " FROM tasks t JOIN jobs j ON j.id = t.job_id WHERE t.id = ?",
                 (task_id,),
             ).fetchone()
+        try:
+            payload = json.loads(task[2])
+        except json.JSONDecodeError:
+            payload = {}
         return {
             "task_id": task[0],
             "job_id": task[1],
-            "payload": json.loads(task[2]),
+            "payload": payload,
             "cost": task[3],
             "script": task[4],
         }
@@ -263,3 +405,51 @@ class Database:
                 (now, cutoff, MAX_ATTEMPTS),
             )
         return requeued
+
+    def cancel_worker_tasks(self, worker_id: str, force: bool = False) -> dict:
+        """Cancel tasks for a specific worker.
+
+        If force=True, cancel both running and pending tasks.
+        If force=False, only cancel running tasks assigned to this worker
+        (let them finish, pending tasks are unaffected).
+        """
+        with self._lock, self._conn:
+            # Only cancel running tasks assigned to this worker
+            cur_running = self._conn.execute(
+                "UPDATE tasks SET status = 'failed', error = 'killed',"
+                " worker_id = NULL"
+                " WHERE worker_id = ? AND status = 'running'",
+                (worker_id,),
+            )
+            # When force=True, also cancel pending tasks (not assigned to any worker)
+            cur_pending = self._conn.execute(
+                "UPDATE tasks SET status = 'failed', error = 'killed'"
+                " WHERE status = 'pending'"
+                + (" AND 1=1" if force else " AND 0=1"),
+            )
+        return {
+            "pending": cur_pending.rowcount,
+            "running": cur_running.rowcount,
+        }
+
+    def cancel_all_tasks(self, force: bool = False) -> dict:
+        """Cancel all tasks across all workers.
+
+        If force=True, cancel immediately (running + pending).
+        If force=False, only cancel pending tasks (let running finish).
+        """
+        with self._lock, self._conn:
+            cur_pending = self._conn.execute(
+                "UPDATE tasks SET status = 'failed', error = 'killed'"
+                " WHERE status = 'pending'",
+            )
+            cur_running = self._conn.execute(
+                "UPDATE tasks SET status = 'failed', error = 'killed',"
+                " worker_id = NULL"
+                " WHERE status = 'running'"
+                + (" AND 1=1" if force else " AND 0=1"),
+            )
+        return {
+            "pending": cur_pending.rowcount,
+            "running": cur_running.rowcount,
+        }
