@@ -32,6 +32,18 @@ def red(text: str) -> str:
     return f"{esc('31m')}{text}{esc('0m')}"
 
 
+def magenta(text: str) -> str:
+    return f"{esc('35m')}{text}{esc('0m')}"
+
+
+def blue(text: str) -> str:
+    return f"{esc('34m')}{text}{esc('0m')}"
+
+
+def white(text: str) -> str:
+    return f"{esc('37m')}{text}{esc('0m')}"
+
+
 def dim(text: str) -> str:
     return f"{esc('2m')}{text}{esc('0m')}"
 
