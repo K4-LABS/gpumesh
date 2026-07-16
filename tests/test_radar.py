@@ -8,6 +8,8 @@ import pytest
 from gpumesh.discovery import Peer
 from gpumesh.radar import (
     _format_peer_line,
+    _get_device_color,
+    _get_status_icon,
     print_radar_header,
     print_radar_peers,
     select_peer,
@@ -23,12 +25,15 @@ class TestFormatPeerLine:
             "device": "cuda",
             "device_name": "RTX 3080",
             "score": 85.2,
+            "claim_port": 8001,
         }, ("192.168.1.5", 80))
         line = _format_peer_line(peer, 0)
         assert "gpu-pc" in line
         assert "RTX 3080" in line
         assert "85.2" in line
         assert "192.168.1.5" in line
+        assert "GPU" in line
+        assert "CLAIM" in line
 
     def test_format_cpu_peer(self):
         peer = Peer({
@@ -40,6 +45,7 @@ class TestFormatPeerLine:
         assert "laptop" in line
         assert "CPU" in line
         assert "1.5" in line
+        assert "192.168.1.8" in line
 
     def test_format_mps_peer(self):
         peer = Peer({
@@ -50,6 +56,86 @@ class TestFormatPeerLine:
         line = _format_peer_line(peer, 0)
         assert "macbook" in line
         assert "Apple Silicon" in line
+        assert "GPU" in line
+
+    def test_format_peer_with_claim_port(self):
+        peer = Peer({
+            "hostname": "gpu-worker",
+            "device": "cuda",
+            "score": 50.0,
+            "claim_port": 8001,
+        }, ("192.168.1.20", 80))
+        line = _format_peer_line(peer, 0)
+        assert "CLAIM" in line
+
+    def test_format_peer_without_claim_port(self):
+        peer = Peer({
+            "hostname": "cpu-node",
+            "device": "cpu",
+            "score": 5.0,
+        }, ("192.168.1.25", 80))
+        line = _format_peer_line(peer, 0)
+        assert "-----" in line
+
+
+class TestGetDeviceColor:
+    """Tests for device color function."""
+
+    def test_cuda_device_color(self):
+        from gpumesh.ansi import green
+        color_func = _get_device_color("cuda")
+        assert color_func == green
+
+    def test_mps_device_color(self):
+        from gpumesh.ansi import magenta
+        color_func = _get_device_color("mps")
+        assert color_func == magenta
+
+    def test_cpu_device_color(self):
+        from gpumesh.ansi import yellow
+        color_func = _get_device_color("cpu")
+        assert color_func == yellow
+
+
+class TestGetStatusIcon:
+    """Tests for status icon function."""
+
+    def test_offline_peer_icon(self):
+        peer = Peer({
+            "hostname": "offline-pc",
+            "device": "cpu",
+            "score": 0.0,
+        }, ("192.168.1.5", 80))
+        peer.last_seen = 0  # Make peer stale
+        icon = _get_status_icon(peer)
+        assert "x" in icon
+
+    def test_high_score_peer_icon(self):
+        peer = Peer({
+            "hostname": "fast-pc",
+            "device": "cuda",
+            "score": 85.0,
+        }, ("192.168.1.5", 80))
+        icon = _get_status_icon(peer)
+        assert "+" in icon
+
+    def test_medium_score_peer_icon(self):
+        peer = Peer({
+            "hostname": "medium-pc",
+            "device": "cuda",
+            "score": 25.0,
+        }, ("192.168.1.5", 80))
+        icon = _get_status_icon(peer)
+        assert "+" in icon
+
+    def test_low_score_peer_icon(self):
+        peer = Peer({
+            "hostname": "slow-pc",
+            "device": "cpu",
+            "score": 5.0,
+        }, ("192.168.1.5", 80))
+        icon = _get_status_icon(peer)
+        assert "+" in icon
 
 
 class TestPrintRadarHeader:
@@ -60,12 +146,21 @@ class TestPrintRadarHeader:
         captured = capsys.readouterr()
         assert "RADAR" in captured.out
         assert "Workers" in captured.out
+        assert "Scanning network for GPU nodes..." in captured.out
 
     def test_worker_header(self, capsys):
         print_radar_header("worker")
         captured = capsys.readouterr()
         assert "RADAR" in captured.out
         assert "Coordinators" in captured.out
+        assert "Broadcasting presence" in captured.out
+
+    def test_header_legend(self, capsys):
+        print_radar_header("coordinator")
+        captured = capsys.readouterr()
+        assert "Legend:" in captured.out
+        assert "online" in captured.out
+        assert "offline" in captured.out
 
 
 class TestPrintRadarPeers:
@@ -74,7 +169,7 @@ class TestPrintRadarPeers:
     def test_empty_peers(self, capsys):
         count = print_radar_peers([], prev_count=0)
         captured = capsys.readouterr()
-        assert "No devices found" in captured.out
+        assert "Scanning for devices" in captured.out
         assert count == 1
 
     def test_with_peers(self, capsys):
@@ -88,19 +183,34 @@ class TestPrintRadarPeers:
         captured = capsys.readouterr()
         assert "pc1" in captured.out
         assert "pc2" in captured.out
-        assert count == 2
+        assert "GPU" in captured.out
+        assert "CPU" in captured.out
+        assert "Network Topology:" in captured.out
 
-    def test_sorted_by_hostname(self, capsys):
+    def test_sorted_by_score(self, capsys):
         peers = [
-            Peer({"hostname": "zebra", "device": "cpu", "score": 1.0},
+            Peer({"hostname": "slow", "device": "cpu", "score": 1.0},
                  ("1.2.3.4", 80)),
-            Peer({"hostname": "alpha", "device": "cpu", "score": 1.0},
+            Peer({"hostname": "fast", "device": "cuda", "score": 85.0},
                  ("1.2.3.5", 80)),
         ]
         count = print_radar_peers(peers, prev_count=0)
         captured = capsys.readouterr()
-        # alpha should appear before zebra
-        assert captured.out.index("alpha") < captured.out.index("zebra")
+        # fast should appear before slow (higher score first)
+        assert captured.out.index("fast") < captured.out.index("slow")
+
+    def test_network_topology_display(self, capsys):
+        peers = [
+            Peer({"hostname": "pc1", "device": "cuda", "score": 85.0},
+                 ("1.2.3.4", 80)),
+            Peer({"hostname": "pc2", "device": "cpu", "score": 1.0},
+                 ("1.2.3.5", 80)),
+        ]
+        count = print_radar_peers(peers, prev_count=0)
+        captured = capsys.readouterr()
+        assert "CUDA GPUs: 1" in captured.out
+        assert "CPUs: 1" in captured.out
+        assert "Total: 2 nodes" in captured.out
 
 
 class TestSelectPeer:
@@ -172,3 +282,26 @@ class TestSelectPeer:
         with patch("builtins.input", side_effect=KeyboardInterrupt):
             selected = select_peer(peers)
             assert selected is None
+
+    def test_select_peer_sorted_by_score(self):
+        peers = [
+            Peer({"hostname": "slow", "device": "cpu", "score": 1.0},
+                 ("1.2.3.4", 80)),
+            Peer({"hostname": "fast", "device": "cuda", "score": 85.0},
+                 ("1.2.3.5", 80)),
+        ]
+        with patch("builtins.input", return_value="1"):
+            selected = select_peer(peers)
+            assert selected is not None
+            assert selected.hostname == "fast"
+
+    def test_select_peer_shows_gpu_status(self, capsys):
+        peers = [
+            Peer({"hostname": "gpu-pc", "device": "cuda", "score": 85.0},
+                 ("1.2.3.4", 80)),
+        ]
+        with patch("builtins.input", return_value="1"):
+            selected = select_peer(peers)
+            captured = capsys.readouterr()
+            assert "GPU" in captured.out
+            assert "CLAIM" in captured.out or "-----" in captured.out
