@@ -36,6 +36,18 @@ def dim(text: str) -> str:
     return f"{esc('2m')}{text}{esc('0m')}"
 
 
+def magenta(text: str) -> str:
+    return f"{esc('35m')}{text}{esc('0m')}"
+
+
+def white(text: str) -> str:
+    return f"{esc('37m')}{text}{esc('0m')}"
+
+
+def reset() -> str:
+    return esc("0m")
+
+
 def erase_line():
     if _SUPPORTS_COLOR:
         sys.stdout.write("\033[2K")
@@ -71,6 +83,8 @@ _UNICODE_MAP = {
     "\u2192": "->", "\u2190": "<-", "\u2191": "^", "\u2193": "v",
     "\U0001f680": "*", "\u26a1": "*", "\U0001f5a5\ufe0f": "", "\U0001f310": "", "\U0001f4e1": "",
     "\u2705": "[OK]", "\u274c": "[FAIL]", "\u26a0\ufe0f": "[!]",
+    "\u25cf": "*", "\u25cb": "o", "\u25a0": "#", "\u25b2": "^",
+    "\u25bc": "v", "\u2666": "*", "\u2605": "*",
 }
 
 
@@ -116,3 +130,23 @@ def safe_print(*args, **kwargs):
         safe = text.encode("ascii", errors="replace").decode("ascii")
         file.write(safe + end)
         file.flush()
+
+
+def device_icon(device: str) -> str:
+    """Return a short colored label for a device type."""
+    if device == "cuda":
+        return green("GPU")
+    elif device == "mps":
+        return magenta("MPS")
+    else:
+        return dim("CPU")
+
+
+def status_alive() -> str:
+    """Colored 'alive' label."""
+    return green("alive")
+
+
+def status_dead() -> str:
+    """Colored 'dead' label."""
+    return red("dead")
