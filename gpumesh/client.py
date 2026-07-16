@@ -8,7 +8,7 @@ import sys
 import time
 import urllib.error
 
-from .ansi import safe_print
+from .ansi import safe_print, bold, cyan, green, yellow, red, dim, reset as _reset, esc as _esc_mod
 from .worker import MeshClient
 
 # Detect ANSI support - modern terminals all support ANSI
@@ -26,20 +26,20 @@ def submit_job(url: str, token: str, script_path: str, payloads_path: str,
         with open(script_path) as f:
             script = f.read()
     except FileNotFoundError:
-        raise SystemExit(f"Script not found: {script_path}")
+        raise SystemExit(f"{_esc('31m')}[ERROR]{_esc('0m')} Script not found: {script_path}")
     try:
         with open(payloads_path) as f:
             payloads = json.load(f)
     except FileNotFoundError:
-        raise SystemExit(f"Payloads file not found: {payloads_path}")
+        raise SystemExit(f"{_esc('31m')}[ERROR]{_esc('0m')} Payloads file not found: {payloads_path}")
     if not isinstance(payloads, list):
-        raise SystemExit("payloads file must contain a JSON list")
+        raise SystemExit(f"{_esc('31m')}[ERROR]{_esc('0m')} Payloads file must contain a JSON list")
 
     mesh = MeshClient(url, token)
     # Warn about large uploads
     script_size = len(script.encode('utf-8'))
     if script_size > 100_000:  # > 100KB
-        print(f"[gpumesh] Uploading large script ({script_size // 1024}KB)...")
+        print(f"{_esc('33m')}[*] Uploading large script ({script_size // 1024}KB)...{_esc('0m')}")
     resp = mesh.call("POST", "/api/jobs", {
         "name": name or script_path,
         "script": script,
@@ -100,11 +100,18 @@ def list_devices(url: str, token: str) -> dict:
 
 
 def _bar(done: int, total: int, width: int = 20) -> str:
-    """Build a progress bar like '################....'."""
+    """Build a colored progress bar like '########........'.
+
+    Uses colored chars when TTY supports it, falls back to ASCII.
+    """
     if total == 0:
-        return "." * width
+        return f"{_esc('90m')}{'.' * width}{_esc('0m')}"
     filled = int(width * done / total)
-    return "#" * filled + "." * (width - filled)
+    empty = width - filled
+    if _ANSI:
+        return f"{_esc('32m')}{'#' * filled}{_esc('90m')}{'.' * empty}{_esc('0m')}"
+    else:
+        return f"{'#' * filled}{'.' * empty}"
 
 
 def wait_for_job(url: str, token: str, job_id: str, poll: float = 2.0, timeout: float = 0.0) -> dict:
@@ -150,25 +157,25 @@ def wait_for_job(url: str, token: str, job_id: str, poll: float = 2.0, timeout: 
 
         # Header
         job_name = job.get("name", job_id)
-        lines.append(f"{_esc('1m')}Job:{_esc('0m')} {job_name} ({job_id})")
+        lines.append(f"{_esc('1m')}Job:{_esc('0m')} {job_name} ({_esc('36m')}{job_id}{_esc('0m')})")
         lines.append("")
 
         # Progress bar
         bar = _bar(done, total)
         if total == 0:
-            lines.append(f"  No tasks yet...")
+            lines.append(f"  {_esc('90m')}No tasks yet...{_esc('0m')}")
         else:
-            status_parts = [f"{done}/{total} done"]
+            status_parts = [f"{_esc('32m')}{done}/{total} done{_esc('0m')}"]
             if failed:
-                status_parts.append(f"{failed} failed")
+                status_parts.append(f"{_esc('31m')}{failed} failed{_esc('0m')}")
             if running:
-                status_parts.append(f"{running} running")
+                status_parts.append(f"{_esc('33m')}{running} running{_esc('0m')}")
             if pending:
-                status_parts.append(f"{pending} pending")
+                status_parts.append(f"{_esc('90m')}{pending} pending{_esc('0m')}")
 
             lines.append(
-                f"  [{_esc('32m')}{bar}{_esc('0m')}] "
-                f"{', '.join(status_parts)}  ({elapsed:.0f}s)"
+                f"  {bar} "
+                f"{', '.join(status_parts)}  {_esc('90m')}({elapsed:.0f}s){_esc('0m')}"
             )
 
         # Per-worker status
@@ -187,9 +194,9 @@ def wait_for_job(url: str, token: str, job_id: str, poll: float = 2.0, timeout: 
                 display = display[:16]
                 wb = _bar(count, max(count, 5), 10)
                 lines.append(
-                    f"  {_esc('36m')}{wid}{_esc('0m')}: "
+                    f"  {_esc('36m')}{wid[:8]}{_esc('0m')}: "
                     f"{display:<16} "
-                    f"{wb} {count} running"
+                    f"{wb} {_esc('33m')}{count} running{_esc('0m')}"
                 )
 
         # Recent results
@@ -236,8 +243,8 @@ def wait_for_job(url: str, token: str, job_id: str, poll: float = 2.0, timeout: 
 
 def print_job(job: dict):
     """Print final job results in a clean format."""
-    safe_print(f"{_esc('1m')}Job:{_esc('0m')} {job['name']} ({job['id']})")
-    status = "finished" if job["finished"] else "running"
+    safe_print(f"{_esc('1m')}Job:{_esc('0m')} {job['name']} ({_esc('36m')}{job['id']}{_esc('0m')})")
+    status = f"{_esc('32m')}finished{_esc('0m')}" if job["finished"] else f"{_esc('33m')}running{_esc('0m')}"
     safe_print(f"  Status: {status}")
     safe_print(f"  Counts: {job['counts']}")
     safe_print()
@@ -253,9 +260,9 @@ def print_job(job: dict):
         else:
             icon = f"{_esc('90m')}\u00b7{_esc('0m')}"
 
-        worker = f"  worker={t['worker_id']}" if t.get("worker_id") else ""
+        worker = f"  {_esc('36m')}worker={_esc('0m')}{t['worker_id']}" if t.get("worker_id") else ""
         safe_print(f"  {icon} task {t['id']:<12} [{s}]  cost={t['cost']}{worker}")
         if t["result"] is not None:
             safe_print(f"    result: {json.dumps(t['result'])}")
         if t.get("error"):
-            safe_print(f"    error: {t['error']}")
+            safe_print(f"    {_esc('31m')}error: {t['error']}{_esc('0m')}")
