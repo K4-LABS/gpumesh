@@ -16,9 +16,9 @@ from .discovery import Listener, Peer
 
 from .ansi import (_SUPPORTS_COLOR, esc as _esc, bold as _bold,
                    cyan as _cyan, green as _green, yellow as _yellow,
-                   dim as _dim, erase_line as _erase_line,
+                   red as _red, dim as _dim, erase_line as _erase_line,
                    move_up as _move_up, move_down as _move_down,
-                   clear_lines as _clear_lines)
+                   clear_lines as _clear_lines, device_icon as _device_icon)
 
 
 def _safe_write(text: str):
@@ -43,11 +43,20 @@ def _format_peer_line(peer: Peer, index: int) -> str:
     columns = shutil.get_terminal_size((80, 24)).columns
     icon = _green("+")
     name = _bold(peer.hostname)
-    device = _cyan(peer.display_name)
+    device = f"{_device_icon(peer.device)} {peer.display_name}"
     score = f"{peer.score:.1f} GFLOP/s"
+
+    # Mini score bar (0-100 scale)
+    bar_width = 10
+    filled = min(bar_width, int(peer.score / 100 * bar_width))
+    if _SUPPORTS_COLOR:
+        bar = f"{_green('#' * filled)}{_dim('.' * (bar_width - filled))}"
+    else:
+        bar = '#' * filled + '.' * (bar_width - filled)
+
     ip = _dim(peer.ip)
 
-    line = f"  {icon} {name}  {device}  {score}  {ip}"
+    line = f"  {icon} {name}  {device}  {score}  [{bar}]  {ip}"
     # Truncate to terminal width (leave 1 char margin)
     max_len = columns - 1
     if len(line) > max_len:
@@ -59,9 +68,9 @@ def print_radar_header(mode: str = "coordinator"):
     """Print the radar header."""
     columns = shutil.get_terminal_size((80, 24)).columns
     if mode == "coordinator":
-        title = "RADAR — Nearby Workers"
+        title = "RADAR -- Nearby Workers"
     else:
-        title = "RADAR — Nearby Coordinators"
+        title = "RADAR -- Nearby Coordinators"
 
     width = max(50, len(title) + 8)
     # Clamp to terminal width
@@ -71,7 +80,7 @@ def print_radar_header(mode: str = "coordinator"):
     print(_bold(f"  {title}"))
     print(_cyan("=" * width))
     print()
-    print(_dim("  (scanning every 2s, press Ctrl+C to stop)"))
+    print(_dim("  Scanning every 2s ... press Ctrl+C to stop"))
     print()
 
 
@@ -117,8 +126,8 @@ def select_peer(peers: list[Peer]) -> Peer | None:
 
     print()
     for i, peer in enumerate(peers, 1):
-        print(f"  {_cyan(str(i))}) {_bold(peer.hostname)} — "
-              f"{peer.display_name} ({peer.score:.1f} GFLOP/s) — {peer.ip}")
+        print(f"  {_cyan(str(i))}) {_bold(peer.hostname)} -- "
+              f"{peer.display_name} ({peer.score:.1f} GFLOP/s) -- {peer.ip}")
     print()
     print(_dim("  Enter number to connect, or Ctrl+C to cancel"))
     print()
@@ -148,8 +157,8 @@ def select_worker_for_claim(peers: list[Peer]) -> tuple[Peer, str] | tuple[None,
 
     print()
     for i, peer in enumerate(peers, 1):
-        print(f"  {_cyan(str(i))}) {_bold(peer.hostname)} — "
-              f"{peer.display_name} ({peer.score:.1f} GFLOP/s) — {peer.ip}")
+        print(f"  {_cyan(str(i))}) {_bold(peer.hostname)} -- "
+              f"{peer.display_name} ({peer.score:.1f} GFLOP/s) -- {peer.ip}")
     print()
     print(_dim("  Enter number to claim, or Ctrl+C to cancel"))
     print()

@@ -145,10 +145,13 @@ def _print_header():
         "  [bold cyan]| |_| || |_| |  __/ | | |  | | |_| | [/]\n"
         "  [bold cyan] \\____| \\__,_|\\___|_|_|_|  |_|\\____| [/]\n"
     )
-    subtitle = "[bold]Share GPU power between machines.\nLike Bluetooth \u2014 devices find each other.[/]"
+    subtitle = (
+        "[bold]Share GPU power between machines.\n"
+        "Like Bluetooth -- devices find each other.[/]"
+    )
     panel_text = Text.from_markup(art + "\n" + subtitle)
     _console.print()
-    _console.print(Panel(panel_text, border_style="cyan", padding=(0, 1)))
+    _console.print(Panel(panel_text, border_style="bright_cyan", padding=(0, 1)))
     _console.print()
 
 
@@ -156,13 +159,13 @@ def _print_header():
 
 
 def run_setup_wizard():
-    """Main setup wizard \u2014 simple 2-step flow."""
+    """Main setup wizard -- simple 2-step flow."""
     global _console
 
     if not _HAS_UI_DEPS:
-        print("[gpumesh] ERROR: Setup wizard requires optional dependencies.")
-        print("[gpumesh] Install them with: pip install gpumesh[ui]")
-        print("[gpumesh] Or configure manually: gpumesh serve / gpumesh join")
+        print("[ERROR] Setup wizard requires optional dependencies.")
+        print("   Install them with: pip install gpumesh[ui]")
+        print("   Or configure manually: gpumesh serve / gpumesh join")
         sys.exit(1)
 
     _console = Console()
@@ -219,7 +222,7 @@ def _setup_coordinator_radar(device: str):
     """Set up this machine as the coordinator with live radar."""
 
     _console.print()
-    _console.print("  Great! This machine will manage the jobs.", style="bold")
+    _console.print("  Great! This machine will manage the jobs.", style="bold green")
     _console.print()
 
     # Try to add firewall rules automatically
@@ -292,14 +295,14 @@ def _setup_coordinator_radar(device: str):
     try:
         httpd = server.serve("0.0.0.0", 8000, "gpumesh.db", token)
     except OSError as exc:
-        _console.print(f"  Failed to start server: {exc}", style="red")
+        _console.print(f"  [ERROR] Failed to start server: {exc}", style="red")
         _console.print("  Port 8000 may already be in use.", style="yellow")
         try:
             httpd = server.serve("0.0.0.0", 8001, "gpumesh.db", token)
             coordinator_url = f"http://{lan_ip}:8001"
             _console.print("  Server started on port 8001 instead.", style="green")
         except OSError:
-            _console.print("  Ports 8000 and 8001 are both in use.", style="yellow")
+            _console.print("  Ports 8000 and 8001 are both in use.", style="red")
             _console.print("  Try: gpumesh serve --port 8002 --token <token>", style="yellow")
             _console.print()
             return
@@ -320,7 +323,7 @@ def _setup_coordinator_radar(device: str):
     try:
         listener.start()
     except OSError as exc:
-        _console.print(f"  Failed to start discovery listener: {exc}", style="red")
+        _console.print(f"  [ERROR] Failed to start discovery listener: {exc}", style="red")
         _console.print(
             "  Workers won't be auto-discovered, but manual join still works.",
             style="yellow",
@@ -357,13 +360,13 @@ def _setup_coordinator_radar(device: str):
                     radar_text = Text("\n").join(radar_lines)
 
                 header = Text()
-                header.append("  RADAR \u2014 Nearby Workers\n", style="bold cyan")
+                header.append("  RADAR -- Nearby Workers\n", style="bold cyan")
                 header.append("  (scanning every 2s, press Ctrl+C to stop)\n\n", style="dim")
                 header.append_text(radar_text)
                 live.update(header)
 
                 if peers:
-                    break  # found at least one worker \u2014 stop scanning
+                    break  # found at least one worker -- stop scanning
                 scan_count += 1
                 time.sleep(2)
     except KeyboardInterrupt:
@@ -418,7 +421,7 @@ def _claim_worker(peers: list, coordinator_url: str, coordinator_token: str):
     import urllib.error
     import urllib.request
 
-    # Determine the claim port \u2014 probe fallback if beacon says 0
+    # Determine the claim port -- probe fallback if beacon says 0
     claim_port = peer.claim_port
     if claim_port == 0:
         _console.print(
@@ -471,9 +474,9 @@ def _claim_worker(peers: list, coordinator_url: str, coordinator_token: str):
             err = body.get("error", str(exc))
         except Exception:
             err = str(exc)
-        _console.print(f"  Claim failed: {err}", style="red")
+        _console.print(f"  [ERROR] Claim failed: {err}", style="red")
     except (urllib.error.URLError, OSError) as exc:
-        _console.print(f"  Could not reach worker at {claim_url}: {exc}", style="red")
+        _console.print(f"  [ERROR] Could not reach worker at {claim_url}: {exc}", style="red")
     _console.print()
 
 
@@ -523,7 +526,7 @@ def _show_coordinator_instructions(url: str, token: str, mode: str):
     panel_content.append("\n  Save this! Workers need it to join.", style="dim")
 
     _console.print(
-        Panel(panel_content, border_style="cyan", padding=(0, 1)),
+        Panel(panel_content, border_style="bright_cyan", padding=(0, 1)),
     )
     _console.print(
         "  SECURITY: Treat this token like a password. Do not share it publicly.",
@@ -598,7 +601,7 @@ def _setup_worker_radar(device: str):
     """Set up this machine as a worker with claim-based discovery."""
 
     _console.print()
-    _console.print("  Let's add this machine to the mesh.", style="bold")
+    _console.print("  Let's add this machine to the mesh.", style="bold green")
     _console.print()
     _console.print(
         "  This worker will broadcast its presence on the LAN.", style="cyan",
@@ -656,14 +659,14 @@ def _setup_worker_radar_scan(device: str):
 
     # Start claim server + UDP beacon
     _console.print()
-    _console.print("  Starting broadcast...", style="bold")
+    _console.print("  Starting broadcast...", style="bold green")
     _console.print()
     try:
         worker.run_worker_broadcast(token)
     except KeyboardInterrupt:
         pass
     except Exception as exc:
-        _console.print(f"  Failed to start broadcast: {exc}", style="red")
+        _console.print(f"  [ERROR] Failed to start broadcast: {exc}", style="red")
         _console.print("  Check your network settings and try again.", style="yellow")
         _console.print()
 
@@ -701,7 +704,7 @@ def _setup_worker_tailscale(device: str):
     connection_manager.save_connection(url, token)
 
     _console.print()
-    _console.print("  Joining the mesh...", style="bold")
+    _console.print("  Joining the mesh...", style="bold green")
     _console.print()
 
     info = capability.full_probe()
@@ -719,7 +722,7 @@ def _setup_worker_tailscale(device: str):
     except KeyboardInterrupt:
         pass
     except Exception as exc:
-        _console.print(f"  Failed to connect: {exc}", style="red")
+        _console.print(f"  [ERROR] Failed to connect: {exc}", style="red")
         _console.print(
             "  Check that the coordinator is running and the URL is correct.",
             style="yellow",
@@ -764,7 +767,7 @@ def _setup_worker_manual(device: str):
     connection_manager.save_connection(url, token)
 
     _console.print()
-    _console.print("  Joining the mesh...", style="bold")
+    _console.print("  Joining the mesh...", style="bold green")
     _console.print()
 
     info = capability.full_probe()
@@ -782,7 +785,7 @@ def _setup_worker_manual(device: str):
     except KeyboardInterrupt:
         pass
     except Exception as exc:
-        _console.print(f"  Failed to connect: {exc}", style="red")
+        _console.print(f"  [ERROR] Failed to connect: {exc}", style="red")
         _console.print(
             "  Check that the coordinator is running and the IP is correct.",
             style="yellow",
