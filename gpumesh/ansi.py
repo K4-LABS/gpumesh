@@ -48,14 +48,6 @@ def dim(text: str) -> str:
     return f"{esc('2m')}{text}{esc('0m')}"
 
 
-def magenta(text: str) -> str:
-    return f"{esc('35m')}{text}{esc('0m')}"
-
-
-def white(text: str) -> str:
-    return f"{esc('37m')}{text}{esc('0m')}"
-
-
 def reset() -> str:
     return esc("0m")
 

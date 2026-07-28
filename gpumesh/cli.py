@@ -1,6 +1,6 @@
 """gpumesh command line interface.
 
-  gpumesh serve      [--port 8000] [--token SECRET] [--public] [--tailscale]
+  gpumesh serve      [--port 8000] [--token SECRET] [--public] [--tailscale] [--no-discovery]
   gpumesh join       URL [--token SECRET]
   gpumesh quickjoin  [URL] --token TOKEN [--tailscale] [--port PORT]
   gpumesh worker     --token TOKEN [--claim-port PORT] [--timeout 240]
@@ -56,7 +56,8 @@ def cmd_serve(args):
         print(dim("   Start 'gpumesh serve' as Administrator, or open "
               f"port {args.port} manually (see hint above)."))
     try:
-        httpd = server.serve("0.0.0.0", args.port, args.db, token)
+        httpd = server.serve("0.0.0.0", args.port, args.db, token,
+                             discovery=not args.no_discovery)
     except OSError as exc:
         print(red(f"[ERROR] {exc}"))
         print(yellow(f"   Port {args.port} is already in use."))
@@ -439,7 +440,7 @@ def cmd_quickjoin(args):
         safe_print(dim("  [2/4]") + " Installing gpumesh...")
         try:
             subprocess.run(
-                [sys.executable, "-m", "pip", "install", "-e", "."],
+                [sys.executable, "-m", "pip", "install", "gpumesh"],
                 check=True,
                 timeout=120,
             )
@@ -590,6 +591,8 @@ def main():
                    help="expose a public URL via ngrok")
     p.add_argument("--tailscale", action="store_true",
                    help="use Tailscale for network access (auto-detects IP)")
+    p.add_argument("--no-discovery", action="store_true",
+                   help="disable UDP broadcast discovery")
     p.set_defaults(func=cmd_serve)
 
     p = sub.add_parser("join",

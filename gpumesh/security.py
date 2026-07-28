@@ -12,13 +12,19 @@ from collections import defaultdict
 
 def hash_token(token: str, salt: str = None) -> str:
     """Hash a token using SHA-256 with a salt.
-    
+
     Returns format: "salt:hash" so salt is stored alongside the hash.
     This prevents storing plain-text tokens in the database.
+
+    When no salt is provided, a deterministic salt is derived from the token
+    itself so that the same token always produces the same hash across
+    coordinator restarts.  This is critical: workers persist the plain token
+    and expect it to keep working after the coordinator is restarted.
     """
-    import secrets
     if salt is None:
-        salt = secrets.token_hex(16)
+        # Deterministic salt: hash of the token ensures the same token always
+        # produces the same salt, while different tokens get different salts.
+        salt = hashlib.sha256(token.encode()).hexdigest()[:16]
     hash_val = hashlib.sha256(f"{salt}{token}".encode()).hexdigest()
     return f"{salt}:{hash_val}"
 
@@ -30,7 +36,8 @@ def verify_token(token: str, stored: str) -> bool:
     """
     if ":" not in stored:
         # Legacy format without salt
-        return hmac.compare_digest(hash_token(token, ""), stored)
+        raw_hash = hashlib.sha256(token.encode()).hexdigest()
+        return hmac.compare_digest(raw_hash, stored)
     salt, hash_val = stored.split(":", 1)
     computed = hashlib.sha256(f"{salt}{token}".encode()).hexdigest()
     return hmac.compare_digest(computed, hash_val)

@@ -188,7 +188,7 @@ class TestCLIArgumentParsing:
                 pass
             
             # Verify port was passed correctly
-            mock_serve.assert_called_once_with("0.0.0.0", 9000, "gpumesh.db", "test123")
+            mock_serve.assert_called_once_with("0.0.0.0", 9000, "gpumesh.db", "test123", discovery=True)
 
     def test_serve_token_argument(self):
         """--token argument is correctly parsed."""
@@ -204,7 +204,7 @@ class TestCLIArgumentParsing:
                 pass
             
             # Verify token was passed correctly
-            mock_serve.assert_called_once_with("0.0.0.0", 8000, "gpumesh.db", "mysecrettoken")
+            mock_serve.assert_called_once_with("0.0.0.0", 8000, "gpumesh.db", "mysecrettoken", discovery=True)
 
     def test_serve_default_token_generated(self):
         """Token is generated when not provided."""
@@ -221,7 +221,7 @@ class TestCLIArgumentParsing:
                 pass
             
             # Verify generated token was used
-            mock_serve.assert_called_once_with("0.0.0.0", 8000, "gpumesh.db", "generatedtoken123")
+            mock_serve.assert_called_once_with("0.0.0.0", 8000, "gpumesh.db", "generatedtoken123", discovery=True)
 
     def test_quickjoin_token_required(self):
         """--token is required for quickjoin."""

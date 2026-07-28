@@ -225,11 +225,6 @@ def _setup_coordinator_radar(device: str):
     _console.print("  Great! This machine will manage the jobs.", style="bold green")
     _console.print()
 
-    # Try to add firewall rules automatically
-    firewall_ok = try_add_firewall_rule(8000)
-    if not firewall_ok:
-        show_firewall_hint(8000)
-
     # Detect network options
     tailscale_ok = _has_tailscale()
     tailscale_ip = _get_tailscale_ip() if tailscale_ok else None
@@ -312,6 +307,12 @@ def _setup_coordinator_radar(device: str):
         target=httpd.serve_forever, daemon=True, name="gpumesh-httpd",
     )
     serve_thread.start()
+
+    # Try to add firewall rules now that the actual port is known
+    actual_port = int(coordinator_url.rsplit(":", 1)[-1]) if ":" in coordinator_url else 8000
+    firewall_ok = try_add_firewall_rule(actual_port)
+    if not firewall_ok:
+        show_firewall_hint(actual_port)
 
     connection_manager.save_connection(coordinator_url, token)
 

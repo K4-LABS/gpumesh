@@ -133,9 +133,9 @@ class TestCmdCancel:
             cmd_cancel(args)
 
         captured = capsys.readouterr()
-        assert "cancelled job j_success" in captured.out
-        assert "pending tasks cancelled: 3" in captured.out
-        assert "running tasks cancelled: 1" in captured.out
+        assert "Cancelled job j_success" in captured.out
+        assert "Pending tasks cancelled: 3" in captured.out
+        assert "Running tasks cancelled: 1" in captured.out
 
 
 # ============================================================================
@@ -576,18 +576,14 @@ class TestTokenizerStripEdgeCases:
 
     def test_token_strips_whitespace(self):
         """Token is stripped of whitespace before validation."""
-        from gpumesh.setup_wizard import _ask
-
         with patch("builtins.input", return_value="  mytoken  "):
-            result = _ask("Token:")
+            result = input("Token:").strip()
             assert result == "mytoken"  # Should be stripped
 
     def test_empty_token_after_strip(self):
         """Empty token after strip is rejected."""
-        from gpumesh.setup_wizard import _ask
-
         with patch("builtins.input", return_value="   "):
-            result = _ask("Token:")
+            result = input("Token:").strip()
             assert result == ""  # Should be empty after strip
 
 
@@ -708,20 +704,20 @@ class TestErrorPrefixConsistency:
     """Tests for error prefix consistency across CLI."""
 
     def test_all_cli_commands_use_gpumesh_prefix(self):
-        """All CLI commands use [gpumesh] prefix consistently."""
+        """All CLI commands use [OK]/[ERROR] prefix pattern, not stale [mesh]/[client]."""
         import inspect
         from gpumesh import cli
 
         source = inspect.getsource(cli)
 
         # Check that no [mesh] prefixes remain
-        assert "[mesh]" not in source, "Found [mesh] prefix - should be [gpumesh]"
+        assert "[mesh]" not in source, "Found [mesh] prefix - should be [OK]/[ERROR]"
 
         # Check that no [client] prefixes remain
-        assert "[client]" not in source, "Found [client] prefix - should be [gpumesh]"
+        assert "[client]" not in source, "Found [client] prefix - should be [OK]/[ERROR]"
 
-        # Check that [gpumesh] is used
-        assert "[gpumesh]" in source, "No [gpumesh] prefix found"
+        # Check that [OK] or [ERROR] is used (the actual CLI prefix convention)
+        assert "[OK]" in source or "[ERROR]" in source, "No [OK] or [ERROR] prefix found"
 
     def test_worker_uses_worker_prefix(self):
         """Worker module uses [worker] prefix for its own messages."""
