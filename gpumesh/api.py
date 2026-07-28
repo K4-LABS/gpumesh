@@ -309,6 +309,40 @@ class GPUMesh:
         """
         return self._client.call("GET", f"/api/jobs/{job_id}")
     
+    def submit(
+        self,
+        name: str = "",
+        script: str = "",
+        payloads: list[dict] | None = None,
+    ) -> str:
+        """Submit a job to the coordinator.
+
+        Args:
+            name: Job name
+            script: Python script (or "__gpumesh_function__" for function tasks)
+            payloads: List of payload dicts
+
+        Returns:
+            Job ID
+        """
+        resp = self._client.call("POST", "/api/jobs", {
+            "name": name or "job",
+            "script": script,
+            "payloads": payloads or [],
+        })
+        return resp["job_id"]
+
+    def status(self, job_id: str) -> dict:
+        """Get the status of a job.
+
+        Args:
+            job_id: The job ID
+
+        Returns:
+            Job status dict with 'finished', 'counts', 'tasks' keys
+        """
+        return self._client.call("GET", f"/api/jobs/{job_id}")
+
     def submit_job(
         self,
         script: str,
@@ -316,12 +350,12 @@ class GPUMesh:
         name: str = "",
     ) -> str:
         """Submit a script-based job (legacy API).
-        
+
         Args:
             script: Python script to execute
             payloads: List of payload dicts
             name: Optional job name
-            
+
         Returns:
             Job ID
         """

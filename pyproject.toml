@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "gpumesh"
-version = "0.8.1"
+version = "0.9.0"
 description = "Borrow your friends' GPUs: a terminal-based distributed compute mesh in pure Python"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -24,6 +24,10 @@ classifiers = [
 ]
 keywords = ["gpu", "distributed", "compute", "mesh", "ml", "pytorch", "cuda"]
 
+dependencies = [
+    "cloudpickle",
+]
+
 [project.urls]
 Homepage = "https://github.com/Samurai007AK/gpumesh"
 Documentation = "https://github.com/Samurai007AK/gpumesh#readme"
@@ -34,7 +38,7 @@ Issues = "https://github.com/Samurai007AK/gpumesh/issues"
 gpu = ["torch"]
 tunnel = ["pyngrok"]
 sysinfo = ["psutil"]
-notebook = ["cloudpickle", "pandas"]
+notebook = ["pandas"]
 ui = ["rich", "questionary"]
 dev = ["pytest", "build", "twine"]
 all = ["gpumesh[gpu,tunnel,sysinfo,notebook,ui]"]

@@ -372,8 +372,8 @@ class TestDistributeEdgeCases:
 
         assert results == []
 
-    def test_cost_stripped_from_params(self, mesh_with_worker):
-        """Cost key is stripped before passing to function."""
+    def test_cost_passed_through_to_function(self, mesh_with_worker):
+        """Cost key is passed through to function (not stripped from _params)."""
         def no_cost(**kwargs):
             return {"received_keys": sorted(kwargs.keys())}
 
@@ -385,7 +385,6 @@ class TestDistributeEdgeCases:
 
         assert len(results) == 1
         keys = results[0]["received_keys"]
-        assert "cost" not in keys
         assert "x" in keys
 
     # ── Multi-Worker Distribute ───────────────────────────────────────

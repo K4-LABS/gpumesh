@@ -576,6 +576,8 @@ class TestDeviceSummary:
 
     def test_device_summary_dead_workers(self, coordinator):
         """Device summary shows dead workers."""
+        import unittest.mock as um
+
         url, token, _ = coordinator
         client = MeshClient(url, token)
 
@@ -585,13 +587,12 @@ class TestDeviceSummary:
         })
         worker_id = resp["worker_id"]
 
-        # Fast-forward time to simulate worker death
-        import unittest.mock as um
-        original_time = time.time
-        with um.patch.object(time, "time", return_value=original_time() + WORKER_DEAD_AFTER + 1):
-            pass
+        # Fast-forward time so the server's db.list_devices() sees the worker as dead.
+        # Patch at the db module level so the server thread picks up the mock.
+        fake_time = time.time() + WORKER_DEAD_AFTER + 1
+        with um.patch("gpumesh.db.time.time", return_value=fake_time):
+            summary = client.call("GET", "/api/devices")
 
-        summary = client.call("GET", "/api/devices")
         assert summary["total_devices"] == 1
         assert summary["alive_devices"] == 0
 

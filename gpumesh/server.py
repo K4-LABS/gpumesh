@@ -2,12 +2,13 @@
 
 Endpoints (all require the X-Auth-Token header):
   POST /api/register            {hostname, device, score, ...} -> {worker_id}
-  POST /api/heartbeat           {worker_id}
+  POST /api/heartbeat           {worker_id, score?}
   POST /api/lease               {worker_id} -> task | 204
   POST /api/result              {task_id, worker_id, ok, result?, error?}
   POST /api/jobs                {name, script, payloads} -> {job_id}
   GET  /api/jobs/<id>           -> job status + task results
   GET  /api/workers             -> live worker list
+  GET  /api/events              -> recent join/leave events (last 100)
 """
 
 import json
@@ -92,6 +93,8 @@ class CoordinatorHandler(BaseHTTPRequestHandler):
         try:
             if self.path == "/api/workers":
                 self._send(200, {"workers": self.db.list_workers()})
+            elif self.path == "/api/events":
+                self._send(200, {"events": self.db.list_events()})
             elif self.path == "/api/devices":
                 self._send(200, self.db.device_summary())
             elif self.path.startswith("/api/jobs/"):
@@ -138,14 +141,18 @@ class CoordinatorHandler(BaseHTTPRequestHandler):
                     score,
                     body.get("device_name", ""),
                 )
+                self.db.record_event("worker_joined", worker_id)
                 print(f"[mesh] worker joined: {body.get('hostname')} "
                       f"({body.get('device_name') or body.get('device')}, "
                       f"score={body.get('score')})")
                 self._send(200, {"worker_id": worker_id})
 
             elif self.path == "/api/heartbeat":
+                score = body.get("score")
                 ok = self.db.heartbeat(
-                    body.get("worker_id", ""), body.get("task_id")
+                    body.get("worker_id", ""), body.get("task_id"),
+                    score=score if score is not None else None,
+                    gpu_memory_free_mb=body.get("gpu_memory_free_mb"),
                 )
                 self._send(200 if ok else 404, {"ok": ok})
 
@@ -167,6 +174,7 @@ class CoordinatorHandler(BaseHTTPRequestHandler):
                     result_ok,
                     result=body.get("result"),
                     error=body.get("error", ""),
+                    elapsed=body.get("elapsed"),
                 )
                 self._send(200 if ok else 409, {"ok": ok})
 
@@ -217,6 +225,19 @@ def _reaper(db: Database, stop: threading.Event):
         requeued = db.reap_expired_leases()
         if requeued:
             print(f"[mesh] re-queued {requeued} task(s) from dead workers")
+
+        # Hivemind TTL pattern: DELETE workers stale for >5 minutes
+        deleted = db.cleanup_dead_workers()
+        for wid in deleted:
+            db.record_event("worker_left", wid)
+            print(f"[mesh] worker expired and removed: {wid}")
+
+        # Exo-style topology change notification
+        alive = db.list_workers()
+        alive_count = sum(1 for w in alive if w["alive"])
+        if deleted:
+            print(f"[mesh] topology changed: {alive_count} workers alive")
+
         stop.wait(REAP_INTERVAL)
 
 

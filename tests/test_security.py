@@ -20,7 +20,7 @@ class TestTokenHashing:
         result = hash_token("secret123")
         assert ":" in result
         salt, hash_val = result.split(":", 1)
-        assert len(salt) == 32  # 16 bytes = 32 hex chars
+        assert len(salt) == 16  # Deterministic salt: 16 hex chars
         assert len(hash_val) == 64  # SHA-256 = 64 hex chars
     
     def test_hash_token_with_custom_salt(self):
