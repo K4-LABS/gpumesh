@@ -251,7 +251,7 @@ class Peer:
             self.score = 0.0
         try:
             port = int(data.get("api_port", 8000))
-            self.api_port = port if 1 <= port <= 65535 else 8000
+            self.api_port = port if 0 <= port <= 65535 else 8000
         except (TypeError, ValueError):
             self.api_port = 8000
         self.platform = str(data.get("platform", ""))[:255]
@@ -430,7 +430,7 @@ class Listener:
                     incoming = Peer(beacon, addr)
                 except ValueError:
                     continue
-                peer_key = f"{incoming.hostname}:{incoming.ip}"
+                peer_key = f"{incoming.hostname}:{incoming.ip}:{incoming.api_port}"
                 new_peer = None
                 with self._lock:
                     if peer_key in self._peers:

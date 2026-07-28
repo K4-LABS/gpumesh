@@ -2,6 +2,50 @@
 
 All notable changes to gpumesh are documented here.
 
+## [0.9.0] — 2026-07-26
+
+### Fixed
+- **14 critical bugs fixed** across the codebase.
+- Heartbeat `task_id` omission causing jobs to be silently dropped.
+- `_remote_call` crash when peer connection returns `None`.
+- Job polling retry on transient network errors (no more premature `None` result).
+- Discovery not enabled on `serve` by default.
+- Windows Firewall UDP 48900 rule not auto-created.
+- `worker_stats` table column mismatch with new telemetry.
+- Cost parameter accidentally stripped from job payloads.
+- JSON serialization failure when sending `Path` objects to subprocess.
+- `cloudpickle` import error not caught gracefully.
+- Legacy token verification using wrong comparison.
+- `quickjoin` failing due to `pip install` path issue.
+- Worker peer key collision when multiple workers share a machine.
+- `api_port=0` not allowed during development/testing.
+- Graceful shutdown missing timeout, leaving zombie processes.
+- Setup wizard firewall rule using wrong port.
+- Token hash salt not deterministic.
+
+### Added
+- **Process isolation for remote jobs** — Tasks run in separate subprocesses (inspired by Exo).
+- **Benchmark scoring system** — `run_benchmark()` returns a 0-100 score per worker (inspired by Exo).
+- **Crash diagnostics** — Structured error reporting on worker failures (inspired by Exo).
+- **TTL-based worker expiry** — Stale workers automatically pruned (inspired by Hivemind).
+- **Straggler deprioritization** — Slow workers get fewer jobs (inspired by Hivemind).
+- **GPU memory tracking** — `get_gpu_memory_usage()` reports VRAM usage (inspired by HAMi).
+- **Memory-aware scheduling** — Workers selected by available VRAM (inspired by HAMi).
+- **Node join/leave events** — `GET /api/events` endpoint for real-time mesh changes (inspired by Exo).
+- **Graceful fallback** — `@accelerate` falls back to local execution if mesh is unavailable (inspired by PartaGPU).
+- **Worker stats tracking** — `worker_stats` table records jobs, errors, latency per worker (inspired by Swarm-Tune).
+- `submit()` and `status()` convenience methods on `GPUMesh` API.
+- `GET /api/events` endpoint returns recent join/leave/error events.
+- New `--no-discovery` flag for `gpumesh serve`.
+- `_function_subprocess.py` for isolated task execution.
+
+### Changed
+- `@accelerate` now checks mesh for alive workers before falling back to local.
+- Benchmark re-runs on worker reconnection.
+- Improved topology logging on mesh join.
+- Version bump to 0.9.0.
+- Removed legacy agent worktrees, old setup docs, and build artifacts.
+
 ## [0.8.1] — 2026-07-14
 
 ### Fixed

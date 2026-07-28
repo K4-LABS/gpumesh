@@ -2,14 +2,27 @@
 
 Loop: register -> heartbeat thread -> poll for a lease -> run task in a
 sandboxed subprocess -> post the result -> repeat.
+
+Exo RunnerSupervisor pattern:
+- Function tasks run in a separate OS process (not a thread) so a crash
+  cannot take down the worker. The subprocess communicates results via
+  stdin/stdout pipes using pickle serialization.
+- After a task fails, diagnostics (error type, traceback, resource usage)
+  are attached to the failure status.
+- SIGTERM/SIGBREAK triggers graceful shutdown: stop accepting tasks,
+  wait for the current task (with a grace period), report status, clean up.
 """
 
 import hmac
 import json
+import os
 import platform
 import signal
+import subprocess
+import sys
 import threading
 import time
+import traceback
 import urllib.error
 import urllib.request
 
@@ -17,6 +30,8 @@ from . import capability, sandbox
 
 HEARTBEAT_INTERVAL = 10.0
 POLL_INTERVAL = 2.0
+REBENCHMARK_INTERVAL = 600.0  # re-benchmark every 10 minutes
+GRACEFUL_SHUTDOWN_TIMEOUT = 30.0  # seconds to wait for current task on SIGTERM
 _env_lock = threading.Lock()  # protects os.environ["GPUMESH_DEVICE"]
 
 
@@ -43,72 +58,152 @@ class MeshClient:
             return json.loads(raw) if raw else None
 
 
-def _run_function_task(payload: dict, device: str, timeout: float) -> dict:
-    """Execute a function-based task from the Python API.
+def _run_function_task(payload: dict, device: str, timeout: float,
+                       stop_event: threading.Event | None = None) -> dict:
+    """Execute a function-based task in an isolated subprocess.
 
-    Runs the function in a thread with timeout protection.
-    Strips internal keys (cost, _func, _task_index) from params.
-    Includes _task_index in result for proper ordering.
+    Exo RunnerSupervisor pattern: the function runs in a separate OS
+    process (not a thread), so a crashing task cannot take down the worker.
 
-    Note: GPUMESH_DEVICE env var is protected by _env_lock to avoid races
-    with timed-out daemon threads that may still be running.
+    Protocol:
+      1. Serialize func + params with cloudpickle
+      2. Spawn a subprocess that reads the pickled data from stdin
+      3. Subprocess executes func(**params), writes JSON result to stdout
+      4. On timeout, kill the entire process tree (no orphan threads)
+
+    The GPUMESH_DEVICE env var is passed to the subprocess directly (no
+    shared-state races).
+
+    If stop_event is provided and gets set during execution (e.g. SIGTERM),
+    the subprocess is killed after GRACEFUL_SHUTDOWN_TIMEOUT seconds.
     """
-    import os
-    import threading
     from . import serializer
 
     func = serializer.deserialize_function(payload["_func"])
     params = {k: v for k, v in payload.get("_params", {}).items()
-              if not k.startswith("_") and k != "cost"}
+              if not k.startswith("_")}
     task_index = payload.get("_task_index", 0)
 
-    result_container = [None]
-    error_container = [None]
+    # Locate the helper module on disk
+    helper_path = os.path.join(os.path.dirname(__file__), "_function_subprocess.py")
+    if not os.path.isfile(helper_path):
+        raise sandbox.TaskError(
+            f"function subprocess helper not found: {helper_path}"
+        )
 
-    def _execute():
-        try:
-            result = func(**params)
-            if not isinstance(result, dict):
-                result = {"result": result}
-            # Include task index for result ordering
-            result["_task_index"] = task_index
-            result_container[0] = result
-        except Exception as e:
-            error_container[0] = e
-
-    # Set device env var for the function
-    with _env_lock:
-        old_device = os.environ.get("GPUMESH_DEVICE")
-        os.environ["GPUMESH_DEVICE"] = device
+    # Serialize (func, params) with cloudpickle — sent over stdin pipe
     try:
-        t = threading.Thread(target=_execute, daemon=True)
-        t.start()
-        t.join(timeout=timeout)
+        import cloudpickle
+    except ImportError:
+        raise sandbox.TaskError(
+            "cloudpickle is required for function-based tasks but is not installed. "
+            "Install it with: pip install cloudpickle"
+        )
+    pickled_input = cloudpickle.dumps((func, params))
 
-        if t.is_alive():
-            # Thread is still running after timeout - log warning and wait longer
-            # for cleanup (especially important for GPU operations that need release)
-            t.join(timeout=min(timeout * 0.1, 5.0))  # Wait up to 10% of timeout or 5s
-            if t.is_alive():
-                raise sandbox.TaskError(
-                    f"function timed out after {timeout}s"
-                    f" (background thread still running — may hold GPU memory)"
-                )
-            else:
-                raise sandbox.TaskError(f"function timed out after {timeout}s")
-        if error_container[0] is not None:
-            err = error_container[0]
-            raise sandbox.TaskError(f"{type(err).__name__}: {err}")
-        return result_container[0]
+    # Build environment for the subprocess (inherit current env + device)
+    env = os.environ.copy()
+    env["GPUMESH_DEVICE"] = device
+
+    kwargs = {}
+    if os.name == "posix":
+        kwargs["preexec_fn"] = os.setsid  # new process group for clean kill
+
+    proc = subprocess.Popen(
+        [sys.executable, helper_path],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=env,
+        **kwargs,
+    )
+
+    # Graceful shutdown: if stop_event is set during execution, kill the
+    # subprocess after GRACEFUL_SHUTDOWN_TIMEOUT seconds instead of waiting
+    # the full task timeout (Bug fix: enforce the timeout constant).
+    _shutdown_timer = [None]
+
+    def _force_kill():
+        if proc.poll() is None:
+            print("[worker] graceful shutdown timeout expired — killing subprocess")
+            sandbox._kill_tree(proc)
+
+    def _wait_for_stop_and_kill():
+        stop_event.wait()
+        if proc.poll() is None:
+            _shutdown_timer[0] = threading.Timer(GRACEFUL_SHUTDOWN_TIMEOUT, _force_kill)
+            _shutdown_timer[0].daemon = True
+            _shutdown_timer[0].start()
+
+    if stop_event is not None:
+        if stop_event.is_set():
+            _shutdown_timer[0] = threading.Timer(GRACEFUL_SHUTDOWN_TIMEOUT, _force_kill)
+            _shutdown_timer[0].daemon = True
+            _shutdown_timer[0].start()
+        else:
+            threading.Thread(target=_wait_for_stop_and_kill, daemon=True).start()
+
+    try:
+        stdout_bytes, stderr_bytes = proc.communicate(
+            input=len(pickled_input).to_bytes(4, "big") + pickled_input,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        sandbox._kill_tree(proc)
+        # Reap the process to avoid zombies
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=5)
+        raise sandbox.TaskError(
+            f"function timed out after {timeout}s (subprocess killed)"
+        )
     finally:
-        # Wait for any remaining cleanup in the thread
-        if t is not None and t.is_alive():
-            t.join(timeout=2.0)
-        with _env_lock:
-            if old_device is None:
-                os.environ.pop("GPUMESH_DEVICE", None)
-            else:
-                os.environ["GPUMESH_DEVICE"] = old_device
+        if _shutdown_timer[0]:
+            _shutdown_timer[0].cancel()
+
+    if proc.returncode != 0:
+        stderr_text = (stderr_bytes or b"").decode("utf-8", errors="replace")
+        stdout_text = (stdout_bytes or b"").decode("utf-8", errors="replace")
+        # Try to extract structured error from helper output (last JSON line)
+        error_msg = None
+        for line in reversed(stdout_text.strip().splitlines()):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                parsed = json.loads(line)
+                if isinstance(parsed, dict) and "error" in parsed:
+                    error_msg = parsed["error"]
+                    tb = parsed.get("traceback", "")
+                    break
+            except (json.JSONDecodeError, ValueError):
+                pass
+        if error_msg is None:
+            # Fallback: last few lines of stderr
+            tail = stderr_text.strip().splitlines()[-5:]
+            error_msg = " | ".join(tail) if tail else f"exit code {proc.returncode}"
+        raise sandbox.TaskError(f"function subprocess failed: {error_msg}")
+
+    # Parse result from stdout (last JSON line, same contract as sandbox)
+    stdout_text = (stdout_bytes or b"").decode("utf-8", errors="replace")
+    lines = [ln for ln in stdout_text.strip().splitlines() if ln.strip()]
+    if not lines:
+        raise sandbox.TaskError("function subprocess produced no output")
+
+    try:
+        result = json.loads(lines[-1])
+    except json.JSONDecodeError:
+        raise sandbox.TaskError(
+            f"function subprocess output is not JSON: {lines[-1][:200]}"
+        )
+
+    # Inject task index for result ordering (subprocess doesn't know it)
+    if isinstance(result, dict):
+        result["_task_index"] = task_index
+
+    return result
 
 
 def _try_register(mesh: "MeshClient", info: dict, retries: int = 3):
@@ -150,6 +245,54 @@ def _try_register(mesh: "MeshClient", info: dict, retries: int = 3):
     if last_exc is not None:
         raise last_exc
     raise RuntimeError("registration failed with no captured exception")
+
+
+def _snapshot_resources() -> dict:
+    """Capture a snapshot of current resource usage for diagnostics."""
+    snap = {
+        "timestamp": time.time(),
+        "process_id": os.getpid(),
+    }
+    try:
+        import psutil
+        proc = psutil.Process()
+        mem = proc.memory_info()
+        snap["rss_mb"] = round(mem.rss / (1024 ** 2), 1)
+        snap["cpu_percent"] = proc.cpu_percent(interval=None)
+    except (ImportError, OSError):
+        pass
+    gpu = capability.get_gpu_memory_info(0)
+    if gpu:
+        snap["gpu_free_mb"] = gpu["free_mb"]
+        snap["gpu_used_mb"] = gpu["used_mb"]
+    return snap
+
+
+def _diagnostics_report(task_id: str, error: Exception,
+                        started: float, start_resources: dict) -> dict:
+    """Build a crash-recovery diagnostics report (Exo pattern).
+
+    Attaches error type, traceback, resource usage at time of failure,
+    and wall-clock duration to the failure status sent to the coordinator.
+    """
+    elapsed = round(time.time() - started, 2)
+    end_resources = _snapshot_resources()
+    gpu_delta = None
+    if "gpu_used_mb" in start_resources and "gpu_used_mb" in end_resources:
+        gpu_delta = round(
+            end_resources["gpu_used_mb"] - start_resources["gpu_used_mb"], 1
+        )
+    report = {
+        "error_type": type(error).__name__,
+        "error_message": str(error),
+        "elapsed_s": elapsed,
+        "traceback": traceback.format_exc(),
+        "resources_at_start": start_resources,
+        "resources_at_end": end_resources,
+    }
+    if gpu_delta is not None:
+        report["gpu_delta_mb"] = gpu_delta
+    return report
 
 
 def run_worker(url: str, token: str, task_timeout: float = 240.0):
@@ -209,10 +352,19 @@ def run_worker(url: str, token: str, task_timeout: float = 240.0):
 
     stop = threading.Event()
 
-    # Handle SIGTERM for graceful shutdown (Docker, systemd, kill)
+    # --- Graceful shutdown handler (Exo pattern) ---
+    # On SIGTERM/SIGBREAK: stop accepting new tasks immediately, let the
+    # current task finish (with a grace period), report status, then exit.
+    _shutdown_grace_start = [None]
+    _current_task_id = [None]
+
+    def _sigterm_handler(signum, frame):
+        sig_name = signal.Signals(signum).name if hasattr(signal, "Signals") else str(signum)
+        print(f"\n[worker] received {sig_name} — shutting down gracefully")
+        _shutdown_grace_start[0] = time.time()
+        stop.set()
+
     if threading.current_thread() is threading.main_thread():
-        def _sigterm_handler(signum, frame):
-            stop.set()
         if platform.system() != "Windows":
             signal.signal(signal.SIGTERM, _sigterm_handler)
         else:
@@ -222,9 +374,28 @@ def run_worker(url: str, token: str, task_timeout: float = 240.0):
                 pass
 
     def heartbeat():
+        last_benchmark = time.time()
+        current_score = info["score"]
         while not stop.is_set():
             try:
-                mesh.call("POST", "/api/heartbeat", {"worker_id": worker_id})
+                # Periodic re-benchmark to capture thermal throttling, etc.
+                now = time.time()
+                if now - last_benchmark >= REBENCHMARK_INTERVAL:
+                    try:
+                        bench = capability.run_benchmark(info["device"], force=True)
+                        current_score = bench["score"]
+                        print(f"[worker] re-benchmark: score={current_score}"
+                              f" (gflops={bench['gflops']},"
+                              f" bw={bench['bandwidth_gbps']} GB/s)")
+                    except Exception:
+                        pass  # keep previous score on failure
+                    last_benchmark = now
+                mesh.call("POST", "/api/heartbeat", {
+                    "worker_id": worker_id,
+                    "score": current_score,
+                    "gpu_memory_free_mb": capability.get_gpu_memory_usage().get("gpu_memory_free_mb", 0.0),
+                    "task_id": _current_task_id[0],
+                })
             except (urllib.error.URLError, OSError, json.JSONDecodeError):
                 pass  # transient network blip; the lease reaper covers us
             stop.wait(HEARTBEAT_INTERVAL)
@@ -239,7 +410,7 @@ def run_worker(url: str, token: str, task_timeout: float = 240.0):
     last_successful_call = time.time()
     COORDINATOR_TIMEOUT = 120.0  # seconds — exit if no success for 2 min
     try:
-        while True:
+        while not stop.is_set():
             try:
                 task = mesh.call("POST", "/api/lease", {"worker_id": worker_id})
             except (urllib.error.URLError, OSError) as e:
@@ -268,11 +439,13 @@ def run_worker(url: str, token: str, task_timeout: float = 240.0):
             print(f"[worker] running task {task['task_id']} "
                   f"(cost={task['cost']})")
             started = time.time()
+            _current_task_id[0] = task["task_id"]
+            start_resources = _snapshot_resources()
             try:
                 # Check if this is a function-based task
                 payload = task["payload"]
                 if "_func" in payload and task.get("script") == "__gpumesh_function__":
-                    result = _run_function_task(payload, info["device"], task_timeout)
+                    result = _run_function_task(payload, info["device"], task_timeout, stop_event=stop)
                 else:
                     result = sandbox.run_task(
                         task["script"], payload,
@@ -282,7 +455,7 @@ def run_worker(url: str, token: str, task_timeout: float = 240.0):
                 try:
                     mesh.call("POST", "/api/result", {
                         "task_id": task["task_id"], "worker_id": worker_id,
-                        "ok": True, "result": result,
+                        "ok": True, "result": result, "elapsed": elapsed,
                     })
                 except (urllib.error.URLError, OSError) as e:
                     print(f"[worker] WARNING: failed to submit result for "
@@ -291,32 +464,67 @@ def run_worker(url: str, token: str, task_timeout: float = 240.0):
                 print(f"[worker] task {task['task_id']} done in {elapsed}s "
                       f"(total done={done})")
             except sandbox.TaskError as e:
+                # Crash recovery: attach diagnostics to failure status
+                diag = _diagnostics_report(task["task_id"], e, started, start_resources)
+                print(f"[worker] task {task['task_id']} FAILED: {e}")
+                print(f"[worker] diagnostics: {diag['error_type']} "
+                      f"in {diag['elapsed_s']}s")
+                if diag.get("gpu_delta_mb") is not None:
+                    print(f"[worker] GPU memory delta: {diag['gpu_delta_mb']:+.1f} MB")
                 try:
                     mesh.call("POST", "/api/result", {
                         "task_id": task["task_id"], "worker_id": worker_id,
                         "ok": False, "error": str(e),
+                        "diagnostics": diag,
                     })
                 except (urllib.error.URLError, OSError) as submit_err:
                     print(f"[worker] WARNING: failed to submit error for "
                           f"{task['task_id']}: {submit_err}")
                 failed += 1
-                print(f"[worker] task {task['task_id']} FAILED: {e}")
             except Exception as e:
-                print(f"[worker] ERROR: unexpected error executing task: {type(e).__name__}: {e}")
+                diag = _diagnostics_report(task["task_id"], e, started, start_resources)
+                print(f"[worker] ERROR: unexpected error executing task: "
+                      f"{type(e).__name__}: {e}")
                 try:
                     mesh.call("POST", "/api/result", {
                         "task_id": task["task_id"],
                         "worker_id": worker_id,
                         "ok": False,
                         "error": f"Unexpected error: {type(e).__name__}: {e}",
+                        "diagnostics": diag,
                     })
                 except Exception:
                     pass
                 failed += 1
+            finally:
+                _current_task_id[0] = None
+
+        # Post-loop: graceful shutdown status report
+        if _shutdown_grace_start[0] is not None:
+            grace_elapsed = time.time() - _shutdown_grace_start[0]
+            print(f"[worker] shutdown complete — ran for {grace_elapsed:.1f}s "
+                  f"after signal (done={done}, failed={failed})")
     except KeyboardInterrupt:
         print(f"\n[worker] leaving mesh (done={done}, failed={failed})")
     finally:
         stop.set()
+        # Best-effort status report to coordinator on exit
+        try:
+            mesh.call("POST", "/api/heartbeat", {
+                "worker_id": worker_id,
+                "status": "shutting_down",
+                "done": done,
+                "failed": failed,
+            })
+        except Exception:
+            pass
+        # GPU cleanup: release any cached CUDA memory
+        try:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except (ImportError, RuntimeError):
+            pass
 
 
 def run_worker_broadcast(token: str, claim_port: int = 0,

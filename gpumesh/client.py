@@ -135,7 +135,11 @@ def wait_for_job(url: str, token: str, job_id: str, poll: float = 2.0, timeout: 
     while True:
         if timeout > 0 and time.time() - start_time > timeout:
             raise TimeoutError(f"Job {job_id} did not finish within {timeout}s")
-        job = get_status(url, token, job_id)
+        try:
+            job = get_status(url, token, job_id)
+        except (urllib.error.URLError, OSError):
+            time.sleep(poll)
+            continue
         if job is None:
             raise RuntimeError(f"Failed to get status for job {job_id}")
         counts = job["counts"]

@@ -57,6 +57,11 @@ from typing import Any, Callable
 from . import capability
 
 
+class _MeshUnavailable(Exception):
+    """Raised when the mesh cannot accept tasks (unreachable, no workers, etc)."""
+    pass
+
+
 def _parse_memory_mb(mem_str: str) -> float:
     """Parse a memory string like '16GB' or '512MB' into MB."""
     s = mem_str.strip().upper()
@@ -156,12 +161,26 @@ class AcceleratedFunction:
         )
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
-        """Execute locally on best device, or auto-place PyTorch models."""
+        """Execute on the mesh (remote if workers available) or locally.
+
+        Routing logic (inspired by Exo/PartaGPU):
+        - GPUMESH_LOCAL=1 → force local
+        - Mesh has workers → submit as a single-task job, poll for result
+        - Mesh unreachable or no workers → fall back to local best device
+        """
         if os.environ.get("GPUMESH_LOCAL") == "1":
             return self._fn(*args, **kwargs)
 
         self._validate_resources()
 
+        # Try remote execution if mesh is available
+        if self._mesh is not None and os.environ.get("GPUMESH_LOCAL") != "1":
+            try:
+                return self._remote_call(args, kwargs)
+            except _MeshUnavailable:
+                pass  # fall through to local
+
+        # Local fallback
         args, kwargs = self._auto_place(args, kwargs)
 
         device = None
@@ -173,9 +192,106 @@ class AcceleratedFunction:
         if os.environ.get("GPUMESH_VERBOSE") == "1":
             device_name = device["device_name"] if device else "unknown"
             target = self._gpu or "auto"
-            print(f"[accelerate] running on device: {device_name} (target: {target})")
+            print(f"[accelerate] running locally on device: {device_name} (target: {target})")
 
         return self._fn(*args, **kwargs)
+
+    def _remote_call(self, args: tuple, kwargs: dict) -> Any:
+        """Submit a single task to the mesh and wait for the result.
+
+        Uses the same job submission path as .map() but with a single task.
+        Falls back to local if mesh is unreachable or has no workers.
+        """
+        import json as _json
+        import time as _time
+        import urllib.error
+
+        # Check if mesh has any alive workers
+        try:
+            workers = self._mesh.workers()
+        except Exception:
+            raise _MeshUnavailable("cannot reach mesh")
+
+        alive = [w for w in workers if w.get("alive", False)]
+        if not alive:
+            raise _MeshUnavailable("no alive workers")
+
+        # Merge args into kwargs using function signature
+        call_kwargs = self._merge_args_kwargs(args, kwargs)
+
+        # Serialize and submit
+        try:
+            from . import serializer
+            func_bytes = serializer.serialize_function(self._fn)
+        except Exception:
+            raise _MeshUnavailable("cannot serialize function")
+
+        payload = {
+            "_func": func_bytes,
+            "_params": call_kwargs,
+            "_task_index": 0,
+        }
+        if self._gpu:
+            payload["gpu"] = self._gpu
+
+        try:
+            job_id = self._mesh.submit(
+                name=f"accelerate:{self._fn.__name__}",
+                script="__gpumesh_function__",
+                payloads=[payload],
+            )
+        except Exception:
+            raise _MeshUnavailable("cannot submit job")
+
+        if os.environ.get("GPUMESH_VERBOSE") == "1":
+            print(f"[accelerate] submitted to mesh: job={job_id}, "
+                  f"workers={len(alive)}")
+
+        # Poll for result
+        timeout = self._timeout or 300.0
+        start = _time.time()
+        while _time.time() - start < timeout:
+            try:
+                status = self._mesh.status(job_id)
+            except Exception:
+                _time.sleep(1.0)
+                continue
+
+            if status.get("finished"):
+                tasks = status.get("tasks", [])
+                if tasks:
+                    t = tasks[0]
+                    if t["status"] == "done":
+                        result = t.get("result") or {}
+                        # Remove internal keys
+                        result.pop("_task_index", None)
+                        if os.environ.get("GPUMESH_VERBOSE") == "1":
+                            print(f"[accelerate] mesh result: {result}")
+                        return result
+                    elif t["status"] == "failed":
+                        raise RuntimeError(
+                            f"mesh task failed: {t.get('error', 'unknown')}"
+                        )
+                break
+
+            _time.sleep(1.0)
+
+        raise TimeoutError(
+            f"mesh task did not complete within {timeout}s"
+        )
+
+    def _merge_args_kwargs(self, args: tuple, kwargs: dict) -> dict:
+        """Merge positional args into kwargs using function signature."""
+        import inspect
+        sig = inspect.signature(self._fn)
+        params = list(sig.parameters.keys())
+        merged = dict(kwargs)
+        for i, arg in enumerate(args):
+            if i < len(params):
+                merged[params[i]] = arg
+            else:
+                merged[f"_positional_{i}"] = arg
+        return merged
 
     def _auto_place(self, args: tuple, kwargs: dict) -> tuple:
         """Auto-place PyTorch models on best device (HF Accelerate pattern)."""

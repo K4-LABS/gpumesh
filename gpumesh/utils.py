@@ -104,6 +104,13 @@ def try_add_firewall_rule(port: int = 8000) -> bool:
                 "protocol=TCP", f"localport={port}",
                 "profile=any", "edge=yes",
             ],
+            [
+                "netsh", "advfirewall", "firewall", "add", "rule",
+                "name=gpumesh-discovery-udp",
+                "dir=in", "action=allow",
+                "protocol=UDP", "localport=48900",
+                "profile=any", "edge=yes",
+            ],
         ]
         for cmd in commands:
             result = subprocess.run(
