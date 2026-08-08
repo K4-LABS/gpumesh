@@ -2,7 +2,7 @@ from __future__ import annotations
 
 """gpumesh - distributed compute sharing over a mesh of volunteer machines."""
 
-__version__ = "0.9.0"
+__version__ = "1.1.0"
 
 from .api import GPUMesh  # noqa: F401
 from .accelerate import accelerate, install as accelerate_install  # noqa: F401
@@ -12,7 +12,21 @@ import importlib as _importlib
 import os as _os
 import sys as _sys
 
-__all__ = ["GPUMesh", "accelerate", "accelerate_install", "torch"]
+__all__ = ["GPUMesh", "accelerate", "accelerate_install", "mesh", "torch"]
+
+# Bind the ``mesh`` singleton EAGERLY as a real attribute.
+#
+# NOTE: this must NOT go through __getattr__/lazy resolution. The import
+# machinery pins the package attribute ``gpumesh.mesh`` to the submodule the
+# first time anything does ``import gpumesh.mesh``, which would permanently
+# shadow a lazy ``__getattr__`` and make ``from gpumesh import mesh`` return
+# the module instead of the @mesh decorator — depending on import order.
+# By importing the submodule here (so ``mesh`` is the documented decorator)
+# and re-binding to ``mesh_fn`` immediately, both access styles are safe:
+#   from gpumesh import mesh          -> the @mesh decorator (callable)
+#   from gpumesh.mesh import connect  -> module functions (module import)
+from . import mesh as _mesh_module  # noqa: F401
+mesh = _mesh_module.mesh_fn
 
 
 def __getattr__(name: str):
@@ -69,6 +83,7 @@ if _is_interactive():
             safe_print()
             safe_print(cyan("=" * 60))
             safe_print(bold("  gpumesh installed successfully!"))
+            safe_print(dim(f"  version {__version__}"))
             safe_print(cyan("=" * 60))
             safe_print()
             safe_print(bold("  Get started in one command:"))
@@ -77,8 +92,10 @@ if _is_interactive():
             safe_print()
             safe_print(dim("  This will detect your hardware and guide you"))
             safe_print(dim("  through choosing coordinator or worker role."))
+            safe_print(dim("  Or start a coordinator directly:"))
+            safe_print(green("    gpumesh serve --token your-secret-token"))
             safe_print()
-            safe_print(cyan(" " * 40))
+            safe_print(cyan("=" * 60))
             safe_print()
         except Exception:
             pass

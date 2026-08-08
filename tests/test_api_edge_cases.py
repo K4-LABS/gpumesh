@@ -372,8 +372,13 @@ class TestDistributeEdgeCases:
 
         assert results == []
 
-    def test_cost_passed_through_to_function(self, mesh_with_worker):
-        """Cost key is passed through to function (not stripped from _params)."""
+    def test_cost_hint_not_passed_to_function_kwargs(self, mesh_with_worker):
+        """The scheduler's 'cost' hint never reaches the function as a kwarg.
+
+        ``cost`` controls task weight (see examples/payloads.json) and is
+        kept at the payload top level; it is stripped before the function
+        runs so fixed-signature functions don't see it.
+        """
         def no_cost(**kwargs):
             return {"received_keys": sorted(kwargs.keys())}
 
@@ -386,6 +391,27 @@ class TestDistributeEdgeCases:
         assert len(results) == 1
         keys = results[0]["received_keys"]
         assert "x" in keys
+        assert "cost" not in keys
+
+    def test_cost_hint_not_passed_to_function(self, mesh_with_worker):
+        """The scheduler's 'cost' hint is stripped before calling the function.
+
+        Regression: distribute() used to forward the payload's ``cost`` key
+        into the function's kwargs, so a fixed-signature function like
+        ``add(x)`` failed with "unexpected keyword argument 'cost'" whenever
+        a payload carried the documented scheduler hint (examples/payloads.json).
+        """
+        def add(x):
+            return {"x": x, "double": x * 2}
+
+        results = mesh_with_worker.distribute(
+            function=add,
+            params=[{"x": 5, "cost": 3}],
+            timeout=30,
+        )
+
+        assert len(results) == 1
+        assert results[0] == {"x": 5, "double": 10}
 
     # ── Multi-Worker Distribute ───────────────────────────────────────
 

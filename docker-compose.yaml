@@ -1,0 +1,34 @@
+services:
+  coordinator:
+    build: .
+    ports:
+      - "${GPUMESH_PORT:-8732}:8732"
+      - "48900:48900/udp"
+    environment:
+      - GPUMESH_TOKEN=${GPUMESH_TOKEN:-}
+      - GPUMESH_COLOR=1
+    command: serve --port 8732 --color
+    volumes:
+      - gpumesh_data:/root/.gpumesh
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "8732"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  worker:
+    build: .
+    depends_on:
+      coordinator:
+        condition: service_healthy
+    environment:
+      - GPUMESH_URL=http://coordinator:8732
+      - GPUMESH_TOKEN=${GPUMESH_TOKEN:-}
+      - GPUMESH_COLOR=1
+    command: join --color
+    deploy:
+      replicas: ${WORKER_REPLICAS:-2}
+    restart: unless-stopped
+
+volumes:
+  gpumesh_data:

@@ -22,12 +22,13 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from contextlib import ExitStack
 from unittest.mock import MagicMock, patch, mock_open
 
 import pytest
 
-from gpumesh.cli import cmd_cancel, cmd_serve
-from gpumesh.client import cancel_job, wait_for_job
+from gpumesh.cli import cmd_cancel, cmd_retry, cmd_serve
+from gpumesh.client import cancel_job, retry_job, wait_for_job
 from gpumesh.worker import run_worker, _run_function_task
 from gpumesh.db import Database
 from gpumesh.server import serve
@@ -139,6 +140,93 @@ class TestCmdCancel:
 
 
 # ============================================================================
+#  cmd_retry() Tests
+# ============================================================================
+
+class TestCmdRetry:
+    """Tests for cmd_retry() error handling."""
+
+    def test_retry_no_connection(self, capsys):
+        """Shows error when no connection is found."""
+        args = MagicMock()
+        args.url = ""
+        args.token = ""
+        args.job_id = "j123"
+
+        with patch("gpumesh.cli.connection_manager.get_connection", return_value=("", "")):
+            with pytest.raises(SystemExit) as exc_info:
+                cmd_retry(args)
+            assert exc_info.value.code == 1
+
+        captured = capsys.readouterr()
+        assert "No connection found" in captured.out
+
+    def test_retry_network_error(self, capsys):
+        """Shows connection error when coordinator is unreachable."""
+        args = MagicMock()
+        args.url = "http://localhost:8000"
+        args.token = "test123"
+        args.job_id = "j123"
+
+        with patch("gpumesh.cli.connection_manager.get_connection", return_value=("http://localhost:8000", "test123")), \
+             patch("gpumesh.cli.client.retry_job", side_effect=urllib.error.URLError("Connection refused")):
+            with pytest.raises(SystemExit) as exc_info:
+                cmd_retry(args)
+            assert exc_info.value.code == 1
+
+        captured = capsys.readouterr()
+        assert "Could not communicate with coordinator" in captured.out
+
+    def test_retry_job_not_found(self, capsys):
+        """Shows job not found when retry returns None."""
+        args = MagicMock()
+        args.url = "http://localhost:8000"
+        args.token = "test123"
+        args.job_id = "j_notfound"
+
+        with patch("gpumesh.cli.connection_manager.get_connection", return_value=("http://localhost:8000", "test123")), \
+             patch("gpumesh.cli.client.retry_job", return_value=None):
+            with pytest.raises(SystemExit) as exc_info:
+                cmd_retry(args)
+            assert exc_info.value.code == 1
+
+        captured = capsys.readouterr()
+        assert "j_notfound not found" in captured.out
+
+    def test_retry_success(self, capsys):
+        """Shows re-queue results on success."""
+        args = MagicMock()
+        args.url = "http://localhost:8000"
+        args.token = "test123"
+        args.job_id = "j_success"
+
+        retry_result = {"requeued": 3, "counts": {"pending": 3}}
+        with patch("gpumesh.cli.connection_manager.get_connection", return_value=("http://localhost:8000", "test123")), \
+             patch("gpumesh.cli.client.retry_job", return_value=retry_result):
+            cmd_retry(args)
+
+        captured = capsys.readouterr()
+        assert "Re-queued 3 failed task(s) for job j_success" in captured.out
+        assert "gpumesh status j_success" in captured.out
+
+    def test_retry_no_failed_tasks(self, capsys):
+        """A job with nothing to retry says so instead of failing."""
+        args = MagicMock()
+        args.url = "http://localhost:8000"
+        args.token = "test123"
+        args.job_id = "j_done"
+
+        retry_result = {"requeued": 0, "counts": {"done": 2}}
+        with patch("gpumesh.cli.connection_manager.get_connection", return_value=("http://localhost:8000", "test123")), \
+             patch("gpumesh.cli.client.retry_job", return_value=retry_result):
+            cmd_retry(args)
+
+        captured = capsys.readouterr()
+        assert "has no failed tasks to retry" in captured.out
+        assert "Re-queued" not in captured.out
+
+
+# ============================================================================
 #  cancel_job() Tests
 # ============================================================================
 
@@ -185,6 +273,47 @@ class TestCancelJob:
             result = cancel_job("http://localhost:8000", "token", "j123")
             assert result["pending"] == 2
             assert result["running"] == 1
+
+
+# ============================================================================
+#  retry_job() Tests
+# ============================================================================
+
+class TestRetryJob:
+    """Tests for retry_job() function."""
+
+    def test_retry_job_propagates_network_error(self):
+        """retry_job() propagates URLError instead of returning None."""
+        with patch("gpumesh.client.MeshClient") as MockClient:
+            mock_mesh = MagicMock()
+            mock_mesh.call.side_effect = urllib.error.URLError("Connection refused")
+            MockClient.return_value = mock_mesh
+
+            with pytest.raises(urllib.error.URLError):
+                retry_job("http://localhost:8000", "token", "j123")
+
+    def test_retry_job_returns_none_for_404(self):
+        """retry_job() returns None when job not found (server returns 404)."""
+        with patch("gpumesh.client.MeshClient") as MockClient:
+            mock_mesh = MagicMock()
+            mock_mesh.call.side_effect = urllib.error.HTTPError(
+                "http://localhost:8000", 404, "Not Found", {}, None
+            )
+            MockClient.return_value = mock_mesh
+
+            result = retry_job("http://localhost:8000", "token", "j123")
+            assert result is None
+
+    def test_retry_job_returns_result(self):
+        """retry_job() returns the re-queue result."""
+        with patch("gpumesh.client.MeshClient") as MockClient:
+            mock_mesh = MagicMock()
+            mock_mesh.call.return_value = {"requeued": 2, "counts": {"pending": 2}}
+            MockClient.return_value = mock_mesh
+
+            result = retry_job("http://localhost:8000", "token", "j123")
+            assert result["requeued"] == 2
+            assert result["counts"]["pending"] == 2
 
 
 # ============================================================================
@@ -455,7 +584,8 @@ class TestWorkerRegistrationEdgeCases:
         assert "Is the coordinator running" in captured.out
 
     def test_worker_auth_error_message(self, capsys):
-        """Shows error for authentication failure."""
+        """A rejected token (401) gets a clear auth-failure message instead
+        of the generic "coordinator not reachable" troubleshooting."""
         with patch("gpumesh.worker.capability.full_probe", return_value={
             "device": "cuda", "device_name": "RTX 3080", "score": 85.0
         }), \
@@ -469,8 +599,9 @@ class TestWorkerRegistrationEdgeCases:
             run_worker("http://localhost:8000", "wrong-token")
 
         captured = capsys.readouterr()
-        assert "failed to register" in captured.out
-        assert "TROUBLESHOOTING" in captured.out
+        assert "authentication failed" in captured.out
+        assert "token" in captured.out.lower()
+        assert "not reachable" not in captured.out.lower()
 
     def test_worker_registration_saves_connection(self, tmp_path):
         """Successful registration saves connection to config."""
@@ -888,3 +1019,278 @@ class TestRealServerErrorPaths:
             "payloads": [{"x": 1}],
         })
         assert "job_id" in resp
+
+
+# ============================================================================
+#  UX Improvements: clearer errors & warnings
+# ============================================================================
+
+class TestCmdStatusUX:
+    """cmd_status gives a clear message when a job no longer exists."""
+
+    def test_status_job_not_found_404(self, capsys):
+        """A 404 says the job is missing — not that the coordinator is down."""
+        from gpumesh.cli import cmd_status
+
+        args = MagicMock()
+        args.url = "http://localhost:8000"
+        args.token = "test123"
+        args.job_id = "j_missing"
+
+        with patch("gpumesh.cli.connection_manager.get_connection",
+                   return_value=("http://localhost:8000", "test123")), \
+             patch("gpumesh.cli.client.get_status",
+                   side_effect=urllib.error.HTTPError(
+                       "http://localhost:8000", 404, "Not Found", {}, None)):
+            with pytest.raises(SystemExit) as exc_info:
+                cmd_status(args)
+            assert exc_info.value.code == 1
+
+        captured = capsys.readouterr()
+        assert "not found" in captured.out.lower()
+        assert "could not reach coordinator" not in captured.out.lower()
+
+    def test_status_server_error_reported(self, capsys):
+        """A 500 from the coordinator is surfaced as a coordinator error."""
+        from gpumesh.cli import cmd_status
+
+        args = MagicMock()
+        args.url = "http://localhost:8000"
+        args.token = "test123"
+        args.job_id = "j500"
+
+        with patch("gpumesh.cli.connection_manager.get_connection",
+                   return_value=("http://localhost:8000", "test123")), \
+             patch("gpumesh.cli.client.get_status",
+                   side_effect=urllib.error.HTTPError(
+                       "http://localhost:8000", 500, "Server Error", {}, None)):
+            with pytest.raises(SystemExit) as exc_info:
+                cmd_status(args)
+            assert exc_info.value.code == 1
+
+        captured = capsys.readouterr()
+        assert "500" in captured.out
+
+
+class TestCmdJoinUX:
+    """cmd_join validates the URL scheme up front."""
+
+    def test_join_rejects_url_without_scheme(self, capsys):
+        """A URL missing http:// is rejected with a clear message."""
+        from gpumesh.cli import cmd_join
+
+        args = MagicMock()
+        args.url = "192.168.1.10:8000"
+        args.token = "test123"
+        args.timeout = 240.0
+        args.safe_mode = False
+
+        with pytest.raises(SystemExit) as exc_info:
+            cmd_join(args)
+        assert exc_info.value.code == 1
+
+        captured = capsys.readouterr()
+        assert "http://" in captured.out
+
+    def test_join_accepts_valid_url(self, capsys):
+        """A valid http:// URL is passed straight to the worker runner."""
+        from gpumesh.cli import cmd_join
+
+        args = MagicMock()
+        args.url = "http://192.168.1.10:8000"
+        args.token = "test123"
+        args.timeout = 240.0
+        args.safe_mode = False
+
+        with patch("gpumesh.cli._run_worker_with_report") as mock_runner:
+            cmd_join(args)
+            mock_runner.assert_called_once_with(
+                "http://192.168.1.10:8000", "test123", 240.0, safe_mode=False
+            )
+
+
+class TestCmdSubmitUX:
+    """cmd_submit warns when no workers are connected."""
+
+    def test_submit_warns_when_no_workers(self, capsys):
+        """Submitting with zero workers prints a queued-job warning."""
+        from gpumesh.cli import cmd_submit
+
+        args = MagicMock()
+        args.url = "http://localhost:8000"
+        args.token = "test123"
+        args.script = "task.py"
+        args.payloads = "payloads.json"
+        args.name = ""
+        args.wait = False
+
+        with patch("gpumesh.cli.connection_manager.get_connection",
+                   return_value=("http://localhost:8000", "test123")), \
+             patch("gpumesh.cli.client.submit_job", return_value="j123"), \
+             patch("gpumesh.cli.worker.MeshClient") as MockClient:
+            MockClient.return_value.call.return_value = {"workers": []}
+            cmd_submit(args)
+
+        captured = capsys.readouterr()
+        assert "No workers connected" in captured.out
+        assert "Submitted job" in captured.out
+
+    def test_submit_no_warning_when_workers_alive(self, capsys):
+        """Submitting with live workers prints no queued-job warning."""
+        from gpumesh.cli import cmd_submit
+
+        args = MagicMock()
+        args.url = "http://localhost:8000"
+        args.token = "test123"
+        args.script = "task.py"
+        args.payloads = "payloads.json"
+        args.name = ""
+        args.wait = False
+
+        with patch("gpumesh.cli.connection_manager.get_connection",
+                   return_value=("http://localhost:8000", "test123")), \
+             patch("gpumesh.cli.client.submit_job", return_value="j123"), \
+             patch("gpumesh.cli.worker.MeshClient") as MockClient:
+            MockClient.return_value.call.return_value = {
+                "workers": [{"id": "w1", "alive": True}]
+            }
+            cmd_submit(args)
+
+        captured = capsys.readouterr()
+        assert "No workers connected" not in captured.out
+
+    def _submit_args(self, **overrides):
+        """Build a cmd_submit args object with sensible defaults."""
+        args = MagicMock()
+        args.url = "http://localhost:8000"
+        args.token = "test123"
+        args.script = "task.py"
+        args.payloads = "payloads.json"
+        args.name = ""
+        args.wait = True
+        args.wait_timeout = 60.0
+        for key, value in overrides.items():
+            setattr(args, key, value)
+        return args
+
+    def _enter_submit_patches(self, stack, **wait_kwargs):
+        """Enter the cmd_submit dependency patches on an ExitStack.
+
+        Workers are alive by default so the no-workers warning never fires.
+        Returns the wait_for_job mock.
+        """
+        workers = MagicMock()
+        workers.call.return_value = {
+            "workers": [{"id": "w1", "alive": True}]
+        }
+        stack.enter_context(
+            patch("gpumesh.cli.connection_manager.get_connection",
+                  return_value=("http://localhost:8000", "test123")))
+        stack.enter_context(
+            patch("gpumesh.cli.client.submit_job", return_value="j123"))
+        stack.enter_context(
+            patch("gpumesh.cli.worker.MeshClient", return_value=workers))
+        return stack.enter_context(
+            patch("gpumesh.cli.client.wait_for_job", **wait_kwargs))
+
+    def test_submit_wait_uses_configured_timeout(self, capsys):
+        """--wait passes --wait-timeout through to wait_for_job."""
+        from gpumesh.cli import cmd_submit
+
+        args = self._submit_args(wait_timeout=120.0)
+        with ExitStack() as stack:
+            mock_wait = self._enter_submit_patches(
+                stack, return_value={"id": "j123", "finished": True})
+            cmd_submit(args)
+
+        mock_wait.assert_called_once_with(
+            "http://localhost:8000", "test123", "j123", timeout=120.0
+        )
+
+    def test_submit_wait_default_timeout_caps_hang(self, capsys):
+        """--wait without --wait-timeout uses the default 3600s cap."""
+        from gpumesh.cli import cmd_submit
+
+        args = self._submit_args()
+        del args.wait_timeout  # simulate the flag being absent (not just 0)
+        with ExitStack() as stack:
+            mock_wait = self._enter_submit_patches(
+                stack, return_value={"id": "j123", "finished": True})
+            cmd_submit(args)
+
+        mock_wait.assert_called_once_with(
+            "http://localhost:8000", "test123", "j123", timeout=3600.0
+        )
+
+    def test_submit_wait_zero_timeout_waits_forever(self, capsys):
+        """--wait-timeout 0 explicitly opts into waiting forever."""
+        from gpumesh.cli import cmd_submit
+
+        args = self._submit_args(wait_timeout=0.0)
+        with ExitStack() as stack:
+            mock_wait = self._enter_submit_patches(
+                stack, return_value={"id": "j123", "finished": True})
+            cmd_submit(args)
+
+        mock_wait.assert_called_once_with(
+            "http://localhost:8000", "test123", "j123", timeout=0.0
+        )
+
+    def test_submit_wait_timeout_message(self, capsys):
+        """A timed-out wait prints a friendly message with next steps."""
+        from gpumesh.cli import cmd_submit
+
+        args = self._submit_args(wait_timeout=1.0)
+        with ExitStack() as stack:
+            self._enter_submit_patches(
+                stack, side_effect=TimeoutError(
+                    "Job j123 did not finish within 1.0s"))
+            with pytest.raises(SystemExit) as exc_info:
+                cmd_submit(args)
+            assert exc_info.value.code == 1
+
+        captured = capsys.readouterr()
+        assert "did not finish within" in captured.out
+        assert "gpumesh status j123" in captured.out
+        assert "wait forever" in captured.out
+
+    def test_submit_wait_404_message(self, capsys):
+        """A vanished job during --wait fails fast with a clear error."""
+        from gpumesh.cli import cmd_submit
+
+        args = self._submit_args()
+        with ExitStack() as stack:
+            self._enter_submit_patches(
+                stack, side_effect=RuntimeError(
+                    "Job j123 not found on the coordinator - it may have "
+                    "been restarted with a fresh database."))
+            with pytest.raises(SystemExit) as exc_info:
+                cmd_submit(args)
+            assert exc_info.value.code == 1
+
+        captured = capsys.readouterr()
+        assert "not found on the coordinator" in captured.out
+
+
+class TestWaitForJobUX:
+    """wait_for_job fails fast when the job no longer exists."""
+
+    def test_wait_for_job_404_raises_quickly(self):
+        """A 404 raises RuntimeError instead of polling forever."""
+        from gpumesh.client import wait_for_job
+
+        with patch("gpumesh.client.get_status",
+                   side_effect=urllib.error.HTTPError(
+                       "http://localhost:8000", 404, "Not Found", {}, None)):
+            with pytest.raises(RuntimeError, match="not found"):
+                wait_for_job("http://localhost:8000", "token", "j_missing", poll=0.01)
+
+    def test_wait_for_job_401_raises_quickly(self):
+        """A 401 (bad token) raises RuntimeError instead of polling forever."""
+        from gpumesh.client import wait_for_job
+
+        with patch("gpumesh.client.get_status",
+                   side_effect=urllib.error.HTTPError(
+                       "http://localhost:8000", 401, "Unauthorized", {}, None)):
+            with pytest.raises(RuntimeError, match="[Aa]uthentication"):
+                wait_for_job("http://localhost:8000", "token", "j_auth", poll=0.01)

@@ -47,6 +47,12 @@ def run_task(script: str, payload, timeout: float = 240.0,
             "TEMP": os.environ.get("TEMP", ""),
             "TMP": os.environ.get("TMP", ""),
             "GPUMESH_DEVICE": device or "cpu",
+            # The parent reads the child's stdout as UTF-8 (Popen text mode
+            # below), but on Windows the child's stdout defaults to the ANSI
+            # code page (cp1252) — a result containing e.g. "✓" or "é" would
+            # raise UnicodeEncodeError inside the task and fail it spuriously.
+            # Force UTF-8 so task output always matches what the parent expects.
+            "PYTHONIOENCODING": "utf-8",
         }
         kwargs = {}
         if os.name == "posix":

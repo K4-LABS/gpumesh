@@ -203,6 +203,57 @@ class TestDBCancelAllTasks:
 
 
 # ══════════════════════════════════════════════════════════════════════════
+# DB Retry Tests
+# ══════════════════════════════════════════════════════════════════════════
+
+
+class TestDBRetryJob:
+    """Tests for Database.retry_job()."""
+
+    def test_retry_requeues_failed_tasks(self, db):
+        """Failed tasks are reset to pending with a fresh attempt budget."""
+        job_id = db.create_job("j", "print(1)", [{"cost": 1}, {"cost": 2}])
+        # Cancel marks all pending tasks as failed
+        db.cancel_job(job_id)
+        status = db.job_status(job_id)
+        assert all(t["status"] == "failed" for t in status["tasks"])
+
+        result = db.retry_job(job_id)
+        assert result["requeued"] == 2
+        assert result["counts"]["pending"] == 2
+
+        status = db.job_status(job_id)
+        assert all(t["status"] == "pending" for t in status["tasks"])
+        assert all(t["attempts"] == 0 for t in status["tasks"])
+        assert all(t["error"] is None for t in status["tasks"])
+
+    def test_retry_leaves_done_tasks_untouched(self, db):
+        """Done tasks keep their results; only failed tasks are re-queued."""
+        wid = db.register_worker("host", "cpu", 1.0)
+        job_id = db.create_job("j", "print(1)", [{"cost": 1}, {"cost": 2}])
+        # Complete one task successfully, fail the other
+        task = db.lease_task(wid)
+        db.complete_task(task["task_id"], wid, True, result={"ok": 1}, elapsed=0.1)
+        db.cancel_job(job_id)  # remaining pending task -> failed
+
+        result = db.retry_job(job_id)
+        assert result["requeued"] == 1
+        assert result["counts"]["done"] == 1
+        assert result["counts"]["pending"] == 1
+
+    def test_retry_no_failed_tasks(self, db):
+        """A job with no failed tasks reports requeued == 0."""
+        job_id = db.create_job("j", "print(1)", [{"cost": 1}])
+        result = db.retry_job(job_id)
+        assert result["requeued"] == 0
+        assert result["counts"]["pending"] == 1
+
+    def test_retry_nonexistent_job_returns_none(self, db):
+        """retry_job() returns None for a job that does not exist."""
+        assert db.retry_job("nope") is None
+
+
+# ══════════════════════════════════════════════════════════════════════════
 # Server Endpoint Tests
 # ══════════════════════════════════════════════════════════════════════════
 
@@ -326,6 +377,42 @@ class TestServerCancelEndpoint:
         """Returns 400 when job_id is missing."""
         with pytest.raises(urllib.error.HTTPError) as exc:
             mesh.call("POST", "/api/cancel", {})
+        assert exc.value.code == 400
+
+
+class TestServerRetryEndpoint:
+    """Tests for POST /api/retry."""
+
+    def test_retry_endpoint(self, mesh):
+        """Failed tasks are re-queued and counts are returned."""
+        resp = mesh.call("POST", "/api/jobs", {
+            "name": "retry_test",
+            "script": "print(1)",
+            "payloads": [{"cost": 1}, {"cost": 2}],
+        })
+        job_id = resp["job_id"]
+
+        # Fail the job first (cancel marks pending tasks failed)
+        mesh.call("POST", "/api/cancel", {"job_id": job_id})
+
+        result = mesh.call("POST", "/api/retry", {"job_id": job_id})
+        assert result["requeued"] == 2
+        assert result["counts"]["pending"] == 2
+
+        # Verify tasks are pending again via the status endpoint
+        status = mesh.call("GET", f"/api/jobs/{job_id}")
+        assert all(t["status"] == "pending" for t in status["tasks"])
+
+    def test_retry_endpoint_not_found(self, mesh):
+        """Returns 404 for a nonexistent job."""
+        with pytest.raises(urllib.error.HTTPError) as exc:
+            mesh.call("POST", "/api/retry", {"job_id": "nonexistent"})
+        assert exc.value.code == 404
+
+    def test_retry_endpoint_missing_job_id(self, mesh):
+        """Returns 400 when job_id is missing."""
+        with pytest.raises(urllib.error.HTTPError) as exc:
+            mesh.call("POST", "/api/retry", {})
         assert exc.value.code == 400
 
 

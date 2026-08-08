@@ -68,3 +68,20 @@ print(json.dumps({"ok": True}))
 """
     result = run_task(script, {})
     assert result == {"ok": True}
+
+
+def test_run_task_unicode_result():
+    """Non-ASCII results survive the JSON pipe (Windows cp1252 safe).
+
+    Regression: on Windows the task child's stdout defaults to the ANSI
+    code page, so printing a result containing e.g. "✓" raised
+    UnicodeEncodeError inside the task and failed it spuriously. The
+    runner now forces PYTHONIOENCODING=utf-8 on the child.
+    """
+    script = """
+import json, sys
+sys.stdin.read()
+print(json.dumps({"text": "caf\u00e9 \u2713"}))
+"""
+    result = run_task(script, {})
+    assert result == {"text": "caf\u00e9 \u2713"}

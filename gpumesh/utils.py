@@ -6,6 +6,8 @@ import socket
 import subprocess
 import sys
 
+from .ansi import safe_print, green, yellow, red, bold
+
 
 def _is_private_ip(ip: str) -> bool:
     return (
@@ -90,8 +92,8 @@ def try_add_firewall_rule(port: int = 8000) -> bool:
         import ctypes
 
         if os.name == "nt" and not ctypes.windll.shell32.IsUserAnAdmin():
-            print(
-                f"[gpumesh] WARNING: could not add firewall rule (need admin). "
+            safe_print(
+                f"{bold('[gpumesh]')} {yellow('WARNING')}: could not add firewall rule (need admin). "
                 f"Run 'gpumesh serve' as Administrator, or manually allow port {port}."
             )
             return False
@@ -136,8 +138,8 @@ def try_add_firewall_rule(port: int = 8000) -> bool:
                 if result.returncode == 0:
                     return True
 
-        print(
-            f"[gpumesh] WARNING: could not add firewall rule. "
+        safe_print(
+            f"{bold('[gpumesh]')} {yellow('WARNING')}: could not add firewall rule. "
             f"Run 'gpumesh serve' as Administrator, or manually allow port {port}."
         )
         return False
@@ -149,4 +151,4 @@ def show_firewall_hint(port: int = 8000):
     """Show a brief firewall hint if needed (only on Windows)."""
     if platform.system() != "Windows":
         return
-    print(f"[gpumesh] TIP: If workers can't connect, allow port {port} through Windows Firewall.")
+    safe_print(f"{bold('[gpumesh]')} {yellow('TIP:')} If workers can't connect, allow port {port} through Windows Firewall.")

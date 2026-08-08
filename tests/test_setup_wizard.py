@@ -3,14 +3,108 @@
 Tests the new radar-based coordinator/worker setup wizard.
 """
 
-import os
 import pytest
 from unittest.mock import patch, MagicMock, call
 import io
-import sys
-import time
 
-_no_console = not os.environ.get("TERM") and not sys.stdout.isatty()
+
+@pytest.fixture(autouse=True)
+def _hermetic_wizard(monkeypatch):
+    """Make the wizard tests run without a real interactive console.
+
+    questionary (via prompt_toolkit) crashes with ``NoConsoleScreenBufferError``
+    when run under git-bash/MSYS on Windows (TERM=xterm-256color but no
+    Windows console), which used to fail every wizard test in that
+    environment. Instead of a real console, scripted answers are consumed
+    from ``builtins.input`` (which the tests already patch with
+    ``side_effect=[...]``), and real-world side effects (self-worker spawn,
+    UDP discovery listener, firewall rules) are stubbed out so tests are
+    hermetic, fast and deterministic.
+    """
+    import builtins as _builtins
+    import questionary as _questionary
+
+    def _next_answer():
+        try:
+            return _builtins.input("")
+        except (EOFError, StopIteration):
+            return None
+
+    def _fake_select(message, choices=None, **kwargs):
+        choices = list(choices or [])
+
+        class _Q:
+            def ask(self):
+                ans = _next_answer()
+                if ans is None:
+                    return None
+                if isinstance(ans, str) and ans.isdigit():
+                    idx = int(ans) - 1
+                    if 0 <= idx < len(choices):
+                        return choices[idx]
+                return ans
+
+        return _Q()
+
+    def _fake_text(message, validate=None, **kwargs):
+        # NOTE: deliberately bypasses questionary's `validate` callback so the
+        # wizard's OWN code-level checks (empty / min-length) are what's under
+        # test — the same path a headless or non-interactive run would take.
+        class _Q:
+            def ask(self):
+                return _next_answer()
+
+        return _Q()
+
+    def _fake_confirm(message, default=False, **kwargs):
+        class _Q:
+            def ask(self):
+                ans = _next_answer()
+                if ans is None:
+                    return None
+                s = str(ans).strip().lower()
+                if s in ("y", "yes", "true", "1"):
+                    return True
+                if s in ("n", "no", "false", "0"):
+                    return False
+                if s == "":
+                    return bool(default)  # Enter = accept default
+                # Unrecognized input: abort (like Ctrl+C / Esc in questionary)
+                # rather than silently defaulting.
+                return None
+
+        return _Q()
+
+    monkeypatch.setattr(_questionary, "select", _fake_select)
+    monkeypatch.setattr(_questionary, "text", _fake_text)
+    monkeypatch.setattr(_questionary, "confirm", _fake_confirm)
+
+    # Stub real-world side effects the wizard would otherwise trigger:
+    # a self-worker connecting to a fake coordinator, a UDP listener
+    # binding port 48900, and netsh firewall commands.
+    monkeypatch.setattr(
+        "gpumesh.worker.spawn_local_worker", lambda *a, **k: None
+    )
+
+    class _FakeListener:
+        def start(self):
+            pass
+
+        def stop(self):
+            pass
+
+        def peers(self):
+            return []
+
+    monkeypatch.setattr(
+        "gpumesh.discovery.Listener", lambda *a, **k: _FakeListener()
+    )
+    monkeypatch.setattr(
+        "gpumesh.setup_wizard.try_add_firewall_rule", lambda *a, **k: False
+    )
+    monkeypatch.setattr(
+        "gpumesh.setup_wizard.show_firewall_hint", lambda *a, **k: None
+    )
 
 
 # Fixtures for common mocks
@@ -90,7 +184,6 @@ def mock_httpd():
     return mock
 
 
-@pytest.mark.skipif(_no_console, reason="questionary requires a real console")
 class TestCoordinatorFlowSameNetwork:
     """Test coordinator setup wizard for Same Network mode."""
 
@@ -136,10 +229,11 @@ class TestCoordinatorFlowSameNetwork:
 
         # No crash
 
-    def test_coordinator_same_network_shows_scan_message(self, mock_tailscale_installed,
-                                                           mock_lan_ip, mock_gpu_detected,
-                                                           mock_token, mock_httpd):
-        """Test coordinator setup scans for workers."""
+    def test_coordinator_scan_interrupt_stops_cleanly(self, mock_tailscale_installed,
+                                                      mock_lan_ip, mock_gpu_detected,
+                                                      mock_token, mock_httpd):
+        """Ctrl+C during the scan stops the coordinator immediately (no
+        second Ctrl+C needed) and still showed the connection panel."""
         from gpumesh.setup_wizard import run_setup_wizard
 
         with patch("gpumesh.server.serve", return_value=mock_httpd):
@@ -150,8 +244,39 @@ class TestCoordinatorFlowSameNetwork:
                             run_setup_wizard()
 
                             output = mock_stdout.getvalue()
-                            # Should show "No workers found" (no workers in test)
-                            assert "No workers found" in output
+
+        assert "Scan interrupted" in output
+        assert "stopping the coordinator" in output.lower()
+        # The connection panel is shown before the scan, so it's still visible.
+        assert "YOUR COORDINATOR IS RUNNING" in output
+
+    def test_coordinator_no_workers_shows_connection_details(self, mock_tailscale_installed,
+                                                             mock_lan_ip, mock_gpu_detected,
+                                                             mock_token, mock_httpd):
+        """When the scan times out with no workers, the user sees the
+        URL/token/join command and the coordinator keeps running (it is not
+        silently killed by the wizard exiting)."""
+        from gpumesh.setup_wizard import run_setup_wizard
+
+        # time.sleep returns immediately so the 15-iteration scan "times out"
+        # fast instead of sleeping 30 real seconds.
+        with patch("gpumesh.server.serve", return_value=mock_httpd):
+            with patch("gpumesh.connection_manager.save_connection"):
+                with patch("gpumesh.setup_wizard.time.sleep", return_value=None):
+                    with patch("builtins.input", side_effect=["1", "1"]):
+                        with patch("sys.stdout", new_callable=io.StringIO) as mock_stdout:
+                            run_setup_wizard()
+
+                            output = mock_stdout.getvalue()
+
+        assert "No workers found" in output
+        assert "YOUR COORDINATOR IS RUNNING" in output
+        assert "http://192.168.1.10:8000" in output
+        assert "testToken123" in output
+        assert "gpumesh quickjoin http://192.168.1.10:8000 --token testToken123" in output
+        # The wizard must NOT tear the coordinator down just because no
+        # workers were found — it keeps serving until the user quits.
+        assert "Shutting down coordinator" not in output
 
     def test_coordinator_invalid_choice(self, mock_tailscale_installed, mock_gpu_detected):
         """Test coordinator setup with invalid choice."""
@@ -165,7 +290,6 @@ class TestCoordinatorFlowSameNetwork:
                 assert "Please enter 1 or 2" in output
 
 
-@pytest.mark.skipif(_no_console, reason="questionary requires a real console")
 class TestCoordinatorFlowTailscale:
     """Test coordinator setup wizard for Tailscale mode."""
 
@@ -204,7 +328,6 @@ class TestCoordinatorFlowTailscale:
                 assert "Install from: https://tailscale.com/download" in output
 
 
-@pytest.mark.skipif(_no_console, reason="questionary requires a real console")
 class TestWorkerFlowSameNetwork:
     """Test worker setup wizard for Same Network mode."""
 
@@ -272,7 +395,6 @@ class TestWorkerFlowSameNetwork:
             mock_worker.assert_not_called()
 
 
-@pytest.mark.skipif(_no_console, reason="questionary requires a real console")
 class TestWorkerFlowBroadcast:
     """Test worker setup wizard for broadcast/claim mode."""
 
@@ -343,7 +465,6 @@ class TestWorkerFlowBroadcast:
                     mock_broadcast.assert_called_once_with("testtoken123")
 
 
-@pytest.mark.skipif(_no_console, reason="questionary requires a real console")
 class TestSetupWizardEdgeCases:
     """Test edge cases and error handling in setup wizard."""
 
@@ -422,6 +543,57 @@ class TestShowConnectionCommand:
                 assert "URL:   http://192.168.1.10:8000" in output
                 assert "Token: testToken123" in output
                 assert "gpumesh quickjoin http://192.168.1.10:8000 --token testToken123" in output
+
+
+class TestVisualHelpers:
+    """Tests for the rainbow header and step-badge helpers."""
+
+    def test_rainbow_preserves_plain_text(self):
+        """_rainbow colors each char but keeps the plain text intact."""
+        from gpumesh.setup_wizard import _rainbow
+        result = _rainbow("gpumesh")
+        assert result.plain == "gpumesh"
+
+    def test_rainbow_applies_per_char_styles(self):
+        """_rainbow cycles colors across characters."""
+        from gpumesh.setup_wizard import _rainbow
+        result = _rainbow("abcdef")
+        styles = [span.style for span in result.spans]
+        # Six distinct color styles across the six chars
+        assert len(styles) == 6
+        assert len(set(styles)) == 6
+
+    def test_step_badge_pending(self):
+        """Pending step badge shows '[n/total] > label' (ASCII-safe)."""
+        from gpumesh.setup_wizard import _step_badge
+        badge = _step_badge(2, 3, "Pick a network")
+        assert badge.plain == "  [2/3] > Pick a network"
+
+    def test_step_badge_done(self):
+        """Completed step badge shows '[n/total] [OK] label'."""
+        from gpumesh.setup_wizard import _step_badge
+        badge = _step_badge(1, 3, "Coordinator role", done=True)
+        assert badge.plain == "  [1/3] [OK] Coordinator role"
+
+    def test_header_renders_rainbow_panel(self):
+        """The header renders a titled panel with the GPUMESH art."""
+        import io
+        from rich.console import Console
+        import gpumesh.setup_wizard as wz
+        buf = io.StringIO()
+        wz._console = Console(file=buf, width=80, color_system=None)
+        wz._print_header()
+        out = buf.getvalue()
+        assert "GPUMESH" in out
+        assert "Share GPU power" in out
+        assert "setup wizard" in out
+
+    def test_badges_are_ascii_safe(self):
+        """Step badges never emit unicode glyphs that break legacy consoles."""
+        from gpumesh.setup_wizard import _step_badge
+        for done in (False, True):
+            text = _step_badge(1, 2, "X", done=done).plain
+            assert text.encode("cp437")  # encodable on legacy Windows consoles
 
 
 class TestParseUrl:

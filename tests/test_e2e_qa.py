@@ -539,6 +539,130 @@ class TestCancellation:
 
 
 # ============================================================================
+#  Test 5b: Job Retry
+# ============================================================================
+
+class TestRetry:
+    """Test the retry flow: failed/timed-out jobs are re-queued."""
+
+    def test_retry_requeues_failed_job(self, coordinator):
+        """A failed job's tasks are reset to pending by /api/retry."""
+        url, token, _ = coordinator
+        client = MeshClient(url, token)
+
+        script = 'import json, sys\nprint(json.dumps({"result": 42}))'
+        resp = client.call("POST", "/api/jobs", {
+            "name": "retry-test",
+            "script": script,
+            "payloads": [{"x": 1}, {"x": 2}, {"x": 3}],
+        })
+        job_id = resp["job_id"]
+
+        # Fail the job (cancel marks pending tasks failed)
+        result = client.call("POST", "/api/cancel", {"job_id": job_id})
+        assert result["pending"] == 3
+
+        status = client.call("GET", f"/api/jobs/{job_id}")
+        assert status["counts"].get("failed", 0) == 3
+
+        # Retry re-queues the failed tasks
+        retry = client.call("POST", "/api/retry", {"job_id": job_id})
+        assert retry["requeued"] == 3
+        assert retry["counts"]["pending"] == 3
+
+        status = client.call("GET", f"/api/jobs/{job_id}")
+        assert status["counts"].get("failed", 0) == 0
+        assert status["counts"]["pending"] == 3
+        assert status["finished"] is False
+
+    def test_retry_keeps_done_results(self, coordinator):
+        """Done tasks keep results; only failed ones are re-queued."""
+        url, token, _ = coordinator
+        client = MeshClient(url, token)
+
+        # Register a worker and complete one task, fail the rest via cancel
+        reg = client.call("POST", "/api/register", {
+            "hostname": "retry-worker", "device": "cpu", "score": 1.0,
+        })
+        worker_id = reg["worker_id"]
+
+        resp = client.call("POST", "/api/jobs", {
+            "name": "retry-mixed",
+            "script": 'import json, sys\nprint(json.dumps({"result": 42}))',
+            "payloads": [{"x": 1}, {"x": 2}],
+        })
+        job_id = resp["job_id"]
+
+        # Complete one task successfully
+        task = client.call("POST", "/api/lease", {"worker_id": worker_id})
+        assert task is not None
+        client.call("POST", "/api/result", {
+            "task_id": task["task_id"],
+            "worker_id": worker_id,
+            "ok": True,
+            "result": {"done": True},
+            "elapsed": 0.1,
+        })
+
+        # Fail the remaining pending task
+        client.call("POST", "/api/cancel", {"job_id": job_id})
+
+        retry = client.call("POST", "/api/retry", {"job_id": job_id})
+        assert retry["requeued"] == 1
+        assert retry["counts"]["done"] == 1
+        assert retry["counts"]["pending"] == 1
+
+    def test_retry_nonexistent_job_404(self, coordinator):
+        """Retrying a nonexistent job returns 404."""
+        url, token, _ = coordinator
+        client = MeshClient(url, token)
+
+        with pytest.raises(urllib.error.HTTPError) as exc:
+            client.call("POST", "/api/retry", {"job_id": "nonexistent"})
+        assert exc.value.code == 404
+
+    def test_retry_job_executes_on_worker(self, coordinator_with_worker):
+        """After a retry, a real worker picks up and runs the re-queued tasks."""
+        url, token, _ = coordinator_with_worker
+        client = MeshClient(url, token)
+
+        script = ('import json, sys, time\n'
+                  'time.sleep(0.3)\n'
+                  'p = json.load(sys.stdin)\n'
+                  'print(json.dumps({"result": p["x"] * 2}))')
+        resp = client.call("POST", "/api/jobs", {
+            "name": "retry-run",
+            "script": script,
+            "payloads": [{"x": 1}, {"x": 2}, {"x": 3}],
+        })
+        job_id = resp["job_id"]
+
+        # Fail every task (cancel marks pending -> failed)
+        client.call("POST", "/api/cancel", {"job_id": job_id})
+        status = client.call("GET", f"/api/jobs/{job_id}")
+        assert status["counts"].get("failed", 0) == 3
+
+        # Retry, then let the live worker drain the queue
+        retry = client.call("POST", "/api/retry", {"job_id": job_id})
+        assert retry["requeued"] == 3
+
+        for _ in range(40):  # up to ~40s
+            time.sleep(1)
+            status = client.call("GET", f"/api/jobs/{job_id}")
+            if status["finished"]:
+                break
+
+        assert status["finished"] is True
+        assert status["counts"].get("done", 0) == 3
+        assert status["counts"].get("failed", 0) == 0
+        results = sorted(
+            t["result"]["result"]
+            for t in status["tasks"] if t["status"] == "done"
+        )
+        assert results == [2, 4, 6]
+
+
+# ============================================================================
 #  Test 6: Device Summary
 # ============================================================================
 
