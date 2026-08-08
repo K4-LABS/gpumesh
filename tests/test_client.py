@@ -264,6 +264,101 @@ class TestWaitForJob:
             assert result["finished"] is True
             assert result["counts"]["failed"] == 1
 
+    def test_wait_for_job_timeout_raises(self):
+        """Raises TimeoutError when the wait exceeds the configured timeout."""
+        running_job = {
+            "id": "j123", "name": "test", "finished": False,
+            "counts": {"pending": 1}, "tasks": []
+        }
+        with patch("gpumesh.client.get_status", return_value=running_job), \
+             patch("gpumesh.client._get_workers", return_value={}), \
+             patch("sys.stdout.write"):
+            with pytest.raises(TimeoutError, match="did not finish within"):
+                wait_for_job("http://localhost:8000", "token", "j123",
+                             poll=0.01, timeout=0.01)
+
+    def test_wait_for_job_zero_timeout_waits(self, capsys):
+        """timeout=0 (the default) means wait without a limit."""
+        finished_job = {
+            "id": "j123", "name": "test", "finished": True,
+            "counts": {"done": 1},
+            "tasks": [{"id": "t1", "status": "done", "cost": 1.0,
+                        "worker_id": "w1", "result": {}, "error": None}]
+        }
+        with patch("gpumesh.client.get_status", return_value=finished_job), \
+             patch("gpumesh.client._get_workers", return_value={}):
+            result = wait_for_job("http://localhost:8000", "token", "j123",
+                                  poll=0.01, timeout=0.0)
+            assert result["finished"] is True
+
+    def _capture_wait_output(self, job, extra_job=None):
+        """Run wait_for_job capturing every sys.stdout.write call."""
+        jobs = [job] if extra_job is None else [job, extra_job]
+        with patch("gpumesh.client.get_status", side_effect=jobs), \
+             patch("gpumesh.client._get_workers", return_value={}), \
+             patch("sys.stdout.write") as mock_write:
+            result = wait_for_job("http://localhost:8000", "token", "j123",
+                                  poll=0.01)
+        written = "".join(call.args[0] for call in mock_write.call_args_list)
+        return result, written
+
+    def test_wait_for_job_shows_percentage(self, capsys):
+        """The progress line shows a completed/total percentage."""
+        running_job = {
+            "id": "j123", "name": "pct_job", "finished": False,
+            "counts": {"done": 2, "pending": 2}, "tasks": []
+        }
+        finished_job = {
+            "id": "j123", "name": "pct_job", "finished": True,
+            "counts": {"done": 4},
+            "tasks": [{"id": "t1", "status": "done", "cost": 1.0,
+                        "worker_id": "w1", "result": {}, "error": None}]
+        }
+        result, written = self._capture_wait_output(running_job, finished_job)
+        assert result["finished"] is True
+        # 2 of 4 tasks terminal -> 50%
+        assert "50%" in written
+        assert "2/4 done" in written
+
+    def test_wait_for_job_percentage_counts_failed_as_done(self, capsys):
+        """Failed tasks count toward the percentage (matches the bar)."""
+        running_job = {
+            "id": "j123", "name": "fail_pct", "finished": False,
+            "counts": {"done": 1, "failed": 1, "pending": 2}, "tasks": []
+        }
+        finished_job = {
+            "id": "j123", "name": "fail_pct", "finished": True,
+            "counts": {"done": 2, "failed": 2},
+            "tasks": [{"id": "t1", "status": "done", "cost": 1.0,
+                        "worker_id": "w1", "result": {}, "error": None}]
+        }
+        result, written = self._capture_wait_output(running_job, finished_job)
+        assert result["finished"] is True
+        # 1 done + 1 failed = 2 of 4 terminal -> 50%
+        assert "50%" in written
+        assert "1 failed" in written
+
+    def test_wait_for_job_percentage_hidden_when_no_tasks(self, capsys):
+        """No percentage is shown when the job has zero tasks yet."""
+        running_job = {
+            "id": "j123", "name": "empty_job", "finished": False,
+            "counts": {"pending": 0}, "tasks": []
+        }
+        finished_job = {
+            "id": "j123", "name": "empty_job", "finished": True,
+            "counts": {"done": 1},
+            "tasks": [{"id": "t1", "status": "done", "cost": 1.0,
+                        "worker_id": "w1", "result": {}, "error": None}]
+        }
+        result, written = self._capture_wait_output(running_job, finished_job)
+        assert result["finished"] is True
+        # The zero-task poll shows "No tasks yet" without a percentage
+        # (a later poll legitimately shows 100% once the job finishes).
+        no_tasks_line = next(
+            line for line in written.splitlines() if "No tasks yet" in line
+        )
+        assert "%" not in no_tasks_line
+
 
 class TestSafeStr:
     """Tests for _safe_str encoding helper."""

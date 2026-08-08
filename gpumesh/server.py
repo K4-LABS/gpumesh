@@ -7,6 +7,8 @@ Endpoints (all require the X-Auth-Token header):
   POST /api/result              {task_id, worker_id, ok, result?, error?}
   POST /api/jobs                {name, script, payloads} -> {job_id}
   GET  /api/jobs/<id>           -> job status + task results
+  POST /api/cancel              {job_id} -> {pending, running} cancelled
+  POST /api/retry               {job_id} -> {requeued, counts}
   GET  /api/workers             -> live worker list
   GET  /api/events              -> recent join/leave events (last 100)
 """
@@ -16,6 +18,8 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+from . import __version__, status
+from .ansi import green, yellow, red, cyan, bold, dim
 from .db import Database
 from .security import SecurityManager
 
@@ -26,6 +30,9 @@ class CoordinatorHandler(BaseHTTPRequestHandler):
     server_version = "gpumesh"
     db: Database = None
     token: str = ""
+    start_time: float = 0.0
+    safe_mode: bool = False
+    _shutdown_event = None
 
     # -- plumbing -------------------------------------------------------
 
@@ -88,6 +95,9 @@ class CoordinatorHandler(BaseHTTPRequestHandler):
     # -- routes ---------------------------------------------------------
 
     def do_GET(self):
+        if self._shutdown_event is not None and self._shutdown_event.is_set():
+            self._send(503, {"error": "server shutting down"})
+            return
         if not self._authed():
             return
         try:
@@ -97,6 +107,21 @@ class CoordinatorHandler(BaseHTTPRequestHandler):
                 self._send(200, {"events": self.db.list_events()})
             elif self.path == "/api/devices":
                 self._send(200, self.db.device_summary())
+            elif self.path == "/api/health":
+                summary = self.db.device_summary()
+                counts = self.db.job_status_counts()
+                self._send(200, {
+                    "status": "ok",
+                    "version": __version__,
+                    "uptime_seconds": round(time.monotonic() - self.start_time, 2),
+                    "workers_alive": summary["alive_devices"],
+                    "workers_dead": summary["total_devices"] - summary["alive_devices"],
+                    "jobs_pending": counts.get("pending", 0),
+                    "jobs_running": counts.get("running", 0),
+                    "jobs_done": counts.get("done", 0),
+                    "jobs_failed": counts.get("failed", 0),
+                    "total_score": summary["total_score"],
+                })
             elif self.path.startswith("/api/jobs/"):
                 job = self.db.job_status(self.path.rsplit("/", 1)[-1])
                 if job is None:
@@ -107,11 +132,14 @@ class CoordinatorHandler(BaseHTTPRequestHandler):
                 self._send(404, {"error": "unknown endpoint"})
         except Exception as exc:
             import traceback
-            print(f"[mesh] ERROR GET {self.path}: {exc}")
+            status.log(f"{bold(cyan('[mesh]'))} {red('ERROR GET')} {self.path}: {exc}")
             traceback.print_exc()
             self._send(500, {"error": "internal server error"})
 
     def do_POST(self):
+        if self._shutdown_event is not None and self._shutdown_event.is_set():
+            self._send(503, {"error": "server shutting down"})
+            return
         if not self._authed():
             return
         try:
@@ -142,7 +170,7 @@ class CoordinatorHandler(BaseHTTPRequestHandler):
                     body.get("device_name", ""),
                 )
                 self.db.record_event("worker_joined", worker_id)
-                print(f"[mesh] worker joined: {body.get('hostname')} "
+                status.log(f"{bold(cyan('[mesh]'))} worker {green('joined')}: {body.get('hostname')} "
                       f"({body.get('device_name') or body.get('device')}, "
                       f"score={body.get('score')})")
                 self._send(200, {"worker_id": worker_id})
@@ -184,11 +212,14 @@ class CoordinatorHandler(BaseHTTPRequestHandler):
                 if not script or not script.strip() or not isinstance(payloads, list) or not payloads:
                     self._send(400, {"error": "need script and non-empty payloads list"})
                     return
+                if self.safe_mode and "__gpumesh_function__" in script:
+                    self._send(403, {"error": "Safe mode: function distribution disabled. Submit scripts only."})
+                    return
                 job_id = self.db.create_job(
                     body.get("name", "job"), script, payloads
                 )
                 job_type = "function" if script == "__gpumesh_function__" else "script"
-                print(f"[mesh] {job_type} job submitted: {body.get('name', 'job')} "
+                status.log(f"{bold(cyan('[mesh]'))} {job_type} job submitted: {body.get('name', 'job')} "
                       f"({len(payloads)} tasks) -> {job_id}")
                 self._send(200, {"job_id": job_id})
 
@@ -198,6 +229,17 @@ class CoordinatorHandler(BaseHTTPRequestHandler):
                     self._send(400, {"error": "need job_id"})
                     return
                 result = self.db.cancel_job(job_id)
+                if result is None:
+                    self._send(404, {"error": "job not found"})
+                else:
+                    self._send(200, result)
+
+            elif self.path == "/api/retry":
+                job_id = body.get("job_id", "")
+                if not job_id:
+                    self._send(400, {"error": "need job_id"})
+                    return
+                result = self.db.retry_job(job_id)
                 if result is None:
                     self._send(404, {"error": "job not found"})
                 else:
@@ -215,7 +257,7 @@ class CoordinatorHandler(BaseHTTPRequestHandler):
                 self._send(404, {"error": "unknown endpoint"})
         except Exception as exc:
             import traceback
-            print(f"[mesh] ERROR POST {self.path}: {exc}")
+            status.log(f"{bold(cyan('[mesh]'))} {red('ERROR POST')} {self.path}: {exc}")
             traceback.print_exc()
             self._send(500, {"error": "internal server error"})
 
@@ -224,19 +266,19 @@ def _reaper(db: Database, stop: threading.Event):
     while not stop.is_set():
         requeued = db.reap_expired_leases()
         if requeued:
-            print(f"[mesh] re-queued {requeued} task(s) from dead workers")
+            status.log(f"{bold(cyan('[mesh]'))} re-queued {yellow(str(requeued))} task(s) from {red('dead')} workers")
 
         # Hivemind TTL pattern: DELETE workers stale for >5 minutes
         deleted = db.cleanup_dead_workers()
         for wid in deleted:
             db.record_event("worker_left", wid)
-            print(f"[mesh] worker expired and removed: {wid}")
+            status.log(f"{bold(cyan('[mesh]'))} worker {yellow('expired')} and removed: {wid}")
 
         # Exo-style topology change notification
         alive = db.list_workers()
         alive_count = sum(1 for w in alive if w["alive"])
         if deleted:
-            print(f"[mesh] topology changed: {alive_count} workers alive")
+            status.log(f"{bold(cyan('[mesh]'))} topology changed: {bold(str(alive_count))} workers alive")
 
         stop.wait(REAP_INTERVAL)
 
@@ -262,7 +304,7 @@ def _discovery_printer(listener, stop: threading.Event):
                 key = (peer.hostname, peer.ip)
                 if key not in seen:
                     seen.add(key)
-                    print(f"[mesh] nearby worker: {peer.hostname} "
+                    status.log(f"{bold(cyan('[mesh]'))} nearby worker: {green(peer.hostname)} "
                           f"({peer.display_name}, score={peer.score:.1f}) "
                           f"at {peer.ip}")
         except Exception:
@@ -271,10 +313,13 @@ def _discovery_printer(listener, stop: threading.Event):
 
 
 def serve(host: str, port: int, db_path: str, token: str,
-          discovery: bool = False) -> ThreadingHTTPServer:
+          discovery: bool = False, safe_mode: bool = False) -> ThreadingHTTPServer:
     handler = type("Handler", (CoordinatorHandler,),
                    {"db": Database(db_path), "token": token,
+                    "safe_mode": safe_mode,
                     "gpumesh_security": SecurityManager(token)})
+    handler.start_time = time.monotonic()
+    handler._shutdown_event = threading.Event()
     httpd = ThreadingHTTPServer((host, port), handler)
     stop = threading.Event()
     t = threading.Thread(target=_reaper, args=(handler.db, stop), daemon=True)
@@ -293,7 +338,7 @@ def serve(host: str, port: int, db_path: str, token: str,
             dt.start()
             httpd.gpumesh_discovery_listener = listener
         except Exception as exc:
-            print(f"[mesh] discovery listener failed to start: {exc}")
+            status.log(f"{bold(cyan('[mesh]'))} {red('discovery listener failed to start')}: {exc}")
 
     # Ensure listener is stopped on shutdown.
     # Idempotent shutdown guard (python-zeroconf pattern):
@@ -313,19 +358,21 @@ def serve(host: str, port: int, db_path: str, token: str,
                 listener.stop()
             except Exception:
                 pass
+        # Signal shutdown — new requests will get 503
+        handler._shutdown_event.set()
+        # Let in-flight handler threads drain
+        time.sleep(1.0)
+        # Close the database while no handlers are running
+        try:
+            handler.db.close()
+        except Exception:
+            pass
         # Only call shutdown if serve_forever was started; otherwise
         # BaseServer.shutdown() hangs on an unset event
         if hasattr(httpd, "_BaseServer__serving") and httpd._BaseServer__serving:
             _orig_shutdown()
         else:
             httpd.server_close()
-        # Brief pause to let in-flight handler threads finish their DB ops
-        import time as _time
-        _time.sleep(0.5)
-        try:
-            handler.db.close()
-        except Exception:
-            pass
 
     httpd.shutdown = _shutdown_with_listener
 

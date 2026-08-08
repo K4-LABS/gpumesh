@@ -7,6 +7,8 @@ from __future__ import annotations
 import shutil
 import subprocess
 
+from gpumesh.ansi import safe_print
+
 
 def _get_tailscale_ip() -> str | None:
     """Detect the local Tailscale IP address.
@@ -56,33 +58,33 @@ def open_tunnel(port: int, mode: str = "auto") -> str | None:
         tailscale_ip = _get_tailscale_ip()
         if tailscale_ip:
             url = f"http://{tailscale_ip}:{port}"
-            print(f"[mesh] Tailscale URL: {url}")
-            print(f"[mesh] friends join with: gpumesh quickjoin --token <TOKEN> --tailscale")
+            safe_print(f"[mesh] Tailscale URL: {url}")
+            safe_print(f"[mesh] friends join with: gpumesh quickjoin --token <TOKEN> --tailscale")
             return url
         if mode == "tailscale":
-            print("[mesh] ERROR: Tailscale not found or not running")
-            print("[mesh] Install from: https://tailscale.com/download")
+            safe_print("[mesh] ERROR: Tailscale not found or not running")
+            safe_print("[mesh] Install from: https://tailscale.com/download")
             return None
 
     if mode in ("auto", "ngrok"):
         try:
             from pyngrok import ngrok
             tunnel = ngrok.connect(port, "http")
-            print(f"[mesh] public URL: {tunnel.public_url}")
-            print(f"[mesh] friends join with: gpumesh join {tunnel.public_url}"
+            safe_print(f"[mesh] public URL: {tunnel.public_url}")
+            safe_print(f"[mesh] friends join with: gpumesh join {tunnel.public_url}"
                   " --token <TOKEN>")
             return tunnel.public_url
         except ImportError:
             if mode == "ngrok":
-                print("[mesh] pyngrok not installed.")
-                print("[mesh] Install with: pip install gpumesh[tunnel]")
+                safe_print("[mesh] pyngrok not installed.")
+                safe_print("[mesh] Install with: pip install gpumesh[tunnel]")
             return None
         except Exception as e:
-            print(f"[mesh] ngrok failed: {e}")
+            safe_print(f"[mesh] ngrok failed: {e}")
             if mode == "ngrok":
                 return None
 
     # Fallback: LAN-only
-    print(f"[mesh] coordinator listening on port {port}")
-    print(f"[mesh] friends join with: gpumesh join http://<YOUR_IP>:{port} --token <TOKEN>")
+    safe_print(f"[mesh] coordinator listening on port {port}")
+    safe_print(f"[mesh] friends join with: gpumesh join http://<YOUR_IP>:{port} --token <TOKEN>")
     return None

@@ -1,0 +1,22 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.git/
+.gitignore
+.pytest_cache/
+.venv/
+venv/
+.env
+.vscode/
+.idea/
+*.db
+*.db-*
+Thumbs.db
+.DS_Store
+DOCKER_HUB_README.md
+CHANGELOG.md
+.env.example
+# NOTE: README.md is intentionally NOT excluded — pyproject.toml references it
+# as the package readme, so the wheel build inside the Docker image needs it.

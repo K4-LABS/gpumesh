@@ -67,6 +67,21 @@ def cancel_job(url: str, token: str, job_id: str) -> dict | None:
         raise
 
 
+def retry_job(url: str, token: str, job_id: str) -> dict | None:
+    """Re-queue all failed tasks of a job so workers run them again.
+
+    Returns {"requeued": N, "counts": {...}} or None if job not found.
+    Raises URLError if coordinator is unreachable.
+    """
+    mesh = MeshClient(url, token)
+    try:
+        return mesh.call("POST", "/api/retry", {"job_id": job_id})
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            return None
+        raise
+
+
 def _get_workers(url: str, token: str) -> dict:
     """Fetch worker list. Returns {worker_id: worker_info}."""
     try:
@@ -137,6 +152,22 @@ def wait_for_job(url: str, token: str, job_id: str, poll: float = 2.0, timeout: 
             raise TimeoutError(f"Job {job_id} did not finish within {timeout}s")
         try:
             job = get_status(url, token, job_id)
+        except urllib.error.HTTPError as exc:
+            # 404: the job is gone (e.g. the coordinator restarted with a fresh
+            # database). 401: the token is wrong. Neither will ever recover,
+            # so fail fast instead of polling forever.
+            if exc.code == 404:
+                raise RuntimeError(
+                    f"Job {job_id} not found on the coordinator — it may have "
+                    "been restarted with a fresh database."
+                )
+            if exc.code == 401:
+                raise RuntimeError(
+                    f"Authentication failed for job {job_id} — the token does "
+                    "not match the coordinator. Rejoin with the correct token."
+                )
+            time.sleep(poll)
+            continue
         except (urllib.error.URLError, OSError):
             time.sleep(poll)
             continue
@@ -177,8 +208,11 @@ def wait_for_job(url: str, token: str, job_id: str, poll: float = 2.0, timeout: 
             if pending:
                 status_parts.append(f"{_esc('90m')}{pending} pending{_esc('0m')}")
 
+            # Percent complete tracks the bar (done + failed are terminal).
+            pct = int(100 * done / total)
             lines.append(
                 f"  {bar} "
+                f"{_esc('1m')}{_esc('36m')}{pct:>3}%{_esc('0m')}  "
                 f"{', '.join(status_parts)}  {_esc('90m')}({elapsed:.0f}s){_esc('0m')}"
             )
 
