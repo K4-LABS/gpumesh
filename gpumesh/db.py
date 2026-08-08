@@ -12,6 +12,8 @@ import threading
 import time
 import uuid
 
+from .ansi import safe_print, green, yellow, red, bold, dim
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS workers (
     id            TEXT PRIMARY KEY,
@@ -113,7 +115,7 @@ class Database:
         except sqlite3.DatabaseError as exc:
             import os, shutil
             backup_path = path + ".corrupted"
-            print(f"[gpumesh] WARNING: Database corrupted ({exc})")
+            safe_print(f"{bold('[gpumesh]')} {yellow('WARNING')}: Database corrupted ({exc})")
             try:
                 conn.close()
             except (NameError, Exception):
@@ -121,7 +123,7 @@ class Database:
             # Backup the corrupted file before deleting
             try:
                 shutil.copy2(path, backup_path)
-                print(f"[gpumesh] Backup saved to: {backup_path}")
+                safe_print(f"{bold('[gpumesh]')} Backup saved to: {green(backup_path)}")
                 for suffix in ("-wal", "-shm", "-journal"):
                     try:
                         shutil.copy2(path + suffix, backup_path + suffix)
@@ -139,7 +141,7 @@ class Database:
                         pass
             except (FileNotFoundError, PermissionError):
                 pass
-            print(f"[gpumesh] Creating fresh database...")
+            safe_print(f"{bold('[gpumesh]')} {green('Creating fresh database...')}")
             conn = sqlite3.connect(path, check_same_thread=False)
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("PRAGMA foreign_keys=ON")
@@ -210,8 +212,8 @@ class Database:
         return cur.rowcount > 0
 
     def list_workers(self) -> list:
-        cutoff = time.time() - WORKER_DEAD_AFTER
         with self._lock:
+            cutoff = time.time() - WORKER_DEAD_AFTER
             rows = self._conn.execute(
                 "SELECT id, hostname, device, device_name, score, last_seen"
                 " FROM workers"
@@ -228,8 +230,7 @@ class Database:
             for r in rows
         ]
 
-    def _active_scores(self) -> list:
-        cutoff = time.time() - WORKER_DEAD_AFTER
+    def _active_scores(self, cutoff: float) -> list:
         rows = self._conn.execute(
             "SELECT score FROM workers WHERE last_seen >= ?", (cutoff,)
         ).fetchall()
@@ -241,8 +242,8 @@ class Database:
         Each device includes: id, hostname, device, device_name, score,
         status (alive/dead), and a virtual device index for the user.
         """
-        cutoff = time.time() - WORKER_DEAD_AFTER
         with self._lock:
+            cutoff = time.time() - WORKER_DEAD_AFTER
             rows = self._conn.execute(
                 "SELECT id, hostname, device, device_name, score, last_seen"
                 " FROM workers ORDER BY last_seen DESC"
@@ -418,6 +419,16 @@ class Database:
             "tasks": task_list,
         }
 
+    def job_status_counts(self) -> dict:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT status, COUNT(*) FROM tasks GROUP BY status"
+            ).fetchall()
+        counts = {"pending": 0, "running": 0, "done": 0, "failed": 0}
+        for status, count in rows:
+            counts[status] = count
+        return counts
+
     def cancel_job(self, job_id: str) -> dict | None:
         """Cancel all pending and running tasks for a job.
 
@@ -445,6 +456,32 @@ class Database:
             "pending": cur_pending.rowcount,
             "running": cur_running.rowcount,
         }
+
+    def retry_job(self, job_id: str) -> dict | None:
+        """Re-queue all failed tasks of a job so workers run them again.
+
+        Failed (and timed-out) tasks are reset to 'pending' with a fresh
+        attempt budget (attempts = 0) and their error cleared. Done, running
+        and pending tasks are left untouched.
+
+        Returns {"requeued": N, "counts": {...}} or None if job not found.
+        """
+        with self._lock, self._conn:
+            job = self._conn.execute(
+                "SELECT id FROM jobs WHERE id = ?", (job_id,)
+            ).fetchone()
+            if job is None:
+                return None
+
+            cur = self._conn.execute(
+                "UPDATE tasks SET status = 'pending', error = NULL,"
+                " worker_id = NULL, lease_expires = NULL, result = NULL,"
+                " attempts = 0"
+                " WHERE job_id = ? AND status = 'failed'",
+                (job_id,),
+            )
+        counts = self.job_status(job_id)["counts"]
+        return {"requeued": cur.rowcount, "counts": counts}
 
     # -- scheduling ---------------------------------------------------------
 
@@ -523,7 +560,8 @@ class Database:
                 half = len(eligible_tasks) // 2
                 eligible_tasks = eligible_tasks[:half] if half > 0 else eligible_tasks[:1]
 
-            scores = self._active_scores()
+            cutoff_active = time.time() - WORKER_DEAD_AFTER
+            scores = self._active_scores(cutoff_active)
             if len(scores) <= 1:
                 task_id = eligible_tasks[-1][0]  # solo worker: take the heaviest
             else:
@@ -567,6 +605,12 @@ class Database:
                     " WHERE id = ? AND worker_id = ? AND status = 'running'",
                     (json.dumps(result), task_id, worker_id),
                 )
+                if cur.rowcount == 0:
+                    cur = self._conn.execute(
+                        "UPDATE tasks SET status = 'done', result = ?, error = NULL"
+                        " WHERE id = ? AND status = 'pending'",
+                        (json.dumps(result), task_id),
+                    )
             else:
                 row = self._conn.execute(
                     "SELECT attempts FROM tasks WHERE id = ?", (task_id,)
@@ -577,6 +621,12 @@ class Database:
                     " WHERE id = ? AND worker_id = ? AND status = 'running'",
                     ("failed" if final else "pending", error, task_id, worker_id),
                 )
+                if cur.rowcount == 0:
+                    cur = self._conn.execute(
+                        "UPDATE tasks SET status = ?, error = ?, worker_id = NULL"
+                        " WHERE id = ? AND status = 'pending'",
+                        ("failed" if final else "pending", error, task_id),
+                    )
             # Update straggler stats (Petals pattern) — only on success
             if ok and elapsed is not None and elapsed > 0:
                 existing = self._conn.execute(

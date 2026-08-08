@@ -275,6 +275,13 @@ class Peer:
 
     @property
     def alive(self) -> bool:
+        """Check if this peer is still alive.
+
+        NOTE: This reads ``last_seen`` without holding the listener's lock.
+        It is safe to call on **copies** returned by ``Listener.peers()``,
+        but NOT on live peer objects inside the listener's ``_peers`` dict
+        (callers should always use ``listener.peers()`` which returns copies).
+        """
         return (time.time() - self.last_seen) < PEER_STALE_AFTER
 
     @property
@@ -432,6 +439,7 @@ class Listener:
                     continue
                 peer_key = f"{incoming.hostname}:{incoming.ip}:{incoming.api_port}"
                 new_peer = None
+                on_peer_cb = None
                 with self._lock:
                     if peer_key in self._peers:
                         peer = self._peers[peer_key]
@@ -440,12 +448,15 @@ class Listener:
                         peer = incoming
                         self._peers[peer_key] = peer
                         new_peer = peer
+                    # Capture callback under lock to avoid TOCTOU race
+                    on_peer_cb = self._on_peer
 
                 # Invoke callback OUTSIDE the lock to prevent deadlock
                 # if the callback calls peers() or cleanup_stale().
-                if new_peer is not None and self._on_peer:
+                # Pass a copy to prevent races with concurrent update() calls.
+                if new_peer is not None and on_peer_cb is not None:
                     try:
-                        self._on_peer(new_peer)
+                        on_peer_cb(new_peer.copy())
                     except Exception:
                         pass
         finally:

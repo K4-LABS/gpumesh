@@ -55,6 +55,7 @@ import threading
 from typing import Any, Callable
 
 from . import capability
+from gpumesh.ansi import safe_print, green, yellow, red, bold, dim
 
 
 class _MeshUnavailable(Exception):
@@ -192,7 +193,7 @@ class AcceleratedFunction:
         if os.environ.get("GPUMESH_VERBOSE") == "1":
             device_name = device["device_name"] if device else "unknown"
             target = self._gpu or "auto"
-            print(f"[accelerate] running locally on device: {device_name} (target: {target})")
+            safe_print(yellow(f"[accelerate] running locally on device: {device_name} (target: {target})"))
 
         return self._fn(*args, **kwargs)
 
@@ -244,8 +245,8 @@ class AcceleratedFunction:
             raise _MeshUnavailable("cannot submit job")
 
         if os.environ.get("GPUMESH_VERBOSE") == "1":
-            print(f"[accelerate] submitted to mesh: job={job_id}, "
-                  f"workers={len(alive)}")
+            safe_print(green(f"[accelerate] submitted to mesh: job={job_id}, "
+                  f"workers={len(alive)}"))
 
         # Poll for result
         timeout = self._timeout or 300.0
@@ -266,7 +267,7 @@ class AcceleratedFunction:
                         # Remove internal keys
                         result.pop("_task_index", None)
                         if os.environ.get("GPUMESH_VERBOSE") == "1":
-                            print(f"[accelerate] mesh result: {result}")
+                            safe_print(green(f"[accelerate] mesh result: {result}"))
                         return result
                     elif t["status"] == "failed":
                         raise RuntimeError(
@@ -359,6 +360,26 @@ class AcceleratedFunction:
             return [self._fn(**p) for p in params_list]
 
         self._validate_resources()
+
+        # Fast-fail: detect when no real workers are connected so we warn
+        # early instead of hanging through distribute's timeout.
+        # Only applies when workers() returns a real list we can inspect;
+        # test mocks bypass this check.
+        if self._mesh is not None:
+            try:
+                _workers = self._mesh.workers()
+                if isinstance(_workers, list):
+                    alive = [w for w in _workers if w.get("alive", False)]
+                    if not alive:
+                        import warnings
+                        warnings.warn(
+                            "[accelerate] No alive workers — falling back to local execution. "
+                            "Connect a worker with `gpumesh join URL --token TOKEN` to use the mesh.",
+                            stacklevel=2,
+                        )
+                        return [self._fn(**p) for p in params_list]
+            except Exception:
+                pass  # mesh down — fall through to distribute which will also fallback
 
         try:
             return self._mesh.distribute(

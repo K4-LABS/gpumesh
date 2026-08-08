@@ -27,12 +27,19 @@ import urllib.error
 import urllib.request
 
 from . import capability, sandbox
+from gpumesh.ansi import safe_print, green, yellow, red, cyan, bold, dim, device_icon
 
 HEARTBEAT_INTERVAL = 10.0
 POLL_INTERVAL = 2.0
 REBENCHMARK_INTERVAL = 600.0  # re-benchmark every 10 minutes
 GRACEFUL_SHUTDOWN_TIMEOUT = 30.0  # seconds to wait for current task on SIGTERM
+# NOTE: there are deliberately NO "give up and exit" thresholds here.
+# After a worker registers it never exits on its own: coordinator outages,
+# laptop sleep and WiFi drops are survived by retrying with capped
+# exponential backoff, and the worker re-registers when the coordinator
+# returns (see run_worker).
 _env_lock = threading.Lock()  # protects os.environ["GPUMESH_DEVICE"]
+_task_id_lock = threading.Lock()  # protects _current_task_id[0] across heartbeat/main threads
 
 
 class MeshClient:
@@ -104,6 +111,10 @@ def _run_function_task(payload: dict, device: str, timeout: float,
     # Build environment for the subprocess (inherit current env + device)
     env = os.environ.copy()
     env["GPUMESH_DEVICE"] = device
+    # Same Windows fix as sandbox.run_task: the helper prints its result JSON
+    # to stdout, and without PYTHONIOENCODING the child's stdout would use the
+    # ANSI code page (cp1252), crashing on non-ASCII results. Force UTF-8.
+    env["PYTHONIOENCODING"] = "utf-8"
 
     kwargs = {}
     if os.name == "posix":
@@ -125,7 +136,7 @@ def _run_function_task(payload: dict, device: str, timeout: float,
 
     def _force_kill():
         if proc.poll() is None:
-            print("[worker] graceful shutdown timeout expired — killing subprocess")
+            safe_print(f"{bold(cyan('[worker]'))} {yellow('graceful shutdown timeout expired')} — killing subprocess")
             sandbox._kill_tree(proc)
 
     def _wait_for_stop_and_kill():
@@ -206,16 +217,30 @@ def _run_function_task(payload: dict, device: str, timeout: float,
     return result
 
 
-def _try_register(mesh: "MeshClient", info: dict, retries: int = 3):
+class _AuthError(Exception):
+    """Raised when the coordinator rejects this worker's token (HTTP 401)."""
+
+
+def _try_register(mesh: "MeshClient", info: dict, retries: int = 3,
+                   verbose: bool = True):
     """Register with the coordinator, retrying transient connection errors.
 
     Many registration failures are transient (e.g. the coordinator was just
     started and the worker's first attempt races ahead of it). Retry a small
     number of times with a short sleep before giving up.
 
+    ``verbose=False`` silences the progress messages; used by the background
+    auto-re-registration path so it doesn't spam the console during outages.
+
     Returns the worker_id on success, or raises the last underlying exception
-    (urllib.error.URLError / OSError) if every attempt failed.
+    (urllib.error.URLError / OSError / json.JSONDecodeError) if every
+    attempt failed. A rejected token (HTTP 401) raises ``_AuthError``
+    immediately instead of retrying.
     """
+    def _print(msg):
+        if verbose:
+            safe_print(msg)
+
     last_exc = None
     for attempt in range(retries):
         try:
@@ -223,24 +248,37 @@ def _try_register(mesh: "MeshClient", info: dict, retries: int = 3):
             # message ("coordinator not reachable") instead of a cryptic one.
             try:
                 mesh.call("GET", "/api/workers")
+            except urllib.error.HTTPError as probe_exc:
+                # A 401 means the token is wrong — retrying cannot fix it, so
+                # surface a clear error instead of "coordinator not reachable".
+                if probe_exc.code == 401:
+                    raise _AuthError() from probe_exc
+                raise
             except (urllib.error.URLError, OSError) as probe_exc:
-                print(f"[worker] coordinator not reachable at "
+                _print(f"{bold(cyan('[worker]'))} {red('coordinator not reachable')} at "
                       f"{mesh.base_url}: {probe_exc}")
                 if attempt < retries - 1:
-                    print(f"[worker] retrying registration in 2s "
-                          f"(attempt {attempt + 1}/{retries})...")
+                    _print(f"{bold(cyan('[worker]'))} {yellow('retrying registration')} in 2s "
+                          f"(attempt {yellow(str(attempt + 1))}/{retries})...")
                     time.sleep(2)
                     continue
                 raise
             resp = mesh.call("POST", "/api/register", info)
             return resp["worker_id"]
-        except (urllib.error.URLError, OSError) as exc:
+        except _AuthError:
+            raise
+        except (urllib.error.URLError, OSError, json.JSONDecodeError) as exc:
             last_exc = exc
             if attempt < retries - 1:
-                print(f"[worker] registration attempt {attempt + 1}/{retries} "
-                      f"failed: {exc} — retrying in 2s...")
+                _print(f"{bold(cyan('[worker]'))} registration attempt {yellow(str(attempt + 1))}/{retries} "
+                      f"{red('failed')}: {exc} — {yellow('retrying in 2s')}...")
                 time.sleep(2)
                 continue
+            # If the coordinator answered the final attempt with a 401 the
+            # token is wrong — surface a clear auth error, not a generic
+            # connection failure.
+            if isinstance(exc, urllib.error.HTTPError) and exc.code == 401:
+                raise _AuthError() from exc
             raise
     if last_exc is not None:
         raise last_exc
@@ -295,21 +333,39 @@ def _diagnostics_report(task_id: str, error: Exception,
     return report
 
 
-def run_worker(url: str, token: str, task_timeout: float = 240.0):
+def run_worker(url: str, token: str, task_timeout: float = 240.0,
+               safe_mode: bool = False, persist_connection: bool = True):
+    """Join a mesh as a worker and execute tasks until interrupted.
+
+    Resilience contract: after a successful registration the worker NEVER
+    exits on its own. A coordinator outage, laptop sleep, or WiFi drop only
+    pauses it — it retries with capped exponential backoff and automatically
+    re-registers when the coordinator returns. Only an explicit signal
+    (Ctrl+C / SIGTERM / SIGBREAK) or a 401 (the coordinator restarted with a
+    different token) stops the worker.
+    """
     mesh = MeshClient(url, token)
     info = capability.full_probe()
-    print(f"[worker] device={info['device']} ({info['device_name']}) "
-          f"score={info['score']} GFLOP/s")
+    safe_print(f"{bold(cyan('[worker]'))} device={device_icon(info['device'])} {bold(info['device_name'])} "
+          f"score={yellow(str(info['score']))} GFLOP/s")
 
     try:
         # Retry transient connection errors (coordinator just started, etc.)
         worker_id = _try_register(mesh, info, retries=3)
-        print(f"[worker] joined mesh as {worker_id}")
-        try:
-            from . import connection_manager
-            connection_manager.save_connection(url, token)
-        except Exception:
-            pass  # best-effort persistence; not critical
+        safe_print(f"{bold(cyan('[worker]'))} joined mesh as {bold(worker_id)}")
+        if persist_connection:
+            try:
+                from . import connection_manager
+                connection_manager.save_connection(url, token)
+            except Exception:
+                pass  # best-effort persistence; not critical
+    except _AuthError:
+        safe_print(f"{bold(cyan('[worker]'))} {red('authentication failed')} — the coordinator "
+              f"rejected this token at {mesh.base_url}")
+        safe_print("  The token is wrong, or the coordinator restarted with a different one.")
+        safe_print(f"  Check your saved token: {cyan('gpumesh show-connection')}")
+        safe_print(f"  Then rejoin with: {cyan(f'gpumesh join {url} --token <CORRECT_TOKEN>')}")
+        return
     except (urllib.error.URLError, OSError) as exc:
         # Decode the specific underlying error for better guidance.
         cause = getattr(exc, "reason", exc)
@@ -318,7 +374,7 @@ def run_worker(url: str, token: str, task_timeout: float = 240.0):
             or isinstance(cause, TimeoutError)
             or "10061" in str(exc)
         )
-        print(f"[worker] failed to register with coordinator after retries: {exc}")
+        safe_print(f"{bold(cyan('[worker]'))} {red('failed to register')} with coordinator after retries: {exc}")
         # Best-effort: clear any possibly-stale saved connection so a bad
         # URL/token doesn't persist and silently break future runs.
         try:
@@ -326,28 +382,28 @@ def run_worker(url: str, token: str, task_timeout: float = 240.0):
             connection_manager.clear_connection()
         except Exception:
             pass
-        print()
-        print("[worker] TROUBLESHOOTING:")
+        safe_print()
+        safe_print(f"{bold(cyan('[worker]'))} {yellow('TROUBLESHOOTING:')}")
         if is_refused:
-            print("  This error (10061 / ConnectionRefused) means the coordinator")
-            print("  actively refused the connection.")
-            print("  Most likely: the coordinator server is NOT running on that address,")
-            print("  OR it is bound to a different interface.")
-            print("  - If testing on the same machine, use http://127.0.0.1:PORT")
-            print("    (127.0.0.1 is loopback-only and avoids interface/firewall issues).")
-            print("  - On Windows, if binding to 0.0.0.0 fails, try running the")
-            print("    coordinator as Administrator so it can listen on all interfaces.")
+            safe_print(f"  {red('This error (10061 / ConnectionRefused) means the coordinator')}")
+            safe_print(f"  {red('actively refused the connection')}.")
+            safe_print(f"  {yellow('Most likely:')} the coordinator server is NOT running on that address,")
+            safe_print("  OR it is bound to a different interface.")
+            safe_print(f"  {cyan('- If testing on the same machine, use http://127.0.0.1:PORT')}")
+            safe_print("    (127.0.0.1 is loopback-only and avoids interface/firewall issues).")
+            safe_print(f"  {cyan('- On Windows, if binding to 0.0.0.0 fails, try running the')}")
+            safe_print("    coordinator as Administrator so it can listen on all interfaces.")
         else:
-            print("  The coordinator could not be reached (timeout / network error).")
-        print("  1. Is the coordinator running? Start it with: gpumesh serve --token YOUR_TOKEN")
-        print(f"  2. Is the URL correct? You tried: {url}")
-        print("  3. Is the port open? Try: curl http://127.0.0.1:PORT/api/workers")
-        print("  4. Windows Firewall may be blocking the port — allow the port through")
-        print("  5. Are both machines on the same network? (or use Tailscale for remote)")
-        print()
+            safe_print(f"  {red('The coordinator could not be reached (timeout / network error)')}.")
+        safe_print(f"  {bold('1.')} Is the coordinator running? Start it with: {cyan('gpumesh serve --token YOUR_TOKEN')}")
+        safe_print(f"  {bold('2.')} Is the URL correct? You tried: {yellow(url)}")
+        safe_print(f"  {bold('3.')} Is the port open? Try: {dim('curl http://127.0.0.1:PORT/api/workers')}")
+        safe_print(f"  {bold('4.')} Windows Firewall may be blocking the port — allow the port through")
+        safe_print(f"  {bold('5.')} Are both machines on the same network? (or use Tailscale for remote)")
+        safe_print()
         return
     except Exception as exc:
-        print(f"[worker] failed to register with coordinator: {exc}")
+        safe_print(f"{bold(cyan('[worker]'))} {red('failed to register')} with coordinator: {exc}")
         return
 
     stop = threading.Event()
@@ -357,10 +413,13 @@ def run_worker(url: str, token: str, task_timeout: float = 240.0):
     # current task finish (with a grace period), report status, then exit.
     _shutdown_grace_start = [None]
     _current_task_id = [None]
+    # Mutable connection state: worker_id changes when we auto re-register.
+    _state = {"worker_id": worker_id, "need_reregister": False}
+    _state_lock = threading.Lock()
 
     def _sigterm_handler(signum, frame):
         sig_name = signal.Signals(signum).name if hasattr(signal, "Signals") else str(signum)
-        print(f"\n[worker] received {sig_name} — shutting down gracefully")
+        safe_print(f"\n{bold(cyan('[worker]'))} received {bold(sig_name)} — {yellow('shutting down gracefully')}")
         _shutdown_grace_start[0] = time.time()
         stop.set()
 
@@ -384,67 +443,119 @@ def run_worker(url: str, token: str, task_timeout: float = 240.0):
                     try:
                         bench = capability.run_benchmark(info["device"], force=True)
                         current_score = bench["score"]
-                        print(f"[worker] re-benchmark: score={current_score}"
+                        safe_print(f"{bold(cyan('[worker]'))} re-benchmark: score={yellow(str(current_score))}"
                               f" (gflops={bench['gflops']},"
-                              f" bw={bench['bandwidth_gbps']} GB/s)")
+                              f" bw={dim(str(bench['bandwidth_gbps']))} GB/s)")
                     except Exception:
                         pass  # keep previous score on failure
                     last_benchmark = now
-                mesh.call("POST", "/api/heartbeat", {
-                    "worker_id": worker_id,
-                    "score": current_score,
-                    "gpu_memory_free_mb": capability.get_gpu_memory_usage().get("gpu_memory_free_mb", 0.0),
-                    "task_id": _current_task_id[0],
-                })
-            except (urllib.error.URLError, OSError, json.JSONDecodeError):
-                pass  # transient network blip; the lease reaper covers us
+                with _task_id_lock:
+                    tid = _current_task_id[0]
+                with _state_lock:
+                    wid = _state["worker_id"]
+                try:
+                    resp = mesh.call("POST", "/api/heartbeat", {
+                        "worker_id": wid,
+                        "score": current_score,
+                        "gpu_memory_free_mb": capability.get_gpu_memory_usage().get("gpu_memory_free_mb", 0.0),
+                        "task_id": tid,
+                    })
+                    # Coordinator answered but no longer knows us (row pruned
+                    # by the TTL cleaner) → re-register on the main loop.
+                    if resp is not None and resp.get("ok") is False:
+                        with _state_lock:
+                            _state["need_reregister"] = True
+                except urllib.error.HTTPError as exc:
+                    if exc.code == 401:
+                        safe_print(f"{bold(cyan('[worker]'))} {red('authentication failed')} — the coordinator restarted with a different token. Exiting.")
+                        stop.set()
+                    else:
+                        with _state_lock:
+                            _state["need_reregister"] = True
+                except Exception:
+                    pass  # transient network blip; the main loop owns reconnection
+            except Exception:
+                pass
             stop.wait(HEARTBEAT_INTERVAL)
 
     threading.Thread(target=heartbeat, daemon=True).start()
 
     done = failed = 0
     backoff = POLL_INTERVAL
-    # Synapse-style liveness tracking: timestamp-based (not counter-based).
-    # Tracks last successful coordinator interaction; exits if unreachable
-    # for COORDINATOR_TIMEOUT seconds (like synapse's _reap_stale_peers).
-    last_successful_call = time.time()
-    COORDINATOR_TIMEOUT = 120.0  # seconds — exit if no success for 2 min
+    unreachable_notice_shown = False
     try:
         while not stop.is_set():
-            try:
-                task = mesh.call("POST", "/api/lease", {"worker_id": worker_id})
-            except (urllib.error.URLError, OSError) as e:
-                # Check if we've been unreachable too long (synapse pattern)
-                elapsed = time.time() - last_successful_call
-                if elapsed > COORDINATOR_TIMEOUT:
-                    print(f"[worker] coordinator unreachable for {elapsed:.0f}s "
-                          f"(>{COORDINATOR_TIMEOUT}s). Exiting.")
+            # Re-register once the coordinator is reachable again — we were
+            # disconnected, or it restarted and forgot / pruned our row.
+            if _state["need_reregister"]:
+                try:
+                    new_id = _try_register(mesh, info, retries=2, verbose=False)
+                    with _state_lock:
+                        _state["worker_id"] = new_id
+                        _state["need_reregister"] = False
+                    safe_print(f"{bold(cyan('[worker]'))} {green('reconnected')} to coordinator — joined mesh as {bold(new_id)}")
+                    backoff = POLL_INTERVAL
+                    unreachable_notice_shown = False
+                except _AuthError:
+                    # The coordinator restarted with a different token — retrying
+                    # can never succeed, so stop with a clear message.
+                    safe_print(f"{bold(cyan('[worker]'))} {red('authentication failed')} — the "
+                          f"coordinator rejected this token after reconnection")
+                    safe_print("  The coordinator was restarted with a different token. Exiting.")
+                    stop.set()
                     break
-                wait = min(backoff, 60.0)
-                print(f"[worker] WARNING: coordinator unreachable "
-                      f"({elapsed:.0f}s since last success): {e}")
-                time.sleep(wait)
+                except Exception:
+                    # Coordinator still unreachable — wait and retry, never exit.
+                    time.sleep(2)
+                    continue
+
+            try:
+                task = mesh.call("POST", "/api/lease", {"worker_id": _state["worker_id"]})
+            except urllib.error.HTTPError as exc:
+                if exc.code == 401:
+                    safe_print(f"{bold(cyan('[worker]'))} {red('authentication failed')} — the coordinator restarted with a different token. Exiting.")
+                    break
+                # Coordinator answered but doesn't know us → re-register soon.
+                with _state_lock:
+                    _state["need_reregister"] = True
+                time.sleep(POLL_INTERVAL)
+                continue
+            except Exception as exc:
+                # Coordinator unreachable. NEVER exit: retry with capped backoff
+                # until it comes back (laptop sleep / WiFi drop / restart safe).
+                with _state_lock:
+                    _state["need_reregister"] = True
+                if not unreachable_notice_shown:
+                    safe_print(f"{bold(cyan('[worker]'))} {yellow('coordinator unreachable')}: {exc}")
+                    safe_print(f"{bold(cyan('[worker]'))} {dim('will keep retrying and auto-reconnect when it returns — no action needed')}")
+                    unreachable_notice_shown = True
+                time.sleep(backoff)
                 backoff = min(backoff * 2, 60.0)
                 continue
 
-            # Successful call — update timestamp and reset backoff
-            last_successful_call = time.time()
             backoff = POLL_INTERVAL
+            unreachable_notice_shown = False
             if task is None:
                 time.sleep(POLL_INTERVAL)
                 continue
             # Only reset backoff when we actually get work (not on empty polls)
             backoff = POLL_INTERVAL
 
-            print(f"[worker] running task {task['task_id']} "
-                  f"(cost={task['cost']})")
+            safe_print(f"{bold(cyan('[worker]'))} running task {bold(task['task_id'])} "
+                  f"(cost={yellow(str(task['cost']))})")
             started = time.time()
-            _current_task_id[0] = task["task_id"]
+            with _task_id_lock:
+                _current_task_id[0] = task["task_id"]
             start_resources = _snapshot_resources()
             try:
                 # Check if this is a function-based task
                 payload = task["payload"]
-                if "_func" in payload and task.get("script") == "__gpumesh_function__":
+                if safe_mode and "_func" in payload and task.get("script") == "__gpumesh_function__":
+                    raise sandbox.TaskError(
+                        "Safe mode: function distribution disabled on this coordinator. "
+                        "Submit scripts instead."
+                    )
+                if not safe_mode and "_func" in payload and task.get("script") == "__gpumesh_function__":
                     result = _run_function_task(payload, info["device"], task_timeout, stop_event=stop)
                 else:
                     result = sandbox.run_task(
@@ -454,41 +565,42 @@ def run_worker(url: str, token: str, task_timeout: float = 240.0):
                 elapsed = round(time.time() - started, 2)
                 try:
                     mesh.call("POST", "/api/result", {
-                        "task_id": task["task_id"], "worker_id": worker_id,
+                        "task_id": task["task_id"], "worker_id": _state["worker_id"],
                         "ok": True, "result": result, "elapsed": elapsed,
                     })
                 except (urllib.error.URLError, OSError) as e:
-                    print(f"[worker] WARNING: failed to submit result for "
-                          f"{task['task_id']}: {e}")
+                    safe_print(f"{bold(cyan('[worker]'))} {yellow('WARNING')}: failed to submit result for "
+                          f"{bold(task['task_id'])}: {e}")
                 done += 1
-                print(f"[worker] task {task['task_id']} done in {elapsed}s "
-                      f"(total done={done})")
+                safe_print(f"{bold(cyan('[worker]'))} task {bold(task['task_id'])} {green('done')} in {dim(str(elapsed))}s "
+                      f"(total done={yellow(str(done))})")
             except sandbox.TaskError as e:
                 # Crash recovery: attach diagnostics to failure status
                 diag = _diagnostics_report(task["task_id"], e, started, start_resources)
-                print(f"[worker] task {task['task_id']} FAILED: {e}")
-                print(f"[worker] diagnostics: {diag['error_type']} "
-                      f"in {diag['elapsed_s']}s")
+                safe_print(f"{bold(cyan('[worker]'))} task {bold(task['task_id'])} {red('FAILED')}: {e}")
+                safe_print(f"{bold(cyan('[worker]'))} diagnostics: {red(diag['error_type'])} "
+                      f"in {dim(str(diag['elapsed_s']))}s")
                 if diag.get("gpu_delta_mb") is not None:
-                    print(f"[worker] GPU memory delta: {diag['gpu_delta_mb']:+.1f} MB")
+                    gpu_delta_val = diag['gpu_delta_mb']
+                    safe_print(f"{bold(cyan('[worker]'))} GPU memory delta: {yellow(f'{gpu_delta_val:+.1f}')} MB")
                 try:
                     mesh.call("POST", "/api/result", {
-                        "task_id": task["task_id"], "worker_id": worker_id,
+                        "task_id": task["task_id"], "worker_id": _state["worker_id"],
                         "ok": False, "error": str(e),
                         "diagnostics": diag,
                     })
                 except (urllib.error.URLError, OSError) as submit_err:
-                    print(f"[worker] WARNING: failed to submit error for "
-                          f"{task['task_id']}: {submit_err}")
+                    safe_print(f"{bold(cyan('[worker]'))} {yellow('WARNING')}: failed to submit error for "
+                          f"{bold(task['task_id'])}: {submit_err}")
                 failed += 1
             except Exception as e:
                 diag = _diagnostics_report(task["task_id"], e, started, start_resources)
-                print(f"[worker] ERROR: unexpected error executing task: "
+                safe_print(f"{bold(cyan('[worker]'))} {red('ERROR')}: unexpected error executing task: "
                       f"{type(e).__name__}: {e}")
                 try:
                     mesh.call("POST", "/api/result", {
                         "task_id": task["task_id"],
-                        "worker_id": worker_id,
+                        "worker_id": _state["worker_id"],
                         "ok": False,
                         "error": f"Unexpected error: {type(e).__name__}: {e}",
                         "diagnostics": diag,
@@ -497,21 +609,22 @@ def run_worker(url: str, token: str, task_timeout: float = 240.0):
                     pass
                 failed += 1
             finally:
-                _current_task_id[0] = None
+                with _task_id_lock:
+                    _current_task_id[0] = None
 
         # Post-loop: graceful shutdown status report
         if _shutdown_grace_start[0] is not None:
             grace_elapsed = time.time() - _shutdown_grace_start[0]
-            print(f"[worker] shutdown complete — ran for {grace_elapsed:.1f}s "
-                  f"after signal (done={done}, failed={failed})")
+            safe_print(f"{bold(cyan('[worker]'))} shutdown complete — ran for {dim(str(round(grace_elapsed, 1)))}s "
+                  f"after signal (done={green(str(done))}, failed={red(str(failed))})")
     except KeyboardInterrupt:
-        print(f"\n[worker] leaving mesh (done={done}, failed={failed})")
+        safe_print(f"\n{bold(cyan('[worker]'))} leaving mesh (done={green(str(done))}, failed={red(str(failed))})")
     finally:
         stop.set()
         # Best-effort status report to coordinator on exit
         try:
             mesh.call("POST", "/api/heartbeat", {
-                "worker_id": worker_id,
+                "worker_id": _state["worker_id"],
                 "status": "shutting_down",
                 "done": done,
                 "failed": failed,
@@ -527,8 +640,29 @@ def run_worker(url: str, token: str, task_timeout: float = 240.0):
             pass
 
 
+def spawn_local_worker(url: str, token: str, task_timeout: float = 240.0,
+                       safe_mode: bool = False, persist_connection: bool = False):
+    """Start this machine as a worker of its OWN coordinator (self-worker).
+
+    Used by ``gpumesh serve`` and ``GPUMesh.start_coordinator`` so the
+    coordinator's own CPU/GPU automatically joins the pool. Runs in a daemon
+    thread; the resilient :func:`run_worker` reconnects automatically.
+
+    Returns the worker thread.
+    """
+    thread = threading.Thread(
+        target=run_worker,
+        args=(url, token, task_timeout, safe_mode, persist_connection),
+        daemon=True,
+        name="gpumesh-self-worker",
+    )
+    thread.start()
+    return thread
+
+
 def run_worker_broadcast(token: str, claim_port: int = 0,
-                         task_timeout: float = 240.0):
+                         task_timeout: float = 240.0,
+                         safe_mode: bool = False):
     """Start a worker that broadcasts its presence and waits to be claimed.
 
     Flow: broadcast UDP beacon → coordinator discovers us → coordinator
@@ -539,28 +673,28 @@ def run_worker_broadcast(token: str, claim_port: int = 0,
 
     # 1. Detect hardware
     info = capability.full_probe()
-    print(f"[worker] device={info['device']} ({info['device_name']}) "
-          f"score={info['score']} GFLOP/s")
+    safe_print(f"{bold(cyan('[worker]'))} device={device_icon(info['device'])} {bold(info['device_name'])} "
+          f"score={yellow(str(info['score']))} GFLOP/s")
 
     # 2. Start claim server
-    print(f"[worker] starting claim server on port {claim_port}...")
+    safe_print(f"{bold(cyan('[worker]'))} starting claim server on port {yellow(str(claim_port))}...")
     try:
         httpd, actual_port = claimer.start_claim_server(token, claim_port)
     except OSError as exc:
-        print(f"[worker] failed to start claim server: {exc}")
+        safe_print(f"{bold(cyan('[worker]'))} {red('failed to start claim server')}: {exc}")
         return
-    print(f"[worker] claim server listening on port {actual_port}")
+    safe_print(f"{bold(cyan('[worker]'))} claim server listening on port {green(str(actual_port))}")
 
     # 3. Prepare claimed signal and storage for coordinator details
     claimed = threading.Event()
     coordinator_url = [None]
     coordinator_token = [None]
-    claim_lock = threading.Lock()
 
     # Patch the claim handler callback so it stores coordinator info and
     # sets the event instead of spawning its own run_worker thread.
     from .claimer import ClaimHandler
-    ClaimHandler._claimed = False  # reset in case of re-entry
+    with ClaimHandler._claim_lock:
+        ClaimHandler._claimed = False  # reset in case of re-entry
 
     _orig_do_POST = ClaimHandler.do_POST
 
@@ -590,8 +724,9 @@ def run_worker_broadcast(token: str, claim_port: int = 0,
                              "error": "need coordinator_url and coordinator_token"})
             return
 
-        # Atomically check and set _claimed under lock
-        with claim_lock:
+        # Use the class-level _claim_lock (consistent with claimer.py)
+        # to prevent race conditions between dual-lock protection
+        with ClaimHandler._claim_lock:
             if ClaimHandler._claimed:
                 self._send(409, {"ok": False, "error": "already claimed"})
                 return
@@ -610,10 +745,16 @@ def run_worker_broadcast(token: str, claim_port: int = 0,
     # is only set in serve_forever's finally block).  Use server_close()
     # as a fallback when the server wasn't serving.
     def _safe_claim_shutdown():
-        if hasattr(httpd, "_BaseServer__serving") and httpd._BaseServer__serving:
-            httpd.shutdown()
-        else:
-            httpd.server_close()
+        try:
+            if hasattr(httpd, "_BaseServer__serving") and httpd._BaseServer__serving:
+                httpd.shutdown()
+            else:
+                httpd.server_close()
+        except OSError as exc:
+            if getattr(exc, "winerror", None) == 10038:
+                pass  # Windows: socket already closed during shutdown
+            else:
+                raise
 
     # 4. Start claim server in a daemon thread so it actually listens
     serve_thread = threading.Thread(
@@ -622,7 +763,8 @@ def run_worker_broadcast(token: str, claim_port: int = 0,
     serve_thread.start()
 
     # 5. Start UDP beacon
-    print(f"[worker] broadcasting presence on local network (claim_port={actual_port})...")
+    safe_print(f"{bold(cyan('[worker]'))} broadcasting presence on local network (claim_port={yellow(str(actual_port))})...")
+    beacon = None  # Initialize to ensure cleanup in finally block
     try:
         beacon = discovery.Beacon(
             device=info["device"],
@@ -634,14 +776,14 @@ def run_worker_broadcast(token: str, claim_port: int = 0,
         )
         beacon.start()
     except Exception as exc:
-        print(f"[worker] failed to start beacon: {exc}")
+        safe_print(f"{bold(cyan('[worker]'))} {red('failed to start beacon')}: {exc}")
         ClaimHandler.do_POST = _orig_do_POST
         _safe_claim_shutdown()
         return
 
     # 5. Wait for claim
-    print("[worker] waiting for coordinator to claim this worker...")
-    print("[worker] (Ctrl+C to stop)")
+    safe_print(f"{bold(cyan('[worker]'))} waiting for coordinator to claim this worker...")
+    safe_print(f"{bold(cyan('[worker]'))} {dim('(Ctrl+C to stop)')}")
 
     # Handle SIGTERM/SIGBREAK for graceful shutdown
     stop_broadcast = threading.Event()
@@ -664,26 +806,31 @@ def run_worker_broadcast(token: str, claim_port: int = 0,
         while not claimed.is_set():
             claimed.wait(timeout=1.0)
             if stop_broadcast.is_set():
-                print("\n[worker] stopped before being claimed")
+                safe_print(f"\n{bold(cyan('[worker]'))} {yellow('stopped before being claimed')}")
                 return
     except KeyboardInterrupt:
-        print("\n[worker] stopped before being claimed")
+        safe_print(f"\n{bold(cyan('[worker]'))} {yellow('stopped before being claimed')}")
         return
     finally:
         # Restore original handler
         ClaimHandler.do_POST = _orig_do_POST
-        ClaimHandler._claimed = False
-        beacon.stop()
+        if beacon is not None:
+            try:
+                beacon.stop()
+            except Exception:
+                pass  # best-effort cleanup
         _safe_claim_shutdown()
+        with ClaimHandler._claim_lock:
+            ClaimHandler._claimed = False
 
     if not coordinator_url[0]:
         return
 
-    print(f"[worker] claimed by coordinator at {coordinator_url[0]}")
-    print("[worker] joining mesh...")
+    safe_print(f"{bold(cyan('[worker]'))} claimed by coordinator at {green(coordinator_url[0])}")
+    safe_print(f"{bold(cyan('[worker]'))} {cyan('joining mesh')}...")
 
     # 6. Join the coordinator mesh
     try:
-        run_worker(coordinator_url[0], coordinator_token[0], task_timeout)
+        run_worker(coordinator_url[0], coordinator_token[0], task_timeout, safe_mode)
     except Exception as exc:
-        print(f"[worker] ERROR: failed to join mesh: {exc}")
+        safe_print(f"{bold(cyan('[worker]'))} {red('ERROR')}: failed to join mesh: {exc}")

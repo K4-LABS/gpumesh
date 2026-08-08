@@ -13,6 +13,8 @@ import json
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+from gpumesh.ansi import safe_print, green, yellow, red, cyan, bold
+
 
 class ClaimHandler(BaseHTTPRequestHandler):
     server_version = "gpumesh-claim"
@@ -110,13 +112,14 @@ class ClaimHandler(BaseHTTPRequestHandler):
                 from .worker import run_worker
                 run_worker(coordinator_url, coordinator_token)
             except Exception as exc:
-                print(f"[claim] failed to join coordinator: {exc}")
+                safe_print(red(f"[claim] failed to join coordinator: {exc}"))
                 with ClaimHandler._claim_lock:
                     ClaimHandler._claimed = False  # allow retry on failure
 
         thread = threading.Thread(target=_join, daemon=True, name="gpumesh-claim-worker")
         ClaimHandler._worker_thread = thread
         thread.start()
+        safe_print(green("[claim] claimed"))
         self._send(200, {"ok": True})
 
 
@@ -127,7 +130,8 @@ def start_claim_server(token: str, port: int = 0) -> tuple[ThreadingHTTPServer, 
     If *port* is 0 the OS picks an ephemeral port.
     """
     ClaimHandler._token = token
-    ClaimHandler._claimed = False
+    with ClaimHandler._claim_lock:
+        ClaimHandler._claimed = False
 
     httpd = ThreadingHTTPServer(("0.0.0.0", port), ClaimHandler)
     actual_port = httpd.server_address[1]

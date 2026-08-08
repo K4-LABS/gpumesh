@@ -2,10 +2,26 @@
 
 from __future__ import annotations
 
+import os
 import sys
 
 
-_SUPPORTS_COLOR = hasattr(sys.stdout, "isatty") and sys.stdout.isatty()
+def _detect_color() -> bool:
+    """Detect whether ANSI color is supported.
+
+    Priority:
+    1. GPUMESH_COLOR=1 / GPUMESH_COLOR=0 env var (overrides everything)
+    2. GPUMESH_COLOR=auto or unset → check isatty()
+    """
+    env = os.environ.get("GPUMESH_COLOR", "auto").strip().lower()
+    if env == "1" or env == "yes" or env == "true":
+        return True
+    if env == "0" or env == "no" or env == "false":
+        return False
+    return hasattr(sys.stdout, "isatty") and sys.stdout.isatty()
+
+
+_SUPPORTS_COLOR = _detect_color()
 
 
 def esc(code: str) -> str:
@@ -81,7 +97,7 @@ def clear_lines(n: int):
 # ---------------------------------------------------------------------------
 
 _UNICODE_MAP = {
-    "\u2500": "-", "\u2502": "|", "\u2550": "=", "\u2551": "||",
+    "\u2500": "-", "\u2502": "|", "\u2550": "=", "\u2551": "||", "\u2014": "-",
     "\u2713": "[OK]", "\u2717": "[FAIL]", "\u21bb": "[...]", "\u00b7": ".",
     "\u2588": "#", "\u2591": ".", "\u2593": "#",
     "\u2192": "->", "\u2190": "<-", "\u2191": "^", "\u2193": "v",

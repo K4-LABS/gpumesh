@@ -25,6 +25,7 @@ Usage:
 from __future__ import annotations
 
 import json
+import sys
 import threading
 import time
 import urllib.error
@@ -32,6 +33,7 @@ import urllib.request
 from typing import Any, Callable
 
 from . import capability, sandbox, serializer, utils
+from gpumesh.ansi import safe_print, green, yellow, red, cyan, bold
 from .worker import MeshClient
 
 
@@ -53,9 +55,10 @@ class GPUMesh:
         [{'id': 'w1', 'device': 'cuda', 'name': 'RTX 3080', 'score': 85.0}]
     """
     
-    def __init__(self, url: str, token: str):
+    def __init__(self, url: str, token: str, safe_mode: bool = False):
         self.url = url.rstrip("/")
         self.token = token
+        self.safe_mode = safe_mode
         self._client = MeshClient(self.url, self.token)
     
     # ── Static methods for setup ──────────────────────────────────────
@@ -66,6 +69,8 @@ class GPUMesh:
         token: str | None = None,
         db_path: str = "gpumesh.db",
         tailscale: bool = False,
+        safe_mode: bool = False,
+        self_worker: bool = True,
     ) -> str:
         """Start a coordinator server (non-blocking).
         
@@ -88,15 +93,15 @@ class GPUMesh:
         if token is None:
             token = _secrets.token_urlsafe(12)
         
-        httpd = server.serve("0.0.0.0", port, db_path, token)
+        httpd = server.serve("0.0.0.0", port, db_path, token, safe_mode=safe_mode)
         
         # Print connection info
         ip = utils.get_lan_ip()
-        print(f"[mesh] coordinator listening on 0.0.0.0:{port}")
-        print(f"[mesh] token: {token}")
-        print(f"[mesh] share this with workers:")
-        print(f"       from gpumesh import GPUMesh")
-        print(f"       GPUMesh.add_worker(\"http://{ip}:{port}\", token=\"{token}\")")
+        safe_print(green(f"[mesh] coordinator listening on 0.0.0.0:{port}"))
+        safe_print(green(f"[mesh] token: {token}"))
+        safe_print(green(f"[mesh] share this with workers:"))
+        safe_print(green(f"       from gpumesh import GPUMesh"))
+        safe_print(green(f"       GPUMesh.add_worker(\"http://{ip}:{port}\", token=\"{token}\")"))
         
         # Handle tunnel mode
         if tailscale:
@@ -111,7 +116,19 @@ class GPUMesh:
         
         thread = threading.Thread(target=_run, daemon=True)
         thread.start()
-        
+
+        # This machine joins its own pool so its own CPU/GPU is used too.
+        if self_worker:
+            try:
+                from .worker import spawn_local_worker
+                spawn_local_worker(
+                    f"http://{ip}:{port}", token,
+                    safe_mode=safe_mode, persist_connection=False,
+                )
+                safe_print(green(f"[mesh] self-worker started — this machine's CPU/GPU joins the pool"))
+            except Exception as exc:
+                safe_print(yellow(f"[mesh] could not start self-worker: {exc}"))
+
         return token
     
     @staticmethod
@@ -119,6 +136,7 @@ class GPUMesh:
         url: str,
         token: str,
         timeout: float = 240.0,
+        safe_mode: bool = False,
     ) -> dict:
         """Join a mesh as a worker (non-blocking).
         
@@ -137,13 +155,13 @@ class GPUMesh:
         from .worker import run_worker
         
         info = capability.full_probe()
-        print(f"[worker] device={info['device']} ({info['device_name']}) "
-              f"score={info['score']} GFLOP/s")
+        safe_print(green(f"[worker] device={info['device']} ({info['device_name']}) "
+              f"score={info['score']} GFLOP/s"))
         
         # Run worker in background thread
         def _run():
             try:
-                run_worker(url, token, task_timeout=timeout)
+                run_worker(url, token, task_timeout=timeout, safe_mode=safe_mode)
             except KeyboardInterrupt:
                 pass
         
@@ -225,12 +243,18 @@ class GPUMesh:
         # Serialize the function
         func_data = serializer.serialize_function(function)
         
-        # Create tasks with serialized function + params
+        # Create tasks with serialized function + params.
+        #
+        # ``cost`` is a scheduler hint (it controls task weight and is kept
+        # at the payload top level), NOT an argument for the function. Pass
+        # the params through without it so functions with a fixed signature
+        # don't fail with "unexpected keyword argument 'cost'" when users
+        # annotate payloads with cost (see examples/payloads.json).
         payloads = []
         for i, p in enumerate(params):
             payloads.append({
                 "_func": func_data,
-                "_params": p,
+                "_params": {k: v for k, v in p.items() if k != "cost"},
                 "_task_index": i,
                 "cost": p.get("cost", 1.0),
             })
@@ -243,6 +267,16 @@ class GPUMesh:
                 "script": "__gpumesh_function__",  # Marker for function-based job
                 "payloads": payloads,
             })
+        except urllib.error.HTTPError as exc:
+            if exc.code == 403:
+                raise GPUMeshError(
+                    "Safe mode: function distribution disabled on this coordinator. "
+                    "Submit scripts instead."
+                ) from exc
+            raise GPUMeshError(
+                f"Failed to submit job to coordinator: {exc}. "
+                f"Check that the coordinator is running at {self.url}"
+            ) from exc
         except (urllib.error.URLError, OSError) as exc:
             raise GPUMeshError(
                 f"Failed to submit job to coordinator: {exc}. "
@@ -251,6 +285,7 @@ class GPUMesh:
         job_id = resp["job_id"]
         
         # Poll for completion
+        tty = getattr(sys.stdout, "isatty", lambda: False)()
         start_time = time.time()
         while True:
             try:
@@ -269,15 +304,18 @@ class GPUMesh:
             if elapsed > timeout:
                 raise TimeoutError(f"Job {job_id} timed out after {timeout}s")
             
-            # Show progress
-            counts = job["counts"]
-            total = sum(counts.values())
-            done = counts.get("done", 0) + counts.get("failed", 0)
-            print(f"\r[distribute] {done}/{total} tasks finished ({counts})", end="", flush=True)
-            
+            # Show progress only on a real TTY so piped/redirected output
+            # stays clean and machine-readable.
+            if tty:
+                counts = job["counts"]
+                total = sum(counts.values())
+                done = counts.get("done", 0) + counts.get("failed", 0)
+                safe_print(f"\r[distribute] {done}/{total} tasks finished ({counts})", end="", flush=True)
+
             time.sleep(poll_interval)
-        
-        print()  # Newline after progress
+
+        if tty:
+            safe_print()  # Newline after progress
         
         # Collect results
         results = []

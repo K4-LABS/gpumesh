@@ -13,6 +13,8 @@ import os
 import time
 import urllib.parse
 
+from gpumesh.ansi import safe_print, green, yellow, red, bold
+
 _STALE_WARN_SECONDS = 3600  # warn if a saved config is older than 1 hour
 _STALE_CLEAR_SECONDS = 86400  # default max age for clear_if_stale (1 day)
 
@@ -66,6 +68,7 @@ def save_connection(url: str, token: str):
         except OSError:
             pass
         raise
+    safe_print(green(f"[gpumesh] config saved to {_CONFIG_PATH}"))
     # Restrict file permissions
     try:
         os.chmod(_CONFIG_PATH, 0o600)
@@ -103,6 +106,7 @@ def clear_connection():
     """Remove saved connection config."""
     try:
         os.remove(_CONFIG_PATH)
+        safe_print(yellow(f"[gpumesh] config cleared: {_CONFIG_PATH}"))
     except FileNotFoundError:
         pass
 
@@ -132,11 +136,11 @@ def warn_stale(config: dict, threshold_seconds: int = _STALE_WARN_SECONDS):
     age = time.time() - saved_at
     if age > threshold_seconds:
         age_h = int(age // 3600)
-        print(
+        safe_print(yellow(
             f"[gpumesh] NOTE: using a saved connection from {age_h}h ago "
             f"({config.get('url')}). If the coordinator moved networks or "
             f"changed IP/VPN, run 'gpumesh disconnect' and re-join."
-        )
+        ))
 
 
 def get_connection(url: str | None, token: str | None) -> tuple[str, str]:

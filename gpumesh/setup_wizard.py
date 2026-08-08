@@ -28,6 +28,7 @@ try:
     from rich.console import Console
     from rich.live import Live
     from rich.panel import Panel
+    from rich.progress import Progress, SpinnerColumn, TextColumn
     from rich.table import Table
     from rich.text import Text
     import questionary
@@ -39,28 +40,38 @@ except ImportError:
 # ── helpers ────────────────────────────────────────────────────────────────
 
 def _detect_gpu() -> str:
-    """Detect GPU. Returns 'cuda', 'mps', or 'cpu'."""
-    try:
-        result = subprocess.run(
-            ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
-            capture_output=True, text=True, timeout=5,
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            name = result.stdout.strip().split("\n")[0]
-            _console.print(f"  GPU found: {name}", style="green")
-            return "cuda"
-    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
-        pass
-
-    if platform.system() == "Darwin" and platform.machine() == "arm64":
+    """Detect GPU with a live spinner. Returns 'cuda', 'mps', or 'cpu'."""
+    found: str | None = None
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        console=_console,
+        transient=True,
+    ) as progress:
+        task = progress.add_task("  Detecting your GPU...", total=None)
         try:
-            import torch
-            if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-                _console.print("  GPU found: Apple Silicon", style="green")
-                return "mps"
-        except ImportError:
+            result = subprocess.run(
+                ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                found = result.stdout.strip().split("\n")[0]
+                progress.update(task, description=f"  GPU found: {found}")
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
             pass
 
+        if found is None and platform.system() == "Darwin" and platform.machine() == "arm64":
+            try:
+                import torch
+                if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+                    found = "Apple Silicon"
+                    progress.update(task, description="  GPU found: Apple Silicon")
+            except ImportError:
+                pass
+
+    if found is not None:
+        _console.print(f"  GPU found: {found}", style="green")
+        return "cuda" if found != "Apple Silicon" else "mps"
     _console.print("  No GPU found (CPU only \u2014 still works!)", style="yellow")
     return "cpu"
 
@@ -134,24 +145,55 @@ def _probe_claim_port(ip: str) -> int:
     return 0
 
 
+# ── visual helpers ─────────────────────────────────────────────────────────
+
+_RAINBOW = ["red", "yellow", "green", "cyan", "blue", "magenta"]
+
+
+def _rainbow(text: str, style: str = "bold") -> Text:
+    """Colorize text with a per-character rainbow (hand-rolled gradient)."""
+    out = Text()
+    for i, ch in enumerate(text):
+        out.append(ch, style=f"{style} {_RAINBOW[i % len(_RAINBOW)]}")
+    return out
+
+
+def _step_badge(current: int, total: int, label: str, done: bool = False) -> Text:
+    """Render a '[1/4] label' step badge."""
+    badge = Text()
+    badge.append(f"  [{current}/{total}] ", style="bold cyan")
+    badge.append("[OK] " if done else "> ",
+                 style="bold green" if done else "bold yellow")
+    badge.append(label, style="bold")
+    return badge
+
+
 # ── header ─────────────────────────────────────────────────────────────────
 
 def _print_header():
-    """Render the ASCII-art welcome header inside a rich Panel."""
+    """Render the rainbow ASCII-art welcome header inside a rich Panel."""
     art = (
-        "  [bold cyan]  ____             _ __  __  ____  [/]\n"
-        "  [bold cyan] / ___| _   _  ___| | |  \\/  |/ ___| [/]\n"
-        "  [bold cyan]| |  _ | | | |/ _ \\ | | |\\/| | |  _  [/]\n"
-        "  [bold cyan]| |_| || |_| |  __/ | | |  | | |_| | [/]\n"
-        "  [bold cyan] \\____| \\__,_|\\___|_|_|_|  |_|\\____| [/]\n"
+        "  ____             _ __  __  ____  \n"
+        " / ___| _   _  ___| | |  \\/  |/ ___| \n"
+        "| |  _ | | | |/ _ \\ | | |\\/| | |  _  \n"
+        "| |_| || |_| |  __/ | | |  | | |_| | \n"
+        " \\____| \\__,_|\\___|_|_|_|  |_|\\____| \n"
     )
     subtitle = (
         "[bold]Share GPU power between machines.\n"
         "Like Bluetooth -- devices find each other.[/]"
     )
-    panel_text = Text.from_markup(art + "\n" + subtitle)
+    panel_text = _rainbow(art)
+    panel_text.append("\n")
+    panel_text.append_text(Text.from_markup(subtitle))
     _console.print()
-    _console.print(Panel(panel_text, border_style="bright_cyan", padding=(0, 1)))
+    _console.print(Panel(
+        panel_text,
+        title="[bold magenta]GPUMESH[/]",
+        subtitle="[bold cyan]setup wizard[/]",
+        border_style="bright_magenta",
+        padding=(0, 1),
+    ))
     _console.print()
 
 
@@ -173,7 +215,7 @@ def run_setup_wizard():
     _print_header()
 
     # --- Detect hardware ---
-    _console.print("  Detecting your hardware...", style="bold")
+    _console.print(_step_badge(1, 2, "Detecting hardware"))
     device = _detect_gpu()
     _console.print()
 
@@ -184,6 +226,7 @@ def run_setup_wizard():
     table.add_row("1)", "Set up this machine to MANAGE jobs (Coordinator)")
     table.add_row("2)", "Add this machine to someone else's mesh (Worker)")
 
+    _console.print(_step_badge(2, 2, "Choose your role"))
     _console.print("  What do you want to do?", style="bold")
     _console.print()
 
@@ -222,6 +265,7 @@ def _setup_coordinator_radar(device: str):
     """Set up this machine as the coordinator with live radar."""
 
     _console.print()
+    _console.print(_step_badge(1, 3, "Coordinator role", done=True))
     _console.print("  Great! This machine will manage the jobs.", style="bold green")
     _console.print()
 
@@ -231,6 +275,7 @@ def _setup_coordinator_radar(device: str):
     lan_ip = get_lan_ip()
 
     # Ask network type
+    _console.print(_step_badge(2, 3, "Network setup"))
     _console.print("  How will other machines connect to this one?", style="bold")
     _console.print()
     if tailscale_ok:
@@ -308,6 +353,14 @@ def _setup_coordinator_radar(device: str):
     )
     serve_thread.start()
 
+    # This machine joins its own pool so its own CPU/GPU is used too.
+    try:
+        from .worker import spawn_local_worker
+        spawn_local_worker(coordinator_url, token, persist_connection=False)
+        _console.print("  Self-worker started — this machine's compute joins the pool.", style="dim")
+    except Exception:
+        pass
+
     # Try to add firewall rules now that the actual port is known
     actual_port = int(coordinator_url.rsplit(":", 1)[-1]) if ":" in coordinator_url else 8000
     firewall_ok = try_add_firewall_rule(actual_port)
@@ -331,17 +384,25 @@ def _setup_coordinator_radar(device: str):
         )
         _console.print()
 
+    # The coordinator is live — show the URL + token + join command so the
+    # user can share them with friends immediately (the token is otherwise
+    # never displayed in auto-discovery mode).
+    _show_running_coordinator_panel(coordinator_url, token)
+
     # Scan for workers using rich.live.Live for smooth updates
     prev_lines = 0
     peers = []
     scan_count = 0
     max_scans = 15  # 15 x 2s = 30s max scan time
 
+    _console.print(_step_badge(3, 3, "Scanning for workers"))
     _console.print("  Scanning for workers...", style="bold cyan")
     _console.print()
 
+    scan_interrupted = False
+    scan_frames = ["|", "/", "-", "\\"]
     try:
-        with Live(console=_console, refresh_per_second=1, transient=True) as live:
+        with Live(console=_console, refresh_per_second=6, transient=True) as live:
             while scan_count < max_scans:
                 peers = listener.peers()
                 # Build radar display for Live
@@ -361,8 +422,12 @@ def _setup_coordinator_radar(device: str):
                     radar_text = Text("\n").join(radar_lines)
 
                 header = Text()
-                header.append("  RADAR -- Nearby Workers\n", style="bold cyan")
+                spin = scan_frames[scan_count % len(scan_frames)]
+                header.append(f"  {spin} RADAR -- Nearby Workers\n", style="bold cyan")
                 header.append("  (scanning every 2s, press Ctrl+C to stop)\n\n", style="dim")
+                filled = int(20 * scan_count / max_scans)
+                bar = "#" * filled + "." * (20 - filled)
+                header.append(f"  [{bar}] {scan_count}/{max_scans}\n\n", style="dim")
                 header.append_text(radar_text)
                 live.update(header)
 
@@ -371,21 +436,57 @@ def _setup_coordinator_radar(device: str):
                 scan_count += 1
                 time.sleep(2)
     except KeyboardInterrupt:
-        pass
+        scan_interrupted = True
 
     if not peers:
+        if scan_interrupted:
+            # The user pressed Ctrl+C to abort the scan — honor it and stop
+            # the coordinator too, instead of blocking again and forcing a
+            # second Ctrl+C.
+            _console.print("  Scan interrupted — stopping the coordinator.", style="yellow")
+            try:
+                listener.stop()
+            except Exception:
+                pass
+            httpd.shutdown()
+            return
         _console.print("  No workers found after 30 seconds.", style="yellow")
         _console.print(
-            "  Make sure workers are running 'gpumesh worker --token <token>'.",
+            "  The coordinator is STILL RUNNING — friends can join with the",
+            style="yellow",
+        )
+        _console.print(
+            "  command shown above, or with: gpumesh quickjoin <URL> --token <TOKEN>",
             style="yellow",
         )
         _console.print()
+        # Keep the coordinator alive so friends can still join manually —
+        # never let the wizard exit and silently kill the server here.
+        try:
+            serve_thread.join()
+        except KeyboardInterrupt:
+            _console.print("\n  Shutting down coordinator...", style="yellow")
+        finally:
+            try:
+                listener.stop()
+            except Exception:
+                pass
+            httpd.shutdown()
         return
 
     # Show selection and claim
     _claim_worker(peers, coordinator_url, token)
 
     # Keep main thread alive so daemon HTTP server stays running.
+    _console.print()
+    _console.print(Panel(
+        Text.from_markup(
+            "[bold green]  YOU'RE LIVE!  Your mesh is online.  [/]\n"
+            "[dim]  Workers can join anytime with the command above.[/]"
+        ),
+        border_style="green",
+        padding=(0, 1),
+    ))
     _console.print()
     _console.print(f"  Coordinator running at {coordinator_url}", style="green")
     _console.print("  Press Ctrl+C to stop the coordinator", style="yellow")
@@ -464,6 +565,14 @@ def _claim_worker(peers: list, coordinator_url: str, coordinator_token: str):
                     f"  {peer.hostname} claimed successfully! It will join the mesh shortly.",
                     style="green",
                 )
+                _console.print(Panel(
+                    Text.from_markup(
+                        "[bold green]  WORKER CLAIMED!  [/]\n"
+                        f"[dim]  {peer.hostname} is joining the mesh now.[/]"
+                    ),
+                    border_style="green",
+                    padding=(0, 1),
+                ))
             else:
                 _console.print(
                     f"  Claim rejected: {result.get('error', 'unknown error')}",
@@ -478,6 +587,39 @@ def _claim_worker(peers: list, coordinator_url: str, coordinator_token: str):
         _console.print(f"  [ERROR] Claim failed: {err}", style="red")
     except (urllib.error.URLError, OSError) as exc:
         _console.print(f"  [ERROR] Could not reach worker at {claim_url}: {exc}", style="red")
+    _console.print()
+
+
+# ── running coordinator panel ──────────────────────────────────────────────
+
+def _show_running_coordinator_panel(url: str, token: str):
+    """Show that the coordinator is LIVE and what friends need to join.
+
+    Unlike the manual-mode instructions (which tell the user to start their
+    own coordinator), this panel is shown when the server is ALREADY running,
+    so it tells friends to JOIN it instead.
+    """
+    panel_content = Text()
+    panel_content.append("  YOUR COORDINATOR IS RUNNING\n\n", style="bold green")
+    panel_content.append(f"  URL:   ", style="default")
+    panel_content.append(f"{url}\n", style="cyan")
+    panel_content.append(f"  Token: ", style="default")
+    panel_content.append(f"{token}\n", style="cyan")
+    panel_content.append("\n  Friends join with:\n", style="default")
+    panel_content.append(f"    gpumesh quickjoin {url} --token {token}\n", style="green")
+    panel_content.append("\n  (or: gpumesh join <URL> --token <TOKEN>)\n", style="dim")
+
+    _console.print()
+    _console.print(Panel(
+        panel_content,
+        title="[bold green]ONLINE[/]",
+        border_style="bright_green",
+        padding=(0, 1),
+    ))
+    _console.print(
+        "  SECURITY: Treat this token like a password. Do not share it publicly.",
+        style="yellow",
+    )
     _console.print()
 
 
@@ -602,6 +744,7 @@ def _setup_worker_radar(device: str):
     """Set up this machine as a worker with claim-based discovery."""
 
     _console.print()
+    _console.print(_step_badge(1, 2, "Worker role", done=True))
     _console.print("  Let's add this machine to the mesh.", style="bold green")
     _console.print()
     _console.print(
@@ -622,7 +765,7 @@ def _setup_worker_radar_scan(device: str):
 
     # Detect hardware
     _console.print()
-    _console.print("  Detecting your hardware...", style="bold")
+    _console.print(_step_badge(1, 3, "Detecting hardware"))
     info = capability.full_probe()
     _console.print(
         f"  Device: {info['device']} ({info['device_name']})", style="green",
@@ -631,6 +774,7 @@ def _setup_worker_radar_scan(device: str):
     _console.print()
 
     # Ask for a token
+    _console.print(_step_badge(2, 3, "Set a token"))
     _console.print("  Enter a token for this worker", style="bold")
     _console.print(
         "  (Other coordinators will need this to connect)", style="cyan",
@@ -649,6 +793,9 @@ def _setup_worker_radar_scan(device: str):
     if not token:
         _console.print("  Token cannot be empty. Try again: gpumesh setup", style="red")
         return
+    if len(token) < 8:
+        _console.print("  Token must be at least 8 characters.", style="red")
+        return
 
     # Confirm broadcast
     _console.print()
@@ -659,7 +806,7 @@ def _setup_worker_radar_scan(device: str):
         return
 
     # Start claim server + UDP beacon
-    _console.print()
+    _console.print(_step_badge(3, 3, "Starting broadcast"))
     _console.print("  Starting broadcast...", style="bold green")
     _console.print()
     try:

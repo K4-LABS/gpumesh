@@ -229,7 +229,10 @@ def benchmark(device: str) -> float:
         return round(_bench_python(), 3)
 
 
+import threading
+
 _benchmark_cache: dict = {}
+_benchmark_lock = threading.Lock()  # protects _benchmark_cache dict mutations
 
 
 def run_benchmark(device: str | None = None, force: bool = False) -> dict:
@@ -239,10 +242,11 @@ def run_benchmark(device: str | None = None, force: bool = False) -> dict:
     Result is cached so the benchmark only runs once per process
     (unless force=True for periodic re-benchmarking).
     """
-    global _benchmark_cache
     cache_key = device or "default"
-    if not force and cache_key in _benchmark_cache:
-        return _benchmark_cache[cache_key]
+    if not force:
+        with _benchmark_lock:
+            if cache_key in _benchmark_cache:
+                return _benchmark_cache[cache_key]
 
     if device is None:
         info = probe_device()
@@ -267,7 +271,8 @@ def run_benchmark(device: str | None = None, force: bool = False) -> dict:
         "bandwidth_gbps": round(bw, 3),
         "score": score,
     }
-    _benchmark_cache[cache_key] = result
+    with _benchmark_lock:
+        _benchmark_cache[cache_key] = result
     return result
 
 

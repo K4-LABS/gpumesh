@@ -2,6 +2,71 @@
 
 All notable changes to gpumesh are documented here.
 
+## [1.1.0] — 2026-08-08
+
+### Fixed
+- **Windows: non-ASCII task results crashed with UnicodeEncodeError.** Task
+  subprocesses wrote stdout in the ANSI code page (cp1252) while the parent
+  read UTF-8, so any result containing e.g. "✓" or "é" failed spuriously.
+  Subprocesses now run with `PYTHONIOENCODING=utf-8` (both script tasks in
+  `sandbox.py` and function tasks in `worker.py`).
+- **`distribute()` forwarded the scheduler's `cost` hint into the function**
+  as a kwarg, so fixed-signature functions failed with "unexpected keyword
+  argument 'cost'" whenever a payload carried the documented cost weight.
+  The hint is now stripped from the function's args (it still controls
+  scheduling at the payload level).
+- **`@mesh` functions decorated before `connect()` stayed local forever.**
+  `MeshFunction` now resolves the mesh lazily on first use, so the
+  documented "decorate first, connect later" flow works.
+- **Docker build would fail**: `.dockerignore` excluded `README.md`, which
+  `pyproject.toml` references as the package readme (required by the wheel
+  build inside the image).
+
+### Changed
+- README rewritten: cleaner, comprehensive, and PyPI-friendly, verified
+  against the actual CLI/API.
+- Dockerfile image label bumped to 1.1.0.
+
+### Tests
+- 565 tests passing (3 new regression tests for the fixes above).
+
+## [1.0.0] — 2026-08-03
+
+### Added
+- **`@mesh` decorator + `from gpumesh import mesh`** — the "connect once,
+  code normally" API. One import, one decorator line per heavy function;
+  everything else stays normal Python. Works in VS Code, Jupyter, PyCharm,
+  or a terminal.
+- **`mesh.connect()` / `mesh.devices()` / `mesh.device_count()` /
+  `mesh.total_score()`** — auto-connect from the saved config with explicit
+  helpers on the exported `mesh` object.
+- **Jupyter magics** — `%load_ext gpumesh` injects `@mesh` into the notebook
+  and provides `%mesh_devices`, `%mesh_status`, `%mesh_connect`, and the
+  **`%%mesh` cell magic** (wraps every function in a cell, like `%%time`).
+- **Self-worker** — `gpumesh serve` and `GPUMesh.start_coordinator` now
+  automatically add the coordinator's own machine (CPU/GPU) to the pool.
+- **`--self-worker` / `--no-self-worker` / `--color` CLI flags** for `serve`,
+  `--color` for `join`, `--safe-mode` for `quickjoin`.
+- **`map()` fast-fail** — falls back to local execution with a clear warning
+  when no workers are alive, instead of hanging.
+- Worker resilience tests (outage -> coordinator restart -> task runs),
+  dev-mode example (`examples/dev_mode.py`), and hermetic setup-wizard tests.
+
+### Changed
+- **Workers never die** — removed the permanent-exit thresholds. Workers
+  retry with capped exponential backoff, auto re-register when the
+  coordinator returns (laptop sleep, WiFi drops, coordinator restarts are
+  all survived), and no exception type can crash the worker thread.
+- **`from gpumesh import mesh` import-order bug fixed** — the package now
+  binds `mesh` eagerly, so `import gpumesh.mesh` after `from gpumesh
+  import mesh` (and vice versa) both resolve consistently.
+- Setup wizard token validation now lives in wizard logic (not only the UI
+  callback), and wizard tests are console-independent (no more
+  `NoConsoleScreenBufferError` under git-bash/Windows).
+
+### Fixed
+- 19 setup-wizard test failures caused by prompt_toolkit on Windows.
+
 ## [0.9.0] — 2026-07-26
 
 ### Fixed
