@@ -5,7 +5,7 @@
 [![PyPI version](https://img.shields.io/pypi/v/gpumesh.svg)](https://pypi.org/project/gpumesh/)
 [![Python](https://img.shields.io/pypi/pyversions/gpumesh.svg)](https://pypi.org/project/gpumesh/)
 [![License](https://img.shields.io/pypi/l/gpumesh.svg)](https://github.com/Samurai007AK/gpumesh/blob/main/LICENSE)
-[![Tests](https://img.shields.io/badge/tests-565%20passed-brightgreen)](https://github.com/Samurai007AK/gpumesh)
+[![Tests](https://img.shields.io/badge/tests-590%20passed-brightgreen)](https://github.com/Samurai007AK/gpumesh)
 [![Status](https://img.shields.io/badge/status-beta-blue)](https://github.com/Samurai007AK/gpumesh)
 [![Docker](https://img.shields.io/badge/docker-ready-2496ED?logo=docker&logoColor=white)](https://hub.docker.com/r/samurai007ak/gpumesh)
 
@@ -54,8 +54,9 @@ gpumesh turns multiple machines into a **single, unified compute pool**. Start a
 |---------|--------------|
 | **`@mesh` / `@accelerate` decorators** | Mark a function and it runs on the pool — no job system, no ceremony |
 | **`.map()`** | Spread one call across *every* connected machine at once |
-| **Smart routing** | Single calls run on the best local device; batch calls spread across the mesh |
-| **Graceful fallback** | Mesh unreachable? Your code silently runs locally — it never breaks |
+| **Smart routing** | Calls go to a mesh worker when one is alive, and to your own machine when none is |
+| **Graceful fallback** | Mesh unreachable? Your code runs locally and returns the same value — it never breaks |
+| **Any return value** | numpy arrays, torch tensors, DataFrames — you get back exactly what your function returned |
 | **Fault tolerance** | Workers survive sleep, WiFi drops, and coordinator restarts; dead workers' tasks are re-queued |
 | **Benchmark scoring** | Every worker gets a 0–100 compute score; the scheduler routes work to the strongest hardware |
 | **Memory-aware scheduling** | VRAM is tracked; tasks with memory hints go to workers with enough free memory |
@@ -77,9 +78,9 @@ mesh = GPUMesh("http://coordinator:8000", token="mysecret")
 def train(lr, epochs):
     return {"accuracy": 0.95}
 
-result = train(lr=0.01, epochs=100)         # best local device
+result = train(lr=0.01, epochs=100)         # one mesh worker (or local if none)
 
-results = train.map([                        # all mesh devices
+results = train.map([                        # spread across all mesh devices
     {"lr": 0.01, "epochs": 100},
     {"lr": 0.05, "epochs": 200},
 ])
@@ -137,7 +138,7 @@ from gpumesh import mesh   # auto-connects from saved config
 def train(lr, epochs):
     return {"accuracy": 0.95}
 
-# Single call — runs on your machine's CPU/GPU
+# Single call — runs on a mesh worker (your own machine if nothing else joined)
 result = train(lr=0.01, epochs=100)
 
 # .map() — spreads across EVERY connected laptop + your machine
@@ -146,13 +147,30 @@ results = train.map([{"lr": 0.01}, {"lr": 0.05}, {"lr": 0.1}])
 
 Works in VS Code, Jupyter, PyCharm, or a plain terminal. No job submission, no CLI commands, no ceremony.
 
+Your function returns whatever it normally returns — a dict, an int, a list, a numpy array, a torch tensor — and you get that same object back:
+
+```python
+@mesh
+def evaluate(seed):
+    import numpy as np
+    return {"loss": np.float32(0.12), "preds": np.arange(10)}
+
+out = evaluate(seed=1)      # {'loss': np.float32(0.12), 'preds': array([0, ..., 9])}
+```
+
 ---
 
 ## Jupyter notebooks
 
+Load the extension once, in its own cell:
+
 ```python
 %load_ext gpumesh
+```
 
+Then `%%mesh` as the **first line** of any cell wraps every function defined in that cell with `@mesh`:
+
+```python
 %%mesh
 def preprocess(chunk_id, rows):
     return {"chunk": chunk_id, "rows": rows * rows}
@@ -160,7 +178,14 @@ def preprocess(chunk_id, rows):
 results = preprocess.map([{"chunk_id": i, "rows": 100 + i} for i in range(6)])
 ```
 
-Like `%%time`, the cell's own output displays normally — the `%%mesh` magic just wraps every function in the cell with `@mesh`. Also available: `%mesh_devices`, `%mesh_status`, and `%mesh_connect URL TOKEN`.
+Like `%%time`, the cell's own output displays normally. Loading the extension also injects a bare `@mesh` decorator into the notebook namespace, so you can decorate individual functions instead of a whole cell.
+
+| Magic | What it does |
+|-------|--------------|
+| `%%mesh` | Wrap every function in this cell with `@mesh` |
+| `%mesh_devices` | List the devices in the pool |
+| `%mesh_status` | Show the saved connection and device count |
+| `%mesh_connect URL TOKEN` | Connect to a coordinator from inside the notebook |
 
 ---
 
@@ -223,7 +248,8 @@ results = mesh.distribute(
 ```python
 workers = mesh.workers()        # [{'id', 'device', 'device_name', 'hostname', 'score', 'alive'}]
 devices = mesh.devices()        # unified pool view
-count   = mesh.device_count()   # total alive GPUs
+count   = mesh.device_count()   # alive machines contributing compute (GPU or CPU)
+gpus    = mesh.gpu_count()      # alive GPUs only
 total   = mesh.total_score()    # combined compute score
 best    = mesh.auto_device()    # most powerful alive device
 ```
@@ -289,11 +315,14 @@ def train(lr, epochs):
 
 | Scenario | What happens |
 |----------|--------------|
-| `func(x)` | Runs on the best LOCAL device (CPU/GPU) |
+| `func(x)`, workers alive | Runs as a single task on one mesh worker |
+| `func(x)`, no workers | Runs on the best LOCAL device (CPU/GPU) |
 | `func.map([...])` | Spreads across ALL mesh devices |
 | Mesh unreachable | Falls back to LOCAL execution silently |
 | `GPUMESH_LOCAL=1` | Forces local-only (no mesh) |
 | `GPUMESH_VERBOSE=1` | Prints which device handled each task |
+
+Either path returns the identical value, so switching between them never changes your results. Note that `gpumesh serve` joins your own machine to the pool by default, so a single call is dispatched through the mesh even when you are the only participant — pass `--no-self-worker` if you want it to stay purely local.
 
 ---
 
@@ -325,6 +354,8 @@ docker-compose up -d --scale worker=4   # scale workers
 ```
 
 **Ports:** `8732` (TCP API) and `48900/udp` (LAN discovery).
+
+> The container listens on **8732**, while `gpumesh serve` on the host defaults to **8000**. That is deliberate — the image pins an explicit port so published `docker run` and compose recipes stay stable. Both are just defaults: pass `--port` to use whatever you like, and make sure workers point at the same number the coordinator is listening on.
 
 ---
 
@@ -386,12 +417,16 @@ docker-compose up -d --scale worker=4   # scale workers
 |---------|--------|
 | Token authentication | All API requests |
 | Timing-safe comparison | HMAC `compare_digest` |
-| Rate limiting | 5 failures -> blocked |
+| Rate limiting | 5 failures -> 15 min IP lockout |
 | Process isolation | Tasks in subprocesses |
-| File permissions | 0o600 on token files |
-| Token hashing | SHA-256 + salt |
+| File permissions | 0o600 on the saved config (`~/.gpumesh/config.json`) |
+| Token hashing | SHA-256, in memory only — the token is never written to the database |
 
-> Workers execute code from the coordinator. Only share your URL and token with people you trust. gpumesh is designed for trusted networks (home labs, team clusters).
+> **Workers execute code sent by the coordinator.** Anyone holding your URL and token can run arbitrary code on every machine in your mesh. Only share them with people you trust, and treat the token like a password. gpumesh is built for trusted networks — home labs, lab benches, your own machines, a team you know. It is not a sandbox and is not designed to run untrusted code.
+>
+> Run the coordinator with `--safe-mode` to refuse function distribution and accept submitted scripts only.
+>
+> Traffic is **not encrypted** on a plain LAN. Use `--tailscale` or `--public` (ngrok) when the mesh crosses a network you do not control.
 
 ---
 
@@ -420,6 +455,9 @@ Each worker runs a benchmark on join and gets a 0–100 score:
 | Worker not showing up | Both on the same network? Try `gpumesh radar` |
 | `ModuleNotFoundError: torch` | `pip install gpumesh[gpu]` |
 | UDP broadcast not working | Use `gpumesh join URL` directly |
+| `ModuleNotFoundError` inside a task | Install that package on the **worker** too — gpumesh ships your code, not your environment |
+| `cannot send result of type ...` | Return plain data. Open files, sockets, locks and live GPU handles can't cross machines |
+| Results differ from a local run | They shouldn't — file an issue. Confirm with `GPUMESH_LOCAL=1 python your_script.py` |
 
 **Verbose logging:** `GPUMESH_VERBOSE=1 gpumesh serve` — **force local-only:** `GPUMESH_LOCAL=1 python my_script.py`
 
@@ -431,7 +469,7 @@ Each worker runs a benchmark on join and gets a 0–100 score:
 git clone https://github.com/Samurai007AK/gpumesh.git
 cd gpumesh
 pip install -e ".[dev]"
-pytest                 # 565 tests
+pytest                 # 590 tests
 python -m build        # build wheel + sdist
 ```
 
@@ -440,10 +478,14 @@ python -m build        # build wheel + sdist
 ## Limitations
 
 - Python only — tasks must be Python functions or scripts
+- Arguments and return values must be picklable. Anything tied to a live process — open files, sockets, locks, database handles, CUDA handles — cannot cross machines. Return plain data (numbers, arrays, tensors, DataFrames) instead
+- Every worker needs the imports your function uses already installed; gpumesh ships your code, not your environment
+- Workers should run the same Python minor version as the submitter — cloudpickle falls back to source when they differ, which does not cover every function
 - No GPU memory sharing — each task gets its own process
 - No model sharding — each task runs on one machine at a time
 - Single coordinator — single point of failure (use Tailscale for reliability)
 - No built-in encryption — use Tailscale for encrypted tunnels
+- Trusted networks only — workers run whatever code the coordinator sends
 
 ---
 

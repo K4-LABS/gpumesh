@@ -231,6 +231,90 @@ def deserialize_function(data: str):
         raise ValueError(f"Unknown serialization method: {method}")
 
 
+# -- task results ------------------------------------------------------------
+#
+# A task's return value travels: worker subprocess -> worker -> coordinator
+# (stored as JSON in SQLite) -> client. Only the middle hop constrains us: the
+# coordinator persists results as JSON, so whatever crosses it must be
+# JSON-encodable.
+#
+# Plain JSON is not enough. Real workloads return numpy scalars, arrays, torch
+# tensors and DataFrames, none of which json.dumps() accepts, and a bare
+# json.dumps() also cannot express "this function returned the integer 5"
+# without wrapping it in a dict and changing the value the caller sees.
+#
+# So every function result is wrapped in an envelope: JSON-encodable values
+# pass through verbatim, everything else is cloudpickled and base64'd. The
+# client unwraps it, so a function returns exactly the same object whether it
+# ran on the mesh or locally.
+#
+# NOTE: _function_subprocess.py deliberately duplicates the *encoding* half of
+# this. That helper runs as a standalone script with no gpumesh package on its
+# path, so it cannot import this module. Keep the two in sync.
+
+RESULT_ENVELOPE_KEY = "__gpumesh_result__"
+
+
+def encode_result(value) -> dict:
+    """Wrap a task's return value in a JSON-safe envelope.
+
+    JSON-encodable values are stored as-is; anything else is cloudpickled.
+    See :func:`decode_result` for the inverse.
+    """
+    import json
+
+    try:
+        json.dumps(value)
+    except (TypeError, ValueError):
+        pass
+    else:
+        return {RESULT_ENVELOPE_KEY: {"encoding": "json", "value": value}}
+
+    import cloudpickle
+
+    return {
+        RESULT_ENVELOPE_KEY: {
+            "encoding": "cloudpickle",
+            "value": base64.b64encode(cloudpickle.dumps(value)).decode("ascii"),
+        }
+    }
+
+
+def decode_result(payload):
+    """Unwrap a result envelope back into the original return value.
+
+    Anything that is not an envelope is returned unchanged, so script-based
+    tasks (which emit plain JSON) and results produced by older workers keep
+    working untouched.
+    """
+    if not isinstance(payload, dict):
+        return payload
+    envelope = payload.get(RESULT_ENVELOPE_KEY)
+    if not isinstance(envelope, dict):
+        return payload
+
+    if envelope.get("encoding") == "cloudpickle":
+        try:
+            import cloudpickle
+        except ImportError:
+            raise ImportError(
+                "This task returned a non-JSON object (e.g. a numpy array or "
+                "torch tensor), which requires cloudpickle to read back. "
+                "Install it with: pip install cloudpickle"
+            )
+        return cloudpickle.loads(base64.b64decode(envelope["value"]))
+
+    return envelope.get("value")
+
+
+def is_result_envelope(payload) -> bool:
+    """Return True if ``payload`` is a result envelope produced by a worker."""
+    return (
+        isinstance(payload, dict)
+        and isinstance(payload.get(RESULT_ENVELOPE_KEY), dict)
+    )
+
+
 def _callable_name(func) -> str:
     """Return a useful stable name for functions and callable objects."""
     return getattr(func, "__name__", type(func).__name__)

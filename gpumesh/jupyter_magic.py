@@ -8,7 +8,7 @@ Usage in Jupyter or IPython::
     def train(lr, epochs):
         return {"accuracy": 0.95}
 
-    train(lr=0.01, epochs=100)                      # single call — local
+    train(lr=0.01, epochs=100)                      # one worker (local if none)
     results = train.map([{"lr": 0.01}, {"lr": 0.05}])  # everywhere at once
 
     # %%mesh — a whole cell, like %%time: every function defined in the

@@ -2,6 +2,62 @@
 
 All notable changes to gpumesh are documented here.
 
+## [1.2.0] — 2026-08-10
+
+The theme of this release is **a mesh call behaves exactly like a local call**.
+Previously the same function could return a different value — or fail outright
+— depending on whether a worker happened to be connected.
+
+### Fixed
+- **Non-JSON return values failed the task.** Results crossed the wire as plain
+  JSON, so returning a numpy scalar, numpy array, torch tensor or DataFrame —
+  the most ordinary thing an ML function can do — failed with
+  `result not JSON-serializable`, three times over after retries. Results now
+  travel in an envelope (`serializer.encode_result`) that passes JSON values
+  through untouched and cloudpickles anything else.
+- **Mesh and local runs returned different shapes.** A function returning a
+  non-dict (`return a + b`, `return [1, 2, 3]`) came back wrapped as
+  `{"result": 5}` from the mesh but bare from a local run, so results silently
+  changed shape depending on whether a worker was alive. Both paths now return
+  exactly what the function returned.
+- **`%load_ext gpumesh` raised `AttributeError`.** The documented Jupyter magic
+  never worked: IPython looks up `load_ipython_extension` on the package, and
+  only `gpumesh.jupyter_magic` exposed it. Both hooks are now re-exported from
+  the package.
+- **Any command with `--url`/`--token` overwrote the saved connection.**
+  Resolving a connection is a read, but it persisted unconditionally, so one
+  mistyped URL on a read-only command (`gpumesh workers --url ...`) silently
+  destroyed a working saved connection. Only `serve`, `join`, `quickjoin` and
+  `setup` persist now.
+- **`mesh.device_count()` reported 0 on a CPU-only mesh** while `mesh.devices()`
+  listed live machines, because it counted GPUs. It now counts every alive
+  compute device; `mesh.gpu_count()` is the new GPU-only counter.
+- **Deterministic failures were retried three times.** A task raising
+  `ValueError` was re-run twice more to fail identically, tripling the error
+  output and the time to see it. Failures caused by the task's own code now
+  fail immediately; infrastructure failures keep the full retry budget.
+
+### Changed
+- **Mesh calls are roughly 4x faster to return.** A flat 2s worker lease poll
+  plus a 1s client poll put a ~2s floor under every call. Both now start fast
+  and back off, and the worker polls rapidly for a window after each task. A
+  single round trip measured 2.1s → 0.5s, `.map()` of 3 tasks 4.1s → 1.2s. Idle
+  workers settle back to a 1s poll.
+- `GPUMesh.distribute(poll_interval=...)` now defaults to adaptive polling.
+  Passing an explicit value still pins a fixed interval.
+- Failures that cannot be sent back report the value's *type* and how to fix it
+  instead of dumping an unreadable repr.
+- README corrected throughout: single-call routing now matches the code, the
+  security table no longer overstates token hashing, the Docker/host port
+  difference is explained, and serialization and environment constraints are
+  documented under Limitations and Troubleshooting.
+
+### Tests
+- 590 tests passing, up from 565 (25 new: result-envelope round trips
+  including numpy, non-dict and container returns over a live mesh, retry
+  classification, config-persistence safety, and package-level Jupyter hook
+  registration).
+
 ## [1.1.0] — 2026-08-08
 
 ### Fixed

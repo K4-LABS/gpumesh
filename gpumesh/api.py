@@ -34,6 +34,7 @@ from typing import Any, Callable
 
 from . import capability, sandbox, serializer, utils
 from gpumesh.ansi import safe_print, green, yellow, red, cyan, bold
+from .accelerate import POLL_BACKOFF, POLL_MAX_INTERVAL, POLL_MIN_INTERVAL
 from .worker import MeshClient
 
 
@@ -213,17 +214,19 @@ class GPUMesh:
         params: list[dict],
         name: str = "",
         timeout: float = 300.0,
-        poll_interval: float = 2.0,
+        poll_interval: float | None = None,
     ) -> list[dict]:
         """Distribute a function across all workers and collect results.
-        
+
         Args:
             function: The function to execute
             params: List of parameter dicts (each becomes one task)
             name: Optional job name
             timeout: Total timeout for the job (seconds)
-            poll_interval: How often to check for results
-            
+            poll_interval: Fixed seconds between status checks. Left unset,
+                polling starts fast and backs off, so short jobs return
+                promptly without long jobs hammering the coordinator.
+
         Returns:
             List of result dicts, one per param set
             
@@ -284,9 +287,18 @@ class GPUMesh:
             ) from exc
         job_id = resp["job_id"]
         
-        # Poll for completion
+        # Poll for completion, starting fast and backing off unless the caller
+        # pinned a fixed interval.
         tty = getattr(sys.stdout, "isatty", lambda: False)()
         start_time = time.time()
+        fixed_interval = poll_interval is not None
+        delay = poll_interval if fixed_interval else POLL_MIN_INTERVAL
+
+        def _next_delay(current: float) -> float:
+            if fixed_interval:
+                return current
+            return min(current * POLL_BACKOFF, POLL_MAX_INTERVAL)
+
         while True:
             try:
                 job = self.job_status(job_id)
@@ -294,16 +306,17 @@ class GPUMesh:
                 elapsed = time.time() - start_time
                 if elapsed > timeout:
                     raise TimeoutError(f"Job {job_id} timed out after {timeout}s") from exc
-                time.sleep(poll_interval)
+                time.sleep(delay)
+                delay = _next_delay(delay)
                 continue
-            
+
             if job["finished"]:
                 break
-            
+
             elapsed = time.time() - start_time
             if elapsed > timeout:
                 raise TimeoutError(f"Job {job_id} timed out after {timeout}s")
-            
+
             # Show progress only on a real TTY so piped/redirected output
             # stays clean and machine-readable.
             if tty:
@@ -312,28 +325,34 @@ class GPUMesh:
                 done = counts.get("done", 0) + counts.get("failed", 0)
                 safe_print(f"\r[distribute] {done}/{total} tasks finished ({counts})", end="", flush=True)
 
-            time.sleep(poll_interval)
+            time.sleep(delay)
+            delay = _next_delay(delay)
 
         if tty:
             safe_print()  # Newline after progress
         
-        # Collect results
+        # Collect results.
+        #
+        # Tasks come back in database row order, which is submission order, so
+        # results line up with ``params`` without re-sorting mixed success and
+        # failure records. Each successful result is a serializer envelope:
+        # strip the internal ordering key, then unwrap it so the caller gets
+        # exactly the object the function returned.
         results = []
         for task in job["tasks"]:
             if task["status"] == "done":
-                results.append(task["result"] if task["result"] is not None else {})
+                raw = task["result"]
+                if raw is None:
+                    results.append({})
+                    continue
+                if isinstance(raw, dict):
+                    raw.pop("_task_index", None)
+                results.append(serializer.decode_result(raw))
             elif task["status"] == "failed":
                 results.append({"_error": task.get("error", "unknown")})
             else:
                 results.append({"_error": "task did not complete"})
 
-        # Tasks are returned in database row order, which is submission order.
-        # Remove the worker's internal ordering key without re-sorting mixed
-        # success and failure records.
-        # Remove internal keys
-        for r in results:
-            r.pop("_task_index", None)
-        
         return results
     
     def job_status(self, job_id: str) -> dict:
@@ -456,7 +475,11 @@ class GPUMesh:
             raise GPUMeshError(f"Failed to list devices: {exc}") from exc
 
     def device_count(self) -> int:
-        """Return the total number of alive GPUs across all machines.
+        """Return the number of alive compute devices across all machines.
+
+        Counts every machine contributing compute, GPU or CPU, so it always
+        matches the length of the alive entries in :meth:`devices`. Use
+        :meth:`gpu_count` when you specifically need GPUs.
 
         Example:
             >>> mesh.device_count()
@@ -464,9 +487,25 @@ class GPUMesh:
         """
         try:
             resp = self._client.call("GET", "/api/devices")
-            return resp.get("total_gpus", 0)
+            return resp.get("alive_devices", 0)
         except (urllib.error.URLError, OSError) as exc:
             raise GPUMeshError(f"Failed to get device count: {exc}") from exc
+
+    def gpu_count(self) -> int:
+        """Return the number of alive GPUs (CUDA or MPS) across all machines.
+
+        CPU-only workers are excluded, so this is 0 on a mesh of laptops
+        without discrete GPUs even though :meth:`device_count` is not.
+
+        Example:
+            >>> mesh.gpu_count()
+            1
+        """
+        try:
+            resp = self._client.call("GET", "/api/devices")
+            return resp.get("total_gpus", 0)
+        except (urllib.error.URLError, OSError) as exc:
+            raise GPUMeshError(f"Failed to get GPU count: {exc}") from exc
 
     def total_score(self) -> float:
         """Return the total compute score across all alive devices.

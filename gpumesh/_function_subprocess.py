@@ -7,12 +7,43 @@ Protocol (binary):
   3. Execute func(**params)
   4. Write JSON result line to stdout (same contract as sandbox tasks)
   5. Exit 0 on success, 1 on error
+
+The result written in step 4 is a *result envelope* (see
+``gpumesh/serializer.py``): JSON-encodable return values are embedded
+directly, anything else (numpy arrays, torch tensors, DataFrames, ...) is
+cloudpickled and base64'd so it survives the JSON-only hop through the
+coordinator. This module cannot import gpumesh.serializer — it runs as a
+standalone script with no package on its path — so the encoding half is
+duplicated here. Keep ``_encode_result`` in sync with
+``serializer.encode_result``.
 """
 
+import base64
 import json
 import os
 import sys
 import traceback
+
+RESULT_ENVELOPE_KEY = "__gpumesh_result__"
+
+
+def _encode_result(value):
+    """Wrap a return value in a JSON-safe envelope (see module docstring)."""
+    try:
+        json.dumps(value)
+    except (TypeError, ValueError):
+        pass
+    else:
+        return {RESULT_ENVELOPE_KEY: {"encoding": "json", "value": value}}
+
+    import cloudpickle
+
+    return {
+        RESULT_ENVELOPE_KEY: {
+            "encoding": "cloudpickle",
+            "value": base64.b64encode(cloudpickle.dumps(value)).decode("ascii"),
+        }
+    }
 
 
 def _main():
@@ -39,22 +70,30 @@ def _main():
     # --- execute ---------------------------------------------------------
     try:
         result = func(**params)
-        if not isinstance(result, dict):
-            result = {"result": result}
     except Exception as exc:
         tb = traceback.format_exc()
         print(json.dumps({
             "error": f"{type(exc).__name__}: {exc}",
             "traceback": tb,
+            "user_error": True,  # the task's own code raised — do not retry
         }))
         sys.exit(1)
 
     # --- write result as JSON on stdout ----------------------------------
     try:
-        print(json.dumps(result))
-    except (TypeError, ValueError):
+        print(json.dumps(_encode_result(result)))
+    except Exception as exc:
+        # Nothing could encode the value — not even cloudpickle. Report the
+        # type rather than the value: repr() of a huge array or a live handle
+        # is useless in a log and can itself raise.
         print(json.dumps({
-            "error": f"helper: result not JSON-serializable: {type(result).__name__}: {result}",
+            "error": (
+                f"cannot send result of type {type(result).__name__!r} back to "
+                f"the coordinator: {type(exc).__name__}: {exc}. Return a "
+                f"picklable value (open files, sockets, locks and live GPU "
+                f"handles cannot cross process boundaries)."
+            ),
+            "user_error": True,  # a different return value is needed, not a retry
         }))
         sys.exit(1)
     sys.exit(0)

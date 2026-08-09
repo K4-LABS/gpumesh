@@ -98,6 +98,28 @@ class TestLoadExtension:
         load_ipython_extension(shell)  # must not raise
         assert callable(shell.user_ns.get("mesh")), "@mesh was not injected"
 
+    def test_hook_is_reachable_on_the_package(self):
+        """``%load_ext gpumesh`` looks the hook up on the package itself.
+
+        Importing it from gpumesh.jupyter_magic is not enough — IPython does
+        ``getattr(gpumesh, "load_ipython_extension")``, so if only the
+        submodule exposes it the documented magic fails with AttributeError.
+        """
+        import gpumesh
+
+        assert callable(getattr(gpumesh, "load_ipython_extension", None))
+        assert callable(getattr(gpumesh, "unload_ipython_extension", None))
+
+    def test_package_level_hook_registers_every_magic(self):
+        import gpumesh
+
+        shell = FakeShell()
+        gpumesh.load_ipython_extension(shell)
+
+        assert "mesh" in shell.magics.get("cell", [])
+        for name in ("mesh_devices", "mesh_status", "mesh_connect"):
+            assert name in shell.magics.get("line", [])
+
     def test_unload_removes_mesh(self):
         from gpumesh.jupyter_magic import load_ipython_extension, unload_ipython_extension
 
