@@ -2,7 +2,7 @@ from __future__ import annotations
 
 """gpumesh - distributed compute sharing over a mesh of volunteer machines."""
 
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 
 from .api import GPUMesh  # noqa: F401
 from .accelerate import accelerate, install as accelerate_install  # noqa: F401
@@ -12,7 +12,15 @@ import importlib as _importlib
 import os as _os
 import sys as _sys
 
-__all__ = ["GPUMesh", "accelerate", "accelerate_install", "mesh", "torch"]
+__all__ = [
+    "GPUMesh",
+    "accelerate",
+    "accelerate_install",
+    "mesh",
+    "torch",
+    "load_ipython_extension",
+    "unload_ipython_extension",
+]
 
 # Bind the ``mesh`` singleton EAGERLY as a real attribute.
 #
@@ -35,6 +43,13 @@ def __getattr__(name: str):
         module = _importlib.import_module(".torch", __name__)
         globals()[name] = module
         return module
+    # ``%load_ext gpumesh`` makes IPython look for these on the package
+    # itself, not on the submodule, so they have to be reachable from here.
+    if name in ("load_ipython_extension", "unload_ipython_extension"):
+        magic = _importlib.import_module(".jupyter_magic", __name__)
+        func = getattr(magic, name)
+        globals()[name] = func
+        return func
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 _FLAG_PATH = _os.path.join(_os.path.expanduser("~"), ".gpumesh_welcomed")

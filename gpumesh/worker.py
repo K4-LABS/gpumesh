@@ -31,6 +31,15 @@ from gpumesh.ansi import safe_print, green, yellow, red, cyan, bold, dim, device
 
 HEARTBEAT_INTERVAL = 10.0
 POLL_INTERVAL = 2.0
+# Adaptive lease polling. A flat 2s poll put a two-second floor under every
+# mesh call, so an interactive @mesh function felt slower than running it
+# locally. After each task the worker polls rapidly for a short window (users
+# almost always submit again immediately), then backs off to IDLE_POLL_INTERVAL
+# so a worker left running overnight stays nearly free.
+BUSY_POLL_INTERVAL = 0.1
+IDLE_POLL_INTERVAL = 1.0
+BUSY_POLL_WINDOW = 10.0  # seconds of fast polling after the last task
+POLL_BACKOFF = 1.5
 REBENCHMARK_INTERVAL = 600.0  # re-benchmark every 10 minutes
 GRACEFUL_SHUTDOWN_TIMEOUT = 30.0  # seconds to wait for current task on SIGTERM
 # NOTE: there are deliberately NO "give up and exit" thresholds here.
@@ -179,6 +188,7 @@ def _run_function_task(payload: dict, device: str, timeout: float,
         stdout_text = (stdout_bytes or b"").decode("utf-8", errors="replace")
         # Try to extract structured error from helper output (last JSON line)
         error_msg = None
+        user_error = False
         for line in reversed(stdout_text.strip().splitlines()):
             line = line.strip()
             if not line:
@@ -187,6 +197,9 @@ def _run_function_task(payload: dict, device: str, timeout: float,
                 parsed = json.loads(line)
                 if isinstance(parsed, dict) and "error" in parsed:
                     error_msg = parsed["error"]
+                    # The helper sets this when the task's own code is at
+                    # fault, so the coordinator can skip pointless retries.
+                    user_error = bool(parsed.get("user_error"))
                     tb = parsed.get("traceback", "")
                     break
             except (json.JSONDecodeError, ValueError):
@@ -195,7 +208,9 @@ def _run_function_task(payload: dict, device: str, timeout: float,
             # Fallback: last few lines of stderr
             tail = stderr_text.strip().splitlines()[-5:]
             error_msg = " | ".join(tail) if tail else f"exit code {proc.returncode}"
-        raise sandbox.TaskError(f"function subprocess failed: {error_msg}")
+        raise sandbox.TaskError(
+            f"function subprocess failed: {error_msg}", user_error=user_error
+        )
 
     # Parse result from stdout (last JSON line, same contract as sandbox)
     stdout_text = (stdout_bytes or b"").decode("utf-8", errors="replace")
@@ -210,7 +225,9 @@ def _run_function_task(payload: dict, device: str, timeout: float,
             f"function subprocess output is not JSON: {lines[-1][:200]}"
         )
 
-    # Inject task index for result ordering (subprocess doesn't know it)
+    # Inject task index for result ordering (subprocess doesn't know it).
+    # This rides alongside the result envelope and is stripped by the client
+    # before the envelope is unwrapped, so it never reaches user code.
     if isinstance(result, dict):
         result["_task_index"] = task_index
 
@@ -482,6 +499,9 @@ def run_worker(url: str, token: str, task_timeout: float = 240.0,
 
     done = failed = 0
     backoff = POLL_INTERVAL
+    # Fast right after a task, slow when idle — see BUSY_POLL_INTERVAL above.
+    lease_delay = BUSY_POLL_INTERVAL
+    last_task_at = time.monotonic()
     unreachable_notice_shown = False
     try:
         while not stop.is_set():
@@ -536,10 +556,16 @@ def run_worker(url: str, token: str, task_timeout: float = 240.0,
             backoff = POLL_INTERVAL
             unreachable_notice_shown = False
             if task is None:
-                time.sleep(POLL_INTERVAL)
+                # Nothing queued. Stay responsive for a short window after the
+                # last task, then ease off so an idle worker costs nothing.
+                if time.monotonic() - last_task_at > BUSY_POLL_WINDOW:
+                    lease_delay = min(lease_delay * POLL_BACKOFF, IDLE_POLL_INTERVAL)
+                stop.wait(lease_delay)
                 continue
-            # Only reset backoff when we actually get work (not on empty polls)
+            # Got work: reset both the network backoff and the poll cadence.
             backoff = POLL_INTERVAL
+            lease_delay = BUSY_POLL_INTERVAL
+            last_task_at = time.monotonic()
 
             safe_print(f"{bold(cyan('[worker]'))} running task {bold(task['task_id'])} "
                   f"(cost={yellow(str(task['cost']))})")
@@ -587,6 +613,9 @@ def run_worker(url: str, token: str, task_timeout: float = 240.0,
                     mesh.call("POST", "/api/result", {
                         "task_id": task["task_id"], "worker_id": _state["worker_id"],
                         "ok": False, "error": str(e),
+                        # Deterministic failures (the task raised) are marked so
+                        # the coordinator fails them at once instead of retrying.
+                        "user_error": getattr(e, "user_error", False),
                         "diagnostics": diag,
                     })
                 except (urllib.error.URLError, OSError) as submit_err:
@@ -611,6 +640,9 @@ def run_worker(url: str, token: str, task_timeout: float = 240.0,
             finally:
                 with _task_id_lock:
                     _current_task_id[0] = None
+                # Count the fast-poll window from when the task finished, so a
+                # long task is still followed by a responsive stretch.
+                last_task_at = time.monotonic()
 
         # Post-loop: graceful shutdown status report
         if _shutdown_grace_start[0] is not None:

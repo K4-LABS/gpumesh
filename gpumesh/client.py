@@ -20,6 +20,30 @@ def _esc(code: str) -> str:
     return f"\033[{code}" if _ANSI else ""
 
 
+def _format_result(raw, compact: bool = False) -> str:
+    """Render a task result for display.
+
+    Function results arrive wrapped in a serializer envelope, and may hold
+    objects (numpy arrays, tensors) that JSON cannot express. Unwrap first,
+    then fall back to repr() for anything json.dumps() rejects, so the user
+    sees their actual value instead of a base64 blob.
+    """
+    from . import serializer
+
+    if isinstance(raw, dict):
+        raw = dict(raw)  # don't mutate the caller's job dict
+        raw.pop("_task_index", None)
+    try:
+        value = serializer.decode_result(raw)
+    except Exception:
+        value = raw
+    separators = (",", ":") if compact else None
+    try:
+        return json.dumps(value, separators=separators)
+    except (TypeError, ValueError):
+        return repr(value)
+
+
 def submit_job(url: str, token: str, script_path: str, payloads_path: str,
                name: str = "") -> str:
     try:
@@ -241,7 +265,7 @@ def wait_for_job(url: str, token: str, job_id: str, poll: float = 2.0, timeout: 
         results = []
         for t in job.get("tasks", []):
             if t["status"] == "done" and t.get("result"):
-                text = json.dumps(t["result"], separators=(",", ":"))
+                text = _format_result(t["result"], compact=True)
                 if len(text) > result_truncate:
                     text = text[:result_truncate - 3] + "..."
                 results.append(text)
@@ -301,6 +325,6 @@ def print_job(job: dict):
         worker = f"  {_esc('36m')}worker={_esc('0m')}{t['worker_id']}" if t.get("worker_id") else ""
         safe_print(f"  {icon} task {t['id']:<12} [{s}]  cost={t['cost']}{worker}")
         if t["result"] is not None:
-            safe_print(f"    result: {json.dumps(t['result'])}")
+            safe_print(f"    result: {_format_result(t['result'])}")
         if t.get("error"):
             safe_print(f"    {_esc('31m')}error: {t['error']}{_esc('0m')}")

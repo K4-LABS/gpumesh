@@ -143,11 +143,18 @@ def warn_stale(config: dict, threshold_seconds: int = _STALE_WARN_SECONDS):
         ))
 
 
-def get_connection(url: str | None, token: str | None) -> tuple[str, str]:
+def get_connection(url: str | None, token: str | None,
+                   persist: bool = False) -> tuple[str, str]:
     """Resolve connection from args, env vars, or saved config.
 
     Priority: explicit args > env vars > saved config.
-    Returns (url, token). Raises SystemExit if not resolved.
+    Returns (url, token), or ("", "") when nothing can be resolved.
+
+    ``persist`` controls whether the resolved values overwrite the saved
+    config. It defaults to False: resolving a connection is a read, and a
+    one-off ``--url``/``--token`` (or a typo in one) must not destroy the
+    connection the user established with ``join``/``serve``. Only commands
+    that deliberately establish a connection pass ``persist=True``.
     """
     saved = load_connection() or {}
     resolved_url = (
@@ -169,7 +176,7 @@ def get_connection(url: str | None, token: str | None) -> tuple[str, str]:
             and saved.get("url")):
         warn_stale(saved)
 
-    if resolved_url and resolved_token:
+    if persist and resolved_url and resolved_token:
         save_connection(resolved_url, resolved_token)
 
     return resolved_url, resolved_token

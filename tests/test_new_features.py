@@ -457,8 +457,11 @@ class TestAPIDevices:
             "hostname": "c1", "device": "cpu", "score": 5.0,
         })
 
-        count = api.device_count()
-        assert count == 2  # Only cuda devices
+        # device_count() counts every alive machine contributing compute, so
+        # it matches devices(); gpu_count() is the GPU-only view.
+        assert api.device_count() == 3
+        assert api.gpu_count() == 2
+        assert len([d for d in api.devices() if d["status"] == "alive"]) == 3
 
     def test_total_score_method(self, mesh):
         """Returns score total."""

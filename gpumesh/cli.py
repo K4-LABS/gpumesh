@@ -34,12 +34,18 @@ from .ansi import (safe_print, bold, cyan, green, yellow, red, dim, device_icon,
 from .logging_config import setup_logging
 
 
-def _resolve_conn(args) -> tuple[str, str]:
-    """Resolve URL and token from args, env vars, or saved config."""
+def _resolve_conn(args, persist: bool = False) -> tuple[str, str]:
+    """Resolve URL and token from args, env vars, or saved config.
+
+    ``persist`` is only set by commands that establish a connection. Query
+    commands (status, workers, devices, ...) must not rewrite the saved
+    config: a single mistyped --url would otherwise silently replace a
+    working connection.
+    """
     url = getattr(args, "url", "") or ""
     token = getattr(args, "token", "") or ""
     return connection_manager.get_connection(
-        url or None, token or None
+        url or None, token or None, persist=persist
     )
 
 
@@ -361,8 +367,6 @@ def cmd_submit(args):
         print(red("[ERROR] No connection found."))
         print(dim("   Run with --url and --token, or connect first with 'gpumesh join'"))
         sys.exit(1)
-    # Save for future use
-    connection_manager.save_connection(url, token)
 
     job_id = client.submit_job(url, token, args.script, args.payloads, name=args.name)
     print(green(f"[OK] Submitted job {bold(job_id)}"))

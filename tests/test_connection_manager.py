@@ -111,11 +111,31 @@ class TestGetConnection:
         assert url == "http://explicit:8000"
         assert token == "explicit"
 
-    def test_explicit_args_save_to_config(self, isolated_config):
-        cm.get_connection("http://explicit:8000", "explicit")
+    def test_explicit_args_save_to_config_when_persisting(self, isolated_config):
+        cm.get_connection("http://explicit:8000", "explicit", persist=True)
         data = json.loads(isolated_config.read_text())
         assert data["url"] == "http://explicit:8000"
         assert data["token"] == "explicit"
+
+    def test_explicit_args_do_not_save_by_default(self, isolated_config):
+        """Resolving a connection is a read — it must not overwrite the config.
+
+        A mistyped --url on a query command previously replaced a working
+        saved connection, silently breaking every later command.
+        """
+        cm.save_connection("http://good:8000", "goodtoken")
+        cm.get_connection("http://typo:9999", "wrongtoken")
+        data = json.loads(isolated_config.read_text())
+        assert data["url"] == "http://good:8000"
+        assert data["token"] == "goodtoken"
+
+    def test_env_vars_do_not_save_by_default(self, isolated_config, monkeypatch):
+        cm.save_connection("http://good:8000", "goodtoken")
+        monkeypatch.setenv("GPUMESH_URL", "http://env:8000")
+        monkeypatch.setenv("GPUMESH_TOKEN", "envtoken")
+        cm.get_connection(None, None)
+        data = json.loads(isolated_config.read_text())
+        assert data["url"] == "http://good:8000"
 
     def test_env_vars_fallback(self, isolated_config, monkeypatch):
         monkeypatch.setenv("GPUMESH_URL", "http://env:8000")
@@ -124,10 +144,10 @@ class TestGetConnection:
         assert url == "http://env:8000"
         assert token == "envtoken"
 
-    def test_env_vars_save_to_config(self, isolated_config, monkeypatch):
+    def test_env_vars_save_to_config_when_persisting(self, isolated_config, monkeypatch):
         monkeypatch.setenv("GPUMESH_URL", "http://env:8000")
         monkeypatch.setenv("GPUMESH_TOKEN", "envtoken")
-        cm.get_connection(None, None)
+        cm.get_connection(None, None, persist=True)
         data = json.loads(isolated_config.read_text())
         assert data["url"] == "http://env:8000"
 

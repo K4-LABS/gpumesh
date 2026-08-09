@@ -16,7 +16,7 @@ FROM python:3.11-slim
 # Labels for Docker Hub
 LABEL maintainer="samurai007ak"
 LABEL description="Borrow your friends' GPUs: a distributed compute mesh in pure Python"
-LABEL version="1.1.0"
+LABEL version="1.2.0"
 LABEL org.opencontainers.image.source="https://github.com/Samurai007AK/gpumesh"
 LABEL org.opencontainers.image.documentation="https://github.com/Samurai007AK/gpumesh#readme"
 LABEL org.opencontainers.image.licenses="MIT"
