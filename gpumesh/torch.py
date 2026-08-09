@@ -137,9 +137,10 @@ def device_count(mesh: GPUMesh) -> int:
     """Return the mesh's total alive GPU inventory count.
 
     This includes remote GPUs and therefore is not the number of devices that
-    can be passed to local PyTorch APIs.
+    can be passed to local PyTorch APIs. CPU-only workers are not counted —
+    use ``mesh.device_count()`` for every contributing machine.
     """
-    return mesh.device_count()
+    return mesh.gpu_count()
 
 
 def setup_torch(mesh: GPUMesh = None, min_memory_mb: float = 0) -> str:

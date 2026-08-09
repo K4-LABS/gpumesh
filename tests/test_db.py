@@ -104,6 +104,38 @@ def test_complete_task_failure_requeues_until_max_attempts(db):
     assert db.lease_task(wid) is None
 
 
+def test_user_error_fails_immediately_without_retrying(db):
+    """A task whose own code raised is deterministic — don't burn retries.
+
+    Re-running it produces the identical failure, so retrying only delays the
+    error and triples the noise the user sees.
+    """
+    wid = db.register_worker("a", "cpu", 1.0)
+    job_id = db.create_job("j", "s", [{"cost": 1}])
+    task = db.lease_task(wid)
+
+    db.complete_task(task["task_id"], wid, False,
+                     error="ValueError: bad input", user_error=True)
+
+    job = db.job_status(job_id)
+    assert job["tasks"][0]["status"] == "failed"
+    assert job["tasks"][0]["attempts"] == 1
+    assert db.lease_task(wid) is None
+
+
+def test_infrastructure_error_still_retries(db):
+    """Failures that aren't the task's fault keep the full retry budget."""
+    wid = db.register_worker("a", "cpu", 1.0)
+    job_id = db.create_job("j", "s", [{"cost": 1}])
+    task = db.lease_task(wid)
+
+    db.complete_task(task["task_id"], wid, False,
+                     error="connection reset", user_error=False)
+
+    assert db.job_status(job_id)["tasks"][0]["status"] == "pending"
+    assert db.lease_task(wid) is not None
+
+
 def test_complete_task_wrong_worker_rejected(db):
     w1 = db.register_worker("a", "cpu", 1.0)
     w2 = db.register_worker("b", "cpu", 1.0)

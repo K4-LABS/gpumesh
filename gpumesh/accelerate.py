@@ -58,6 +58,13 @@ from . import capability
 from gpumesh.ansi import safe_print, green, yellow, red, bold, dim
 
 
+# Adaptive polling: check often at first so short tasks return quickly, then
+# back off so long-running ones don't hammer the coordinator.
+POLL_MIN_INTERVAL = 0.05
+POLL_MAX_INTERVAL = 1.0
+POLL_BACKOFF = 1.5
+
+
 class _MeshUnavailable(Exception):
     """Raised when the mesh cannot accept tasks (unreachable, no workers, etc)."""
     pass
@@ -248,14 +255,22 @@ class AcceleratedFunction:
             safe_print(green(f"[accelerate] submitted to mesh: job={job_id}, "
                   f"workers={len(alive)}"))
 
-        # Poll for result
+        # Poll for the result, starting fast and backing off.
+        #
+        # A fixed one-second poll put a ~2s floor under every mesh call, which
+        # dwarfs the runtime of a short function and made the mesh feel slower
+        # than running locally. Short functions now return in well under a
+        # second, while long ones settle to a slow poll that costs the
+        # coordinator almost nothing.
         timeout = self._timeout or 300.0
         start = _time.time()
+        delay = POLL_MIN_INTERVAL
         while _time.time() - start < timeout:
             try:
                 status = self._mesh.status(job_id)
             except Exception:
-                _time.sleep(1.0)
+                _time.sleep(delay)
+                delay = min(delay * POLL_BACKOFF, POLL_MAX_INTERVAL)
                 continue
 
             if status.get("finished"):
@@ -263,19 +278,31 @@ class AcceleratedFunction:
                 if tasks:
                     t = tasks[0]
                     if t["status"] == "done":
-                        result = t.get("result") or {}
-                        # Remove internal keys
-                        result.pop("_task_index", None)
+                        from . import serializer
+
+                        raw = t.get("result")
+                        if isinstance(raw, dict):
+                            # Internal ordering key; never reaches user code.
+                            raw.pop("_task_index", None)
+                        # Unwrap the envelope so a mesh call returns exactly
+                        # what a local call would have returned.
+                        result = {} if raw is None else serializer.decode_result(raw)
                         if os.environ.get("GPUMESH_VERBOSE") == "1":
                             safe_print(green(f"[accelerate] mesh result: {result}"))
                         return result
-                    elif t["status"] == "failed":
-                        raise RuntimeError(
-                            f"mesh task failed: {t.get('error', 'unknown')}"
-                        )
-                break
+                    raise RuntimeError(
+                        f"mesh task failed: {t.get('error') or t['status']}"
+                    )
+                # A finished job with no tasks means the job record was lost
+                # (coordinator restarted with a fresh database, say). Report
+                # that rather than blocking until the timeout expires.
+                raise RuntimeError(
+                    f"mesh job {job_id} finished with no tasks — the "
+                    f"coordinator may have restarted with a fresh database"
+                )
 
-            _time.sleep(1.0)
+            _time.sleep(delay)
+            delay = min(delay * POLL_BACKOFF, POLL_MAX_INTERVAL)
 
         raise TimeoutError(
             f"mesh task did not complete within {timeout}s"

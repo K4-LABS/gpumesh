@@ -597,7 +597,15 @@ class Database:
 
     def complete_task(self, task_id: str, worker_id: str, ok: bool,
                       result=None, error: str = "",
-                      elapsed: float | None = None) -> bool:
+                      elapsed: float | None = None,
+                      user_error: bool = False) -> bool:
+        """Record a task outcome.
+
+        ``user_error`` marks a deterministic failure (the task's own code
+        raised, or returned something unsendable). Re-running it would fail
+        identically, so it is failed immediately rather than consuming the
+        retry budget — retries exist for flaky infrastructure, not for bugs.
+        """
         with self._lock, self._conn:
             if ok:
                 cur = self._conn.execute(
@@ -615,7 +623,7 @@ class Database:
                 row = self._conn.execute(
                     "SELECT attempts FROM tasks WHERE id = ?", (task_id,)
                 ).fetchone()
-                final = row is not None and row[0] >= MAX_ATTEMPTS
+                final = user_error or (row is not None and row[0] >= MAX_ATTEMPTS)
                 cur = self._conn.execute(
                     "UPDATE tasks SET status = ?, error = ?, worker_id = NULL"
                     " WHERE id = ? AND worker_id = ? AND status = 'running'",

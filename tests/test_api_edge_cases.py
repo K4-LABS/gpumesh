@@ -268,7 +268,7 @@ class TestDistributeEdgeCases:
         assert "_error" in results[0]
 
     def test_function_returns_non_dict(self, mesh_with_worker):
-        """Function returning non-dict is wrapped in {"result": ...}."""
+        """A non-dict return arrives unchanged — same as calling it locally."""
         def simple(x):
             return x * 2
 
@@ -279,10 +279,10 @@ class TestDistributeEdgeCases:
         )
 
         assert len(results) == 1
-        assert results[0]["result"] == 10
+        assert results[0] == 10
 
     def test_function_returns_none(self, mesh_with_worker):
-        """Function returning None is wrapped in {"result": None}."""
+        """A function returning None returns None, not a wrapper dict."""
         def noop(x):
             return None
 
@@ -293,7 +293,43 @@ class TestDistributeEdgeCases:
         )
 
         assert len(results) == 1
-        assert results[0]["result"] is None
+        assert results[0] is None
+
+    def test_function_returns_list(self, mesh_with_worker):
+        """Container returns keep their type across the mesh."""
+        def make_list(n):
+            return list(range(n))
+
+        results = mesh_with_worker.distribute(
+            function=make_list,
+            params=[{"n": 4}],
+            timeout=30,
+        )
+
+        assert results == [[0, 1, 2, 3]]
+
+    def test_function_returns_non_json_object(self, mesh_with_worker):
+        """Values JSON cannot express still survive the round trip.
+
+        Real workloads return numpy scalars, arrays and tensors; those used to
+        fail the task outright because results crossed the wire as plain JSON.
+        """
+        pytest.importorskip("numpy")
+
+        def compute(x):
+            import numpy as np
+            return {"loss": np.float32(x) * 2, "arr": np.arange(3)}
+
+        results = mesh_with_worker.distribute(
+            function=compute,
+            params=[{"x": 1.5}],
+            timeout=30,
+        )
+
+        import numpy as np
+        assert len(results) == 1
+        assert results[0]["loss"] == np.float32(3.0)
+        assert list(results[0]["arr"]) == [0, 1, 2]
 
     def test_function_key_error(self, mesh_with_worker):
         """Function accessing missing key raises KeyError."""

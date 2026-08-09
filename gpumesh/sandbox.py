@@ -17,7 +17,19 @@ import tempfile
 
 
 class TaskError(Exception):
-    pass
+    """A task failed.
+
+    ``user_error`` marks failures caused by the task's own code (it raised,
+    or returned something that cannot be sent back). Those are deterministic:
+    re-running the task produces the same failure, so the coordinator fails
+    them immediately instead of burning the retry budget. Infrastructure
+    failures (timeouts, killed workers, network drops) leave it False and
+    stay retryable.
+    """
+
+    def __init__(self, *args, user_error: bool = False):
+        super().__init__(*args)
+        self.user_error = user_error
 
 
 def _posix_limits(cpu_seconds: int):

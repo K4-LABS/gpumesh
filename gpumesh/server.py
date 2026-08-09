@@ -203,6 +203,7 @@ class CoordinatorHandler(BaseHTTPRequestHandler):
                     result=body.get("result"),
                     error=body.get("error", ""),
                     elapsed=body.get("elapsed"),
+                    user_error=bool(body.get("user_error", False)),
                 )
                 self._send(200 if ok else 409, {"ok": ok})
 
