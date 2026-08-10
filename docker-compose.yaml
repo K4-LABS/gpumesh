@@ -5,9 +5,13 @@ services:
       - "${GPUMESH_PORT:-8732}:8732"
       - "48900:48900/udp"
     environment:
-      - GPUMESH_TOKEN=${GPUMESH_TOKEN:-}
       - GPUMESH_COLOR=1
-    command: serve --port 8732 --color
+      # Set to the host's LAN IP when workers outside this network must join.
+      - GPUMESH_HOST_IP=${GPUMESH_HOST_IP:-}
+    # `gpumesh serve` does not read GPUMESH_TOKEN, so the token is passed
+    # explicitly. Without it the coordinator generates a random token and no
+    # worker can authenticate.
+    command: serve --port 8732 --token ${GPUMESH_TOKEN:?set GPUMESH_TOKEN} --color
     volumes:
       - gpumesh_data:/root/.gpumesh
     healthcheck:
@@ -22,10 +26,11 @@ services:
       coordinator:
         condition: service_healthy
     environment:
-      - GPUMESH_URL=http://coordinator:8732
-      - GPUMESH_TOKEN=${GPUMESH_TOKEN:-}
+      - GPUMESH_TOKEN=${GPUMESH_TOKEN:?set GPUMESH_TOKEN}
       - GPUMESH_COLOR=1
-    command: join --color
+    # The URL is a required positional argument of `gpumesh join`; only the
+    # token falls back to the environment.
+    command: join http://coordinator:8732 --color
     deploy:
       replicas: ${WORKER_REPLICAS:-2}
     restart: unless-stopped

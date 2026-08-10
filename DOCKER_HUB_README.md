@@ -1,4 +1,4 @@
-# 🖥️ gpumesh — Borrow Your Friends' GPUs
+# gpumesh — Borrow Your Friends' GPUs
 
 > *Like Bluetooth, but for your GPUs*
 
@@ -7,124 +7,126 @@
 [![License](https://img.shields.io/pypi/l/gpumesh.svg)](https://github.com/Samurai007AK/gpumesh/blob/main/LICENSE)
 [![Docker](https://img.shields.io/badge/docker-ready-2496ED?logo=docker&logoColor=white)](https://hub.docker.com/r/samurai007ak/gpumesh)
 
----
-
 ```
-  ╔═══════════════════════════════════════════════════════════════╗
-  ║              🖥️  gpumesh — GPU Mesh Network                  ║
-  ║        "like Bluetooth, but for your GPUs"                    ║
-  ╚═══════════════════════════════════════════════════════════════╝
-
-         ┌─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┐
-         │          NETWORK TRAFFIC FLOW                │
-         │                                             │
-         │   ┌──────────┐     ┌──────────┐             │
-         │   │ RTX 4090 │◄───►│ RTX 3080 │             │
-         │   │  Server  │     │  Laptop  │             │
-         │   │120.5 G/s │     │ 85.2 G/s │             │
-         │   └────┬─────┘     └────┬─────┘             │
-         │        │                │                    │
-         │   ┌────▼────────────────▼─────┐              │
-         │   │        T4 (12.0)          │              │
-         │   │      running tasks        │              │
-         │   └───────────────────────────┘              │
-         │                                             │
-         │   >>> results collected automatically       │
-         └─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┘
+   ╔════════════════════════════════════════════════════════╗
+   ║   gpumesh — one compute pool out of many machines      ║
+   ║   "like Bluetooth, but for your GPUs"                  ║
+   ╚════════════════════════════════════════════════════════╝
 ```
 
----
+**gpumesh** turns multiple machines into one compute pool. Start a **coordinator** on one machine, join **workers** from other machines, and run code across all of them as if they were one device.
 
-## 🚀 What is gpumesh?
-
-**gpumesh** turns multiple machines into a single, unified GPU compute pool. Start a **coordinator** on one machine, join **workers** from other machines (laptops, desktops, servers — anything with Python), and run code across all of them as if they were one device.
-
-### 💡 Use Cases
-
-| Use Case | Description |
-|----------|-------------|
-| 🔬 **Hyperparameter Search** | Sweep across multiple GPUs in parallel |
-| 📊 **Data Preprocessing** | Shard heavy workloads across machines |
-| 🧠 **Model Training** | Pool consumer GPUs for serious compute |
-| ⚡ **Parallel Workloads** | Any embarrassingly parallel task |
+- **Source and full docs:** [github.com/Samurai007AK/gpumesh](https://github.com/Samurai007AK/gpumesh)
+- **Python package:** [pypi.org/project/gpumesh](https://pypi.org/project/gpumesh/)
 
 ---
 
-## ⚡ Quick Start (30 seconds)
+## Read this before you start: the image is CPU-only
 
-### 1️⃣ Start a Coordinator
+This image is built `FROM python:3.11-slim` and installs gpumesh **without** the `gpu` extra. That means:
+
+- **No CUDA runtime and no `torch` inside the container.** Adding `--gpus all` gives the container a GPU device, but nothing in the image can use it.
+- A containerized worker is detected as **CPU-only** and benchmarks with a deliberately slow pure-Python fallback, so it scores near zero and the scheduler will only send it the lightest tasks.
+
+The image is a good fit for the **coordinator** (it is pure scheduling and bookkeeping) and for CPU-side tasks. For real GPU workers, pick one of:
+
+1. Run `pip install "gpumesh[gpu]"` and `gpumesh join ...` **directly on the host** — the simplest option.
+2. Build your own GPU image:
+
+   ```dockerfile
+   FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04
+   RUN apt-get update && apt-get install -y python3-pip && rm -rf /var/lib/apt/lists/*
+   RUN pip3 install "gpumesh[gpu]"
+   ENTRYPOINT ["gpumesh"]
+   ```
+
+   then `docker run --gpus all your-image join http://coordinator:8732 --token mysecret`.
+
+---
+
+## Quick start
+
+### 1. Start a coordinator
 
 ```bash
 docker run -d \
   --name gpumesh-coordinator \
   -p 8732:8732 \
-  -e GPUMESH_TOKEN=mysecret \
+  -p 48900:48900/udp \
+  -e GPUMESH_HOST_IP=192.168.1.10 \
   samurai007ak/gpumesh:latest \
   serve --port 8732 --token mysecret
 ```
 
-### 2️⃣ Join a Worker
+Two things matter here:
+
+- **Pass `--token` explicitly.** `gpumesh serve` does *not* read `GPUMESH_TOKEN`; without `--token` it generates a random one and no worker will be able to authenticate.
+- **Set `GPUMESH_HOST_IP` to the host's LAN address.** Otherwise the coordinator advertises its container-internal IP, which workers on other machines cannot reach.
+
+### 2. Join a worker
 
 ```bash
 docker run -d \
   --name gpumesh-worker \
-  -e GPUMESH_URL=http://coordinator-ip:8732 \
   -e GPUMESH_TOKEN=mysecret \
   samurai007ak/gpumesh:latest \
-  join http://coordinator-ip:8732 --token mysecret
+  join http://192.168.1.10:8732 --token mysecret
 ```
 
-### 3️⃣ Use Your Mesh
+Unlike `serve`, `join` *does* fall back to `GPUMESH_TOKEN`, so `--token` is optional when the environment variable is set. The URL is always required.
+
+### 3. Use your mesh
 
 ```python
 from gpumesh import GPUMesh, accelerate
 
-mesh = GPUMesh("http://coordinator:8732", token="mysecret")
+mesh = GPUMesh("http://192.168.1.10:8732", token="mysecret")
 
 @accelerate(mesh)
 def train(lr, epochs):
     return {"accuracy": 0.95}
 
-result = train(lr=0.01, epochs=100)
-results = train.map([{"lr": 0.01}, {"lr": 0.05}, {"lr": 0.1}])
+result  = train(lr=0.01, epochs=100)                        # one worker
+results = train.map([{"lr": 0.01}, {"lr": 0.05}, {"lr": 0.1}])  # every worker
 ```
 
 ---
 
-## 🐳 Docker Images
+## Tags
 
-| Tag | Description | Size |
-|-----|-------------|------|
-| `latest` | Latest stable release | ~50 MB (compressed) |
-| `1.1.0` | Version 1.1.0 (robustness release) | ~50 MB (compressed) |
-
-### Pull Commands
+| Tag | Description |
+|-----|-------------|
+| `latest` | Latest stable release |
+| `1.2.0` | Current release |
+| `1.1.0` | Previous release |
 
 ```bash
-# Latest version
 docker pull samurai007ak/gpumesh:latest
+docker pull samurai007ak/gpumesh:1.2.0
+```
 
-# Specific version
-docker pull samurai007ak/gpumesh:1.1.0
+The entrypoint is `gpumesh`, so anything after the image name is a gpumesh subcommand:
+
+```bash
+docker run --rm samurai007ak/gpumesh:latest --help
+docker run --rm samurai007ak/gpumesh:latest --version
 ```
 
 ---
 
-## 🎯 Docker Compose (Recommended)
-
-Create a `docker-compose.yml`:
+## Docker Compose
 
 ```yaml
 services:
   coordinator:
     image: samurai007ak/gpumesh:latest
     ports:
-      - "8732:8732"
+      - "${GPUMESH_PORT:-8732}:8732"
       - "48900:48900/udp"
     environment:
-      - GPUMESH_TOKEN=mysecret
       - GPUMESH_COLOR=1
-    command: serve --port 8732 --color
+      - GPUMESH_HOST_IP=${GPUMESH_HOST_IP:-}
+    command: serve --port 8732 --token ${GPUMESH_TOKEN:?set GPUMESH_TOKEN} --color
     volumes:
       - gpumesh_data:/root/.gpumesh
     healthcheck:
@@ -139,181 +141,204 @@ services:
       coordinator:
         condition: service_healthy
     environment:
-      - GPUMESH_URL=http://coordinator:8732
-      - GPUMESH_TOKEN=mysecret
+      - GPUMESH_TOKEN=${GPUMESH_TOKEN:?set GPUMESH_TOKEN}
       - GPUMESH_COLOR=1
-    command: join --color
+    command: join http://coordinator:8732 --color
     deploy:
-      replicas: 2
+      replicas: ${WORKER_REPLICAS:-2}
     restart: unless-stopped
 
 volumes:
   gpumesh_data:
 ```
 
-Then run:
-
 ```bash
-# Start coordinator + 2 workers
-docker-compose up -d
-
-# Scale to 4 workers
-docker-compose up -d --scale worker=4
-
-# View logs
-docker-compose logs -f
-
-# Stop everything
-docker-compose down
+GPUMESH_TOKEN=mysecret docker compose up -d              # coordinator + 2 workers
+GPUMESH_TOKEN=mysecret docker compose up -d --scale worker=4
+docker compose logs -f
+docker compose down
 ```
+
+Note that the worker's `command` includes the coordinator URL. `gpumesh join` takes the URL as a required positional argument and will exit with an argparse error if it is missing — `GPUMESH_URL` covers the client commands (`workers`, `status`, `submit`, …), not `join`.
+
+Set `GPUMESH_HOST_IP` to the host's LAN address if machines outside this compose network need to join.
 
 ---
 
-## 🌟 Features
+## Environment variables
 
-### 🎨 Transparent Acceleration
+| Variable | Read by | Effect |
+|----------|---------|--------|
+| `GPUMESH_TOKEN` | `join`, client commands | Auth token when `--token` is omitted. **Not read by `serve`** |
+| `GPUMESH_URL` | client commands (`workers`, `status`, `submit`, …) | Coordinator URL when `--url` is omitted. **Not read by `join`** |
+| `GPUMESH_HOST_IP` | `serve` | Address the coordinator advertises to workers — set this in containers |
+| `GPUMESH_COLOR` | all output | `1` forces color, `0` disables it, `auto` (default) checks for a TTY |
+| `GPUMESH_VERBOSE` | `@mesh` / `@accelerate` | `1` prints which device handled each task |
+| `GPUMESH_LOCAL` | `@mesh` / `@accelerate` | `1` forces local execution, never touching the mesh |
+| `GPUMESH_PORT` | compose file only | Host port mapped to the container's 8732 |
+| `WORKER_REPLICAS` | compose file only | Number of worker replicas |
+
+---
+
+## Ports and volumes
+
+| Port | Protocol | Purpose |
+|------|----------|---------|
+| `8732` | TCP | Coordinator HTTP API |
+| `48900` | UDP | LAN peer discovery beacons |
+
+The image pins **8732**, while `gpumesh serve` on a bare host defaults to **8000** — deliberate, so published `docker run` and compose recipes stay stable. Both are just defaults; `--port` overrides either, as long as coordinator and workers agree.
+
+| Path | Contents |
+|------|----------|
+| `/root/.gpumesh` | Saved connection config (`config.json`) |
+| working directory | `gpumesh.db`, the coordinator's SQLite job store |
+
+Mount a volume at `/root/.gpumesh` to keep the saved connection across restarts. To keep job history too, pass `serve --db /root/.gpumesh/gpumesh.db` so the database lands on the same volume.
+
+---
+
+## Features
+
+### Transparent acceleration
 
 ```python
 @accelerate(mesh)
 def preprocess(chunk_id, data_path):
-    return {"chunk": chunk_id, "rows": len(df)}
+    import pandas as pd
+    return {"chunk": chunk_id, "rows": len(pd.read_parquet(data_path))}
 
-# Single call → best local device
-result = preprocess(chunk_id=0, data_path="data.parquet")
-
-# Map call → spread across ALL mesh devices
-results = preprocess.map([
+result  = preprocess(chunk_id=0, data_path="data.parquet")   # one worker
+results = preprocess.map([                                   # every worker
     {"chunk_id": 0, "data_path": "part0.parquet"},
     {"chunk_id": 1, "data_path": "part1.parquet"},
 ])
 ```
 
-### 🧠 Smart Routing
+### Smart routing
 
-| Scenario | What Happens |
+| Scenario | What happens |
 |----------|--------------|
-| `func(x)` | Runs on best LOCAL device |
-| `func.map()` | Spreads across ALL mesh devices |
-| Mesh unreachable | Falls back to LOCAL execution |
+| `func(x)`, workers alive | Runs as a single task on one mesh worker |
+| `func(x)`, no workers | Runs on the best LOCAL device |
+| `func.map([...])` | Spreads across ALL mesh devices |
+| Mesh unreachable | Falls back to LOCAL execution silently |
 | `GPUMESH_LOCAL=1` | Forces local-only |
-| `GPUMESH_VERBOSE=1` | Prints device info |
+| `GPUMESH_VERBOSE=1` | Prints which device handled each task |
 
-### 🔧 Hardware Selection
+Both paths return the identical value, so switching between them never changes your results.
+
+### Hardware selection and resource specs
 
 ```python
 @accelerate(mesh, gpu="A100")
 def train(model):
     return model.cuda().forward(x)
-```
 
-### 📊 Resource Specs
-
-```python
 @accelerate(mesh, cores=8, memory="16GB", timeout=300)
 def heavy_computation(data):
     return processed
 ```
 
-### 🛡️ Fault Tolerance
+### Fault tolerance
 
-- ✅ Dead workers detected & tasks re-queued
-- ✅ Straggler workers deprioritized
-- ✅ Graceful fallback to local execution
-- ✅ Crash diagnostics on worker failures
-- ✅ TTL-based worker expiry (auto-prune)
-- ✅ Memory-aware scheduling (VRAM tracking)
+- Dead workers are detected and their tasks re-queued
+- Task leases expire after 300s and return to the pending queue
+- Straggler workers (over 2× the median task time) are deprioritized to lighter work
+- Every task runs in its own subprocess, so a crash cannot take down a worker
+- Stale worker rows are pruned after a 300s TTL
+- Memory-aware scheduling via a `gpu_memory_mb` payload hint
+- Graceful fallback to local execution when the mesh is unreachable
 
 ---
 
-## 📈 Benchmark Scoring
+## Benchmark scoring
 
-Each worker runs a benchmark on join and gets a **0-100 score**:
+On join — and every 10 minutes after — each worker runs a 1024×1024 matmul and a 256 MB memory copy:
 
 ```
-  Score      Typical GPU        Use Case
-  ─────      ───────────        ────────
-  80-100     RTX 4090, A100     Heavy training, large models
-  50-80      RTX 3080, 3090     Medium training, inference
-  20-50      RTX 3060, T4       Light tasks, preprocessing
-  0-20       CPU only           Very light tasks
+score = 0.7 × GFLOP/s  +  0.3 × memory bandwidth (GB/s)
 ```
 
----
+The score is **unbounded and relative**, not a 0–100 rating. The scheduler ranks each worker's score against the others and assigns task cost by percentile: the strongest machine gets the heaviest queued work. A container without `torch` falls back to a pure-Python benchmark and scores near zero — see the CPU-only note at the top.
 
-## 🛠️ Environment Variables
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `GPUMESH_TOKEN` | (required) | Authentication token |
-| `GPUMESH_URL` | (worker only) | Coordinator URL |
-| `GPUMESH_PORT` | `8732` | Coordinator port |
-| `GPUMESH_COLOR` | `1` | Enable colored output |
-| `GPUMESH_VERBOSE` | `0` | Verbose logging |
-| `GPUMESH_LOCAL` | `0` | Force local-only mode |
-| `WORKER_REPLICAS` | `2` | Number of workers (compose) |
+Inspect the real numbers with `docker exec gpumesh-coordinator gpumesh workers`.
 
 ---
 
-## 🔐 Security
+## Architecture
 
-| Feature | Status |
+gpumesh is a **pull-based work queue**. The coordinator never pushes to workers, so a worker needs no inbound ports and no stable address — which is exactly why containers, laptops, and NAT'd machines all work.
+
+```
+ ╔══════════════════════════════════════════════════════════════════╗
+ ║  COORDINATOR                        gpumesh serve --port 8732    ║
+ ╟──────────────────────────────────────────────────────────────────╢
+ ║   HTTP API  (threaded, X-Auth-Token on every call)               ║
+ ║       ├──▶ auth + per-IP rate limiting                           ║
+ ║       ├──▶ scheduler: score percentile + VRAM filter             ║
+ ║       ├──▶ SQLite (WAL): jobs, tasks, workers, stats             ║
+ ║       └──▶ reaper: expire leases, prune dead workers             ║
+ ║   UDP :48900  discovery beacon listener                          ║
+ ╚══════════════════════════════════════════════════════════════════╝
+        ▲                    ▲                    ▲
+        │  register          │  heartbeat  10s    │  lease / result
+        │                    │                    │
+ ┌──────┴───────┐     ┌──────┴───────┐     ┌──────┴───────┐
+ │  WORKER A    │     │  WORKER B    │     │  WORKER C    │
+ │  poll loop   │     │  poll loop   │     │  poll loop   │
+ │  subprocess  │     │  subprocess  │     │  subprocess  │
+ │  per task    │     │  per task    │     │  per task    │
+ └──────────────┘     └──────────────┘     └──────────────┘
+
+ submit ─▶ pending ─▶ leased/running ─▶ done
+                           └─ crash, timeout, or lost lease ─▶ pending
+```
+
+Jobs and results live in the coordinator's SQLite file, so a coordinator restart resumes in-flight work. Workers hold no durable state — they re-register and re-benchmark on reconnect.
+
+The [full architecture section](https://github.com/Samurai007AK/gpumesh#architecture) on GitHub covers the module map, HTTP API, and scheduling rules.
+
+---
+
+## Security
+
+| Feature | Detail |
 |---------|--------|
-| Token authentication | ✅ All API requests |
-| Timing-safe comparison | ✅ HMAC compare_digest |
-| Rate limiting | ✅ 5 failures → blocked |
-| Process isolation | ✅ Tasks in subprocesses |
-| File permissions | ✅ 0o600 on token files |
-| Token hashing | ✅ SHA-256 + salt |
+| Token authentication | Required on every API request |
+| Timing-safe comparison | `hmac.compare_digest` |
+| Rate limiting | 5 failed attempts within 300s → 15 min IP lockout |
+| Process isolation | Every task runs in its own subprocess |
+| File permissions | `0o600` on the saved config |
+| Token hashing | SHA-256 with a salt, in memory only — never written to the database |
 
-> ⚠️ Workers execute code from the coordinator. Only share your URL and token with people you trust.
-
----
-
-## 🏗️ Architecture
-
-```
-                    COORDINATOR
-   ┌─────────────────────────────────────────────────┐
-   │                                                 │
-   │  ┌──────────┐  ┌──────────┐  ┌──────────────┐  │
-   │  │ Job Queue │  │ Task DB  │  │ Worker       │  │
-   │  │ (memory)  │  │ (SQLite) │  │ Registry     │  │
-   │  └────┬─────┘  └──────────┘  └──────┬───────┘  │
-   │       │                              │          │
-   │       └──────────┬───────────────────┘          │
-   │                  │                              │
-   │         HTTP API :8732                          │
-   └──────────────────┼──────────────────────────────┘
-                      │
-         ┌────────────┼────────────┐
-         │            │            │
-   ┌─────▼────┐ ┌────▼────┐ ┌────▼────┐
-   │ Worker 1 │ │Worker 2 │ │Worker 3 │
-   │ RTX 4090 │ │RTX 3080 │ │   T4    │
-   │Score: 120│ │Score: 85│ │Score: 12│
-   └──────────┘ └─────────┘ └─────────┘
-```
+> **Workers execute code sent by the coordinator.** Anyone holding your URL and token can run arbitrary code on every machine in your mesh. Treat the token like a password and only share it with people you trust. gpumesh is built for trusted networks; it is not a sandbox and is not designed to run untrusted code.
+>
+> Run the coordinator with `serve --safe-mode` to refuse pickled functions and accept submitted scripts only. Traffic on a plain LAN is **not encrypted** — use Tailscale or ngrok when the mesh crosses a network you do not control. Do not publish port 8732 to the open internet.
 
 ---
 
-## 📚 Full Documentation
+## Troubleshooting
+
+| Problem | Fix |
+|---------|-----|
+| Worker container exits immediately with an argparse error | `gpumesh join` needs the URL as a positional argument: `join http://coordinator:8732` |
+| `401 bad token` | `serve` ignores `GPUMESH_TOKEN` — pass `serve --token ...` explicitly |
+| Workers on other machines cannot connect | Set `-e GPUMESH_HOST_IP=<host LAN IP>` on the coordinator and publish `-p 8732:8732` |
+| Discovery finds nothing | UDP broadcast rarely crosses a Docker bridge network — join by explicit URL |
+| Worker scores near zero | Expected: the image has no `torch`. See the CPU-only note above |
+| `ModuleNotFoundError` inside a task | Install that package in the **worker** image — gpumesh ships your code, not your environment |
+| Job history lost on restart | `serve --db /root/.gpumesh/gpumesh.db` with a volume mounted at `/root/.gpumesh` |
+
+---
+
+## Links
 
 - **GitHub:** [github.com/Samurai007AK/gpumesh](https://github.com/Samurai007AK/gpumesh)
 - **PyPI:** [pypi.org/project/gpumesh](https://pypi.org/project/gpumesh/)
 - **Issues:** [github.com/Samurai007AK/gpumesh/issues](https://github.com/Samurai007AK/gpumesh/issues)
+- **Changelog:** [CHANGELOG.md](https://github.com/Samurai007AK/gpumesh/blob/main/CHANGELOG.md)
 
----
+## License
 
-## 🤝 Contributing
-
-Contributions are welcome! See the [GitHub repository](https://github.com/Samurai007AK/gpumesh) for guidelines.
-
----
-
-## 📄 License
-
-MIT License — see [LICENSE](https://github.com/Samurai007AK/gpumesh/blob/main/LICENSE) for details.
-
----
-
-**Built with ❤️ by [samurai007ak](https://github.com/Samurai007AK)**
+MIT License — see [LICENSE](https://github.com/Samurai007AK/gpumesh/blob/main/LICENSE).
