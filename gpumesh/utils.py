@@ -6,15 +6,19 @@ import socket
 import subprocess
 import sys
 
-from .ansi import safe_print, green, yellow, red, bold
+from .ansi import safe_print, green, yellow, red, bold, cyan, dim
 
 
 def _is_private_ip(ip: str) -> bool:
-    return (
-        ip.startswith("10.")
-        or ip.startswith("192.168.")
-        or (ip.startswith("172.") and 16 <= int(ip.split(".")[1]) <= 31)
-    )
+    if ip.startswith("10.") or ip.startswith("192.168."):
+        return True
+    if ip.startswith("172."):
+        try:
+            second_octet = int(ip.split(".")[1])
+        except (IndexError, ValueError):
+            return False
+        return 16 <= second_octet <= 31
+    return False
 
 
 def _is_loopback_or_special(ip: str) -> bool:
@@ -27,56 +31,193 @@ def _is_loopback_or_special(ip: str) -> bool:
     return False
 
 
-def get_lan_ip() -> str:
-    """Get the LAN IP address.
+# Ranges handed out by hypervisors, container runtimes and connection
+# sharing. They are private (so _is_private_ip accepts them) but reachable
+# only from this host and its own VMs — never from another machine on the
+# LAN. Advertising one to a worker produces a connection *timeout*
+# (WinError 10060), not a refusal, because the packets are routed nowhere.
+# Rank them below real LAN addresses instead of excluding them: on a
+# machine that genuinely has nothing else, one is still better than
+# loopback.
+_VIRTUAL_IP_PREFIXES = (
+    "192.168.56.",   # VirtualBox host-only
+    "192.168.99.",   # docker-machine / minikube
+    "192.168.137.",  # Windows Internet Connection Sharing / mobile hotspot
+    "10.0.75.",      # Docker Desktop for Windows (legacy MobyLinux)
+    "172.17.", "172.18.", "172.19.", "172.20.", "172.21.",
+    "172.22.", "172.23.", "172.24.", "172.25.", "172.26.",
+    "172.27.", "172.28.", "172.29.", "172.30.", "172.31.",
+)
 
-    Prefer a real private-ranged IPv4 address on the default outbound
-    interface, falling back to other non-special NICs, then loopback only
-    as a last resort.
+
+def _is_virtual_adapter_ip(ip: str) -> bool:
+    """True for addresses belonging to a virtual / host-only adapter."""
+    return ip.startswith(_VIRTUAL_IP_PREFIXES)
+
+
+def _rank_ip(ip: str) -> int:
+    """Sort key for advertisable addresses; lower is better."""
+    if _is_loopback_or_special(ip):
+        return 3
+    if _is_virtual_adapter_ip(ip):
+        return 2
+    if _is_private_ip(ip):
+        return 0
+    return 1
+
+
+def _gather_candidate_ips() -> list:
+    """Collect this machine's IPv4 addresses, default-route address first."""
+    candidates = []
+    udp_ip = None
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("8.8.8.8", 80))
+        udp_ip = s.getsockname()[0]
+    except OSError:
+        pass
+    finally:
+        s.close()
+    if udp_ip:
+        candidates.append(udp_ip)
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(), None):
+            ip = info[4][0]
+            if ":" in ip:  # skip IPv6
+                continue
+            if ip not in candidates:
+                candidates.append(ip)
+    except OSError:
+        pass
+    return candidates
+
+
+def lan_ip_candidates() -> list:
+    """Return addresses workers could use to reach this machine, best first.
+
+    Ranked so a real LAN address always beats a hypervisor/VPN/container
+    host-only address, which this machine can reach but no other can.
+    ``sorted`` is stable, so within a rank the default-route address (found
+    first) still wins.
+    """
+    try:
+        found = _gather_candidate_ips()
+    except Exception:
+        return []
+    return sorted(
+        (ip for ip in found if not _is_loopback_or_special(ip)),
+        key=_rank_ip,
+    )
+
+
+def get_lan_ip() -> str:
+    """Get the address workers should use to reach this machine.
+
+    ``GPUMESH_HOST_IP`` overrides detection entirely. Set it when this
+    machine has several interfaces and auto-detection picks the wrong one —
+    auto-detection cannot always tell a real LAN interface from a VPN or
+    hypervisor one, and a wrong pick makes every worker time out.
 
     Returns:
         The local network IP address (string).
     """
+    override = os.environ.get("GPUMESH_HOST_IP", "").strip()
+    if override:
+        return override
     try:
-        udp_ip = None
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        try:
-            s.connect(("8.8.8.8", 80))
-            udp_ip = s.getsockname()[0]
-        except OSError:
-            pass
-        finally:
-            s.close()
-
-        candidates = []
-        try:
-            for info in socket.getaddrinfo(socket.gethostname(), None):
-                ip = info[4][0]
-                if ":" in ip:  # skip IPv6
-                    continue
-                candidates.append(ip)
-        except OSError:
-            pass
-
-        if udp_ip:
-            candidates.insert(0, udp_ip)
-
-        for ip in candidates:
-            if _is_loopback_or_special(ip):
-                continue
-            if _is_private_ip(ip):
-                return ip
-
-        for ip in candidates:
-            if _is_loopback_or_special(ip):
-                continue
-            return ip
-
-        if udp_ip:
-            return udp_ip
+        ranked = lan_ip_candidates()
+        if ranked:
+            return ranked[0]
+        # Every interface looked loopback / link-local / CGNAT. Prefer
+        # whatever the default route reported over giving up on loopback.
+        raw = _gather_candidate_ips()
+        if raw:
+            return raw[0]
     except Exception:
         pass
     return "127.0.0.1"
+
+
+def local_ip_for_peer(peer_ip: str):
+    """Return this machine's address on the route to ``peer_ip``.
+
+    ``connect()`` on a UDP socket transmits nothing — it only asks the
+    kernel to bind the local end using the routing table. The result is the
+    source address a peer at ``peer_ip`` would actually see us as, which is
+    a fact about the route rather than a guess about which local interface
+    looks most like a LAN. Prefer this over :func:`get_lan_ip` whenever the
+    peer is known.
+
+    Returns None when no route to that peer exists.
+    """
+    if not peer_ip:
+        return None
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect((peer_ip, 9))  # discard port; no packet is sent
+        return s.getsockname()[0]
+    except OSError:
+        return None
+    finally:
+        s.close()
+
+
+def coordinator_url_candidates(peer_ip: str, port: int, limit: int = 4) -> list:
+    """Rank the URLs a peer at ``peer_ip`` could use to reach this machine.
+
+    The route-derived address leads: the kernel already knows which
+    interface reaches that peer, so it beats every heuristic. An explicit
+    ``GPUMESH_HOST_IP`` outranks even that, because a human who pinned an
+    address knows something the routing table does not (a port forward, or
+    a NAT the peer sits behind). The general candidates follow as fallbacks,
+    covering asymmetric routing and a peer that changed networks between its
+    beacon and the claim.
+
+    The caller sends the whole list; the peer picks the one that works.
+    """
+    ordered = []
+    routed = local_ip_for_peer(peer_ip)
+    if routed and not _is_loopback_or_special(routed):
+        ordered.append(routed)
+    override = os.environ.get("GPUMESH_HOST_IP", "").strip()
+    if override:
+        if override in ordered:
+            ordered.remove(override)
+        ordered.insert(0, override)
+    for ip in lan_ip_candidates():
+        if ip not in ordered:
+            ordered.append(ip)
+    return [f"http://{ip}:{port}" for ip in ordered[:limit]]
+
+
+def show_ip_alternatives(chosen: str, port: int = 8000):
+    """List the other addresses workers could use, when detection is ambiguous.
+
+    Auto-detection cannot reliably tell a real LAN interface from a VPN or
+    hypervisor one. When a worker's registration times out (WinError 10060)
+    the advertised address was unroutable from that machine, and one of
+    these is the fix — so show them up front instead of after the failure.
+    """
+    if os.environ.get("GPUMESH_HOST_IP", "").strip():
+        return
+    candidates = lan_ip_candidates()
+    if _is_virtual_adapter_ip(chosen):
+        safe_print(yellow(
+            f"[!] WARNING: {chosen} looks like a virtual adapter (VM, Docker or "
+            f"connection sharing)."
+        ))
+        safe_print(dim("   Other machines usually cannot reach it — their "
+                       "connection will time out."))
+    others = [ip for ip in candidates if ip != chosen]
+    if not others:
+        return
+    safe_print(dim("   This machine has other addresses. If a worker times out, "
+                   "try one of these instead:"))
+    for ip in others:
+        note = ("   (virtual adapter — usually unreachable from other machines)"
+                if _is_virtual_adapter_ip(ip) else "")
+        safe_print(dim(f"     http://{ip}:{port}{note}"))
+    safe_print(dim("   Pin one with --host-ip <IP>, or set GPUMESH_HOST_IP=<IP>."))
 
 
 def try_add_firewall_rule(port: int = 8000) -> bool:

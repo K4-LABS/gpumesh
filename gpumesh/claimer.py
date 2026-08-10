@@ -16,6 +16,28 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from gpumesh.ansi import safe_print, green, yellow, red, cyan, bold
 
 
+def claim_candidates(body: dict) -> list:
+    """Extract the coordinator URLs to try, best first.
+
+    ``coordinator_urls`` is the current field: a ranked list, because the
+    coordinator cannot know which of its addresses this worker can route to
+    and so should offer every plausible one. ``coordinator_url`` is the
+    original single-address field, still accepted so a new worker keeps
+    working with an older coordinator, and appended last if it is not
+    already in the list.
+    """
+    candidates = []
+    raw = body.get("coordinator_urls")
+    if isinstance(raw, list):
+        for url in raw:
+            if isinstance(url, str) and url and url not in candidates:
+                candidates.append(url)
+    single = body.get("coordinator_url", "")
+    if isinstance(single, str) and single and single not in candidates:
+        candidates.append(single)
+    return candidates
+
+
 class ClaimHandler(BaseHTTPRequestHandler):
     server_version = "gpumesh-claim"
     _claimed = False          # class-level flag — prevents double-claim
@@ -93,10 +115,11 @@ class ClaimHandler(BaseHTTPRequestHandler):
             self._send(401, {"ok": False, "error": "wrong token"})
             return
 
-        coordinator_url = body.get("coordinator_url", "")
+        candidates = claim_candidates(body)
         coordinator_token = body.get("coordinator_token", "")
-        if not coordinator_url or not coordinator_token:
-            self._send(400, {"ok": False, "error": "need coordinator_url and coordinator_token"})
+        if not candidates or not coordinator_token:
+            self._send(400, {"ok": False,
+                             "error": "need coordinator_url(s) and coordinator_token"})
             return
 
         # Atomically check and set _claimed to prevent double-claim race
@@ -105,6 +128,28 @@ class ClaimHandler(BaseHTTPRequestHandler):
                 self._send(409, {"ok": False, "error": "already claimed"})
                 return
             ClaimHandler._claimed = True
+
+        # Prove reachability BEFORE acking. Acking on a token match alone
+        # made the ack mean "your token is right" while the coordinator read
+        # it as "the worker joined" — so a claim naming an address this
+        # machine cannot route to was reported as a success, and the failure
+        # only surfaced seconds later in the worker's own log where the
+        # coordinator never saw it.
+        from .worker import find_reachable_coordinator
+
+        coordinator_url, reason = find_reachable_coordinator(
+            candidates, coordinator_token
+        )
+        if coordinator_url is None:
+            with ClaimHandler._claim_lock:
+                ClaimHandler._claimed = False  # allow a corrected retry
+            safe_print(yellow(f"[claim] rejected: cannot reach coordinator ({reason})"))
+            self._send(502, {
+                "ok": False,
+                "error": f"cannot reach coordinator from this machine: {reason}",
+                "tried": candidates,
+            })
+            return
 
         # Spawn background thread to join the coordinator mesh
         def _join():
@@ -119,8 +164,8 @@ class ClaimHandler(BaseHTTPRequestHandler):
         thread = threading.Thread(target=_join, daemon=True, name="gpumesh-claim-worker")
         ClaimHandler._worker_thread = thread
         thread.start()
-        safe_print(green("[claim] claimed"))
-        self._send(200, {"ok": True})
+        safe_print(green(f"[claim] claimed via {coordinator_url}"))
+        self._send(200, {"ok": True, "coordinator_url": coordinator_url})
 
 
 def start_claim_server(token: str, port: int = 0) -> tuple[ThreadingHTTPServer, int]:

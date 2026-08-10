@@ -18,6 +18,7 @@ import json
 import os
 import platform
 import signal
+import socket
 import subprocess
 import sys
 import threading
@@ -56,7 +57,7 @@ class MeshClient:
         self.base_url = base_url.rstrip("/")
         self.token = token
 
-    def call(self, method: str, path: str, body=None):
+    def call(self, method: str, path: str, body=None, timeout: float = 30.0):
         data = json.dumps(body).encode() if body is not None else None
         req = urllib.request.Request(
             self.base_url + path,
@@ -67,11 +68,46 @@ class MeshClient:
                 "X-Auth-Token": self.token,
             },
         )
-        with urllib.request.urlopen(req, timeout=30) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             if resp.status == 204:
                 return None
             raw = resp.read()
             return json.loads(raw) if raw else None
+
+
+# Probing several candidate addresses must stay well inside the claim
+# request's own timeout, so the coordinator never gives up while the worker
+# is still deciding.
+CLAIM_PROBE_TIMEOUT = 2.0
+
+
+def find_reachable_coordinator(urls, token: str,
+                               timeout: float = CLAIM_PROBE_TIMEOUT):
+    """Return the first URL in ``urls`` that this machine can actually reach.
+
+    Only the worker can answer this. Reachability is a property of the
+    network *between* two machines, so a coordinator picking its own address
+    from a local interface list can be wrong in ways it has no way to
+    detect — the guess and the failure happen on opposite sides of the link.
+    Probing here moves the decision to the only side that can observe it.
+
+    Returns ``(url, None)`` on success, or ``(None, reason)`` where reason
+    describes every attempt that failed.
+    """
+    failures = []
+    for url in urls:
+        try:
+            MeshClient(url, token).call("GET", "/api/workers", timeout=timeout)
+            return url, None
+        except urllib.error.HTTPError as exc:
+            if exc.code == 401:
+                # Reachable, but the token was rejected. The network is fine,
+                # so trying the remaining candidates cannot help.
+                return None, f"{url}: authentication failed (wrong token)"
+            failures.append(f"{url}: HTTP {exc.code}")
+        except (urllib.error.URLError, OSError) as exc:
+            failures.append(f"{url}: {getattr(exc, 'reason', exc)}")
+    return None, "; ".join(failures) if failures else "no candidate URLs given"
 
 
 def _run_function_task(payload: dict, device: str, timeout: float,
@@ -385,11 +421,24 @@ def run_worker(url: str, token: str, task_timeout: float = 240.0,
         return
     except (urllib.error.URLError, OSError) as exc:
         # Decode the specific underlying error for better guidance.
+        #
+        # Refused and timed out need OPPOSITE advice and must not be
+        # conflated: refused means something answered and said no (the
+        # coordinator is not listening there), while timed out means nothing
+        # answered at all (the address is unroutable from here, or a firewall
+        # is dropping the packets) — and in that case the coordinator may
+        # well be running perfectly. Note WinError 10060 surfaces as
+        # TimeoutError, so it must be classified after the refused check.
         cause = getattr(exc, "reason", exc)
+        text = str(exc)
         is_refused = (
             isinstance(cause, ConnectionRefusedError)
-            or isinstance(cause, TimeoutError)
-            or "10061" in str(exc)
+            or "10061" in text
+        )
+        is_timeout = not is_refused and (
+            isinstance(cause, (TimeoutError, socket.timeout))
+            or "10060" in text
+            or "timed out" in text.lower()
         )
         safe_print(f"{bold(cyan('[worker]'))} {red('failed to register')} with coordinator after retries: {exc}")
         # Best-effort: clear any possibly-stale saved connection so a bad
@@ -402,19 +451,29 @@ def run_worker(url: str, token: str, task_timeout: float = 240.0,
         safe_print()
         safe_print(f"{bold(cyan('[worker]'))} {yellow('TROUBLESHOOTING:')}")
         if is_refused:
-            safe_print(f"  {red('This error (10061 / ConnectionRefused) means the coordinator')}")
-            safe_print(f"  {red('actively refused the connection')}.")
+            safe_print(f"  {red('Connection REFUSED (10061) — something answered and said no.')}")
             safe_print(f"  {yellow('Most likely:')} the coordinator server is NOT running on that address,")
             safe_print("  OR it is bound to a different interface.")
             safe_print(f"  {cyan('- If testing on the same machine, use http://127.0.0.1:PORT')}")
             safe_print("    (127.0.0.1 is loopback-only and avoids interface/firewall issues).")
             safe_print(f"  {cyan('- On Windows, if binding to 0.0.0.0 fails, try running the')}")
             safe_print("    coordinator as Administrator so it can listen on all interfaces.")
+        elif is_timeout:
+            safe_print(f"  {red('Connection TIMED OUT (10060) — nothing answered at all.')}")
+            safe_print(f"  {yellow('The coordinator may well be running')} — the packets never reached it.")
+            safe_print(f"  {cyan('- The address may be unroutable from this machine.')} A coordinator")
+            safe_print("    behind a VPN, or on a VirtualBox/VMware/Hyper-V/Docker adapter,")
+            safe_print("    advertises an address only it can reach. Ask for the address that")
+            safe_print("    matches YOUR network ('ipconfig' on Windows, 'ip addr' elsewhere).")
+            safe_print(f"  {cyan('- Or a firewall is dropping the port silently.')} On the coordinator,")
+            safe_print("    allow the inbound TCP port, or restart it as Administrator.")
+            safe_print(f"  {cyan('- On different networks?')} Use Tailscale on both machines.")
         else:
-            safe_print(f"  {red('The coordinator could not be reached (timeout / network error)')}.")
+            safe_print(f"  {red('The coordinator could not be reached (network or DNS error)')}.")
         safe_print(f"  {bold('1.')} Is the coordinator running? Start it with: {cyan('gpumesh serve --token YOUR_TOKEN')}")
         safe_print(f"  {bold('2.')} Is the URL correct? You tried: {yellow(url)}")
-        safe_print(f"  {bold('3.')} Is the port open? Try: {dim('curl http://127.0.0.1:PORT/api/workers')}")
+        safe_print(f"  {bold('3.')} Test it from THIS machine: {dim(f'curl {url}/api/workers')}")
+        safe_print(f"     {dim('(HTTP 401 means reachable — then only the token is wrong)')}")
         safe_print(f"  {bold('4.')} Windows Firewall may be blocking the port — allow the port through")
         safe_print(f"  {bold('5.')} Are both machines on the same network? (or use Tailscale for remote)")
         safe_print()
@@ -749,11 +808,13 @@ def run_worker_broadcast(token: str, claim_port: int = 0,
             self._send(401, {"ok": False, "error": "wrong token"})
             return
 
-        url = body.get("coordinator_url", "")
+        from .claimer import claim_candidates
+
+        candidates = claim_candidates(body)
         tok = body.get("coordinator_token", "")
-        if not url or not tok:
+        if not candidates or not tok:
             self._send(400, {"ok": False,
-                             "error": "need coordinator_url and coordinator_token"})
+                             "error": "need coordinator_url(s) and coordinator_token"})
             return
 
         # Use the class-level _claim_lock (consistent with claimer.py)
@@ -763,11 +824,29 @@ def run_worker_broadcast(token: str, claim_port: int = 0,
                 self._send(409, {"ok": False, "error": "already claimed"})
                 return
             ClaimHandler._claimed = True
-            coordinator_url[0] = url
-            coordinator_token[0] = tok
+
+        # Same contract as claimer.ClaimHandler: the ack means "I reached
+        # you", not "your token matched". Probing here is what lets the
+        # coordinator report an unreachable address immediately, instead of
+        # declaring success while this worker times out privately.
+        url, reason = find_reachable_coordinator(candidates, tok)
+        if url is None:
+            with ClaimHandler._claim_lock:
+                ClaimHandler._claimed = False  # allow a corrected retry
+            safe_print(f"{bold(cyan('[worker]'))} {yellow('claim rejected')}: "
+                       f"cannot reach coordinator ({reason})")
+            self._send(502, {
+                "ok": False,
+                "error": f"cannot reach coordinator from this machine: {reason}",
+                "tried": candidates,
+            })
+            return
+
+        coordinator_url[0] = url
+        coordinator_token[0] = tok
 
         # Send response and signal OUTSIDE the lock
-        self._send(200, {"ok": True})
+        self._send(200, {"ok": True, "coordinator_url": url})
         claimed.set()
 
     ClaimHandler.do_POST = _intercepted_do_POST

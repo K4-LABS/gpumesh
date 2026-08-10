@@ -10,12 +10,34 @@ import urllib.request
 import pytest
 
 from gpumesh.claimer import ClaimHandler, start_claim_server
+from gpumesh.server import serve
+
+# A claim is only acked once the worker has proved it can reach the
+# coordinator, so these tests need a coordinator that genuinely answers.
+# Pointing at a dead port now (correctly) yields 502, not a claim.
+_COORD_TOKEN = "coord-tok"
+_COORD_URL = ""
 
 
-def _claim_body(token, coord_url="http://127.0.0.1:8000", coord_token="coord-tok"):
+@pytest.fixture(scope="module", autouse=True)
+def _reachable_coordinator(tmp_path_factory):
+    """Run one real loopback coordinator for every test in this module."""
+    global _COORD_URL
+    db = tmp_path_factory.mktemp("claimer") / "coordinator.db"
+    httpd = serve("127.0.0.1", 0, str(db), _COORD_TOKEN)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    _COORD_URL = f"http://127.0.0.1:{httpd.server_address[1]}"
+    yield _COORD_URL
+    httpd.gpumesh_stop.set()
+    httpd.shutdown()
+    thread.join(timeout=10)
+
+
+def _claim_body(token, coord_url=None, coord_token=_COORD_TOKEN):
     return json.dumps({
         "token": token,
-        "coordinator_url": coord_url,
+        "coordinator_url": coord_url or _COORD_URL,
         "coordinator_token": coord_token,
     }).encode()
 
