@@ -2,6 +2,64 @@
 
 All notable changes to gpumesh are documented here.
 
+## [Unreleased]
+
+The theme of this release is **the coordinator no longer guesses how workers
+reach it**. Which of a coordinator's addresses is usable is a property of the
+network between two machines, not of the coordinator alone — so a machine with
+a VPN, hypervisor or container adapter could advertise an address only it could
+route to, and every worker would time out against it.
+
+### Fixed
+- **The claim handshake asserted a reachability it never tested.** The
+  coordinator sent one guessed address; the worker acked as soon as the token
+  matched and only *then* tried to register. So the coordinator printed
+  "claimed successfully!" while the worker was seconds away from timing out
+  against an unusable address, and the failure appeared solely in the worker's
+  own log where the coordinator never saw it. The coordinator now sends a
+  ranked list of candidate URLs, the worker probes them and registers with the
+  first that answers, and the ack reports which one worked. An unreachable
+  coordinator returns HTTP 502 listing every address tried, leaving the worker
+  claimable so a corrected retry succeeds. Coordinators sending only the old
+  `coordinator_url` field are still accepted.
+- **The advertised address was picked without consulting the routing table.**
+  When the peer is known — which it is throughout the claim flow — the kernel
+  can say exactly which local address reaches it. `utils.local_ip_for_peer()`
+  asks it (a UDP `connect()`, which transmits nothing), and that answer now
+  leads the candidate list instead of a guess drawn from an interface list.
+- **`gpumesh serve` reported a self-check it had not performed.** It probed
+  `127.0.0.1`, which always succeeds, and printed a green line that read as
+  confirmation the advertised address worked. It now states that only loopback
+  was tested.
+- **A connection timeout was reported as a connection refusal.** WinError 10060
+  (timed out) surfaces as Python's `TimeoutError`, which the worker's error
+  classifier lumped in with `ConnectionRefusedError`, so a worker that could
+  not reach the coordinator printed advice headed `10061 / ConnectionRefused`.
+  The two need opposite advice — refused means nothing is listening there,
+  timed out means the packets never arrived and the coordinator may be running
+  perfectly — so users were sent to restart a healthy server instead of
+  checking routing and firewalls. The two cases are now classified and
+  explained separately, and the suggested `curl` check uses the URL that
+  actually failed.
+- `get_lan_ip()` accepted any private-ranged address, so on a machine running
+  VirtualBox, VMware, Hyper-V, Docker or Windows connection sharing it could
+  pick a host-only adapter. Known virtual adapter ranges are now ranked below
+  real LAN addresses. This is a heuristic and cannot be complete — several
+  ranges (`172.16/16` among them) are used by both real LANs and virtual
+  adapters — so it only improves the fallback used where no peer is known.
+  The candidate list above is what actually fixes the failure.
+- `_is_private_ip()` no longer raises `ValueError` on a malformed `172.*`
+  address.
+
+### Added
+- `gpumesh serve --host-ip <IP>` and the `GPUMESH_HOST_IP` environment
+  variable pin the address advertised to workers. Auto-detection cannot always
+  distinguish a real LAN interface from a VPN or hypervisor one, so a manual
+  override is available when it guesses wrong.
+- `gpumesh serve` and the setup wizard now list this machine's other addresses
+  when more than one is available, flagging any that belong to a virtual
+  adapter — shown up front rather than after a worker has already timed out.
+
 ## [1.2.0] — 2026-08-10
 
 The theme of this release is **a mesh call behaves exactly like a local call**.

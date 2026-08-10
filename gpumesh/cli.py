@@ -224,7 +224,10 @@ def cmd_serve(args):
         print(yellow(f"   Port {args.port} is already in use."))
         print(dim(f"   Try: gpumesh serve --port {args.port + 1}"))
         sys.exit(1)
-    ip = utils.get_lan_ip()
+    # --host-ip pins the address advertised to workers. Auto-detection cannot
+    # always tell a real LAN interface from a VPN or hypervisor one, and a
+    # wrong pick makes every remote worker time out (WinError 10060).
+    ip = getattr(args, "host_ip", "") or utils.get_lan_ip()
     # Save connection so other commands can use it without --url/--token.
     # The LAN IP is the address other machines should use.
     connection_manager.save_connection(f"http://{ip}:{args.port}", token)
@@ -237,6 +240,8 @@ def cmd_serve(args):
           f"{cyan(f'gpumesh join http://{ip}:{args.port} --token {token}')}")
     print(dim("   (127.0.0.1 always works locally; the LAN IP is for "
           "other machines)"))
+    if not getattr(args, "host_ip", ""):
+        utils.show_ip_alternatives(ip, args.port)
 
     # Determine tunnel mode
     if args.tailscale:
@@ -267,21 +272,28 @@ def cmd_serve(args):
     _serve_thread = _threading.Thread(target=httpd.serve_forever, daemon=True)
     _serve_thread.start()
 
-    # Self-check: confirm the coordinator is actually reachable on loopback.
-    # Any HTTP response (even a 401 for a missing token) proves the server
-    # is alive and serving requests.
+    # Self-check: confirm the process is actually serving requests. Any HTTP
+    # response (even a 401 for a missing token) proves that.
+    #
+    # It proves ONLY that. Loopback always works, so this can never tell us
+    # whether another machine can reach the advertised address — that depends
+    # on the network between here and there, which only the worker can
+    # observe. Say what was tested so a green line is not read as a promise
+    # that remote workers will connect.
     try:
         with urllib.request.urlopen(
             f"http://127.0.0.1:{args.port}/api/workers", timeout=5
         ) as _resp:
             _ = _resp.status
-        print(green("[OK] Self-check: coordinator reachable on 127.0.0.1"))
+        print(green("[OK] Self-check: server is up (tested on 127.0.0.1 only)"))
     except urllib.error.HTTPError:
         # Server responded with an error status (e.g. 401) — it's up.
-        print(green("[OK] Self-check: coordinator reachable on 127.0.0.1"))
+        print(green("[OK] Self-check: server is up (tested on 127.0.0.1 only)"))
     except Exception as exc:
         print(yellow(f"[!] WARNING: coordinator self-check failed on 127.0.0.1: {exc}"))
         print(dim("   The server may not have started correctly."))
+    print(dim(f"   Reachability of http://{ip}:{args.port} from other machines "
+              f"is not tested here — a worker joining confirms it."))
 
     # Self-worker: this machine joins its own pool so its CPU/GPU is used
     # alongside the laptops that joined as workers.
@@ -850,6 +862,9 @@ def main():
                    help="port to listen on (default: 8000)")
     p.add_argument("--db", default="gpumesh.db",
                    help="database file for job storage (default: gpumesh.db)")
+    p.add_argument("--host-ip", default="",
+                   help="address to advertise to workers (or set GPUMESH_HOST_IP); "
+                        "use when auto-detection picks a VPN or virtual adapter")
     p.add_argument("--token", default="",
                    help="auth token (random if omitted)")
     p.add_argument("--public", action="store_true",

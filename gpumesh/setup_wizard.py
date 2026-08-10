@@ -19,7 +19,8 @@ import threading
 import time
 
 from .tunnel import _get_tailscale_ip
-from .utils import get_lan_ip, show_firewall_hint, try_add_firewall_rule
+from .utils import (coordinator_url_candidates, get_lan_ip, show_firewall_hint,
+                    show_ip_alternatives, try_add_firewall_rule)
 
 _HAS_UI_DEPS = False
 _console = None
@@ -389,6 +390,11 @@ def _setup_coordinator_radar(device: str):
     # never displayed in auto-discovery mode).
     _show_running_coordinator_panel(coordinator_url, token)
 
+    # A claimed worker is handed this exact URL and cannot correct it, so if
+    # auto-detection picked a VPN or hypervisor address every claim will end
+    # in a connection timeout. Surface the alternatives before that happens.
+    show_ip_alternatives(lan_ip, actual_port)
+
     # Scan for workers using rich.live.Live for smooth updates
     prev_lines = 0
     peers = []
@@ -543,9 +549,22 @@ def _claim_worker(peers: list, coordinator_url: str, coordinator_token: str):
         _console.print(f"  Found claim server on port {claim_port}", style="green")
 
     claim_url = f"http://{peer.ip}:{claim_port}/api/claim"
+
+    # Offer every address this worker might reach us on, best first, and let
+    # it choose. We cannot determine that from here: which of our addresses
+    # is routable is a property of the network between the two machines, so
+    # sending a single guess means any wrong guess becomes the worker's
+    # silent 20-second timeout.
+    port = int(coordinator_url.rsplit(":", 1)[-1])
+    candidates = coordinator_url_candidates(peer.ip, port)
+    if coordinator_url not in candidates:
+        candidates.append(coordinator_url)
+
     payload = json.dumps({
         "token": token,
-        "coordinator_url": coordinator_url,
+        # Kept for workers predating the candidate list.
+        "coordinator_url": candidates[0],
+        "coordinator_urls": candidates,
         "coordinator_token": coordinator_token,
     }).encode()
 
@@ -558,11 +577,13 @@ def _claim_worker(peers: list, coordinator_url: str, coordinator_token: str):
             method="POST",
             headers={"Content-Type": "application/json"},
         )
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        # Must outlast the worker probing every candidate in turn.
+        with urllib.request.urlopen(req, timeout=25) as resp:
             result = json.loads(resp.read())
             if result.get("ok"):
+                used = result.get("coordinator_url", candidates[0])
                 _console.print(
-                    f"  {peer.hostname} claimed successfully! It will join the mesh shortly.",
+                    f"  {peer.hostname} reached us at {used} and is joining the mesh.",
                     style="green",
                 )
                 _console.print(Panel(
@@ -582,9 +603,27 @@ def _claim_worker(peers: list, coordinator_url: str, coordinator_token: str):
         try:
             body = json.loads(exc.read())
             err = body.get("error", str(exc))
+            tried = body.get("tried") or []
         except Exception:
             err = str(exc)
+            tried = []
         _console.print(f"  [ERROR] Claim failed: {err}", style="red")
+        if tried:
+            _console.print(
+                f"  {peer.hostname} could not reach this machine on any of:",
+                style="yellow",
+            )
+            for candidate in tried:
+                _console.print(f"    {candidate}", style="dim")
+            _console.print(
+                "  The two machines are on different networks, or a firewall is",
+                style="yellow",
+            )
+            _console.print(
+                "  dropping the port. Pin a reachable address with --host-ip, or",
+                style="yellow",
+            )
+            _console.print("  use Tailscale on both machines.", style="yellow")
     except (urllib.error.URLError, OSError) as exc:
         _console.print(f"  [ERROR] Could not reach worker at {claim_url}: {exc}", style="red")
     _console.print()
