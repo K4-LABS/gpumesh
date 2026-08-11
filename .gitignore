@@ -23,6 +23,14 @@ venv/
 .vscode/
 .idea/
 
+# AI coding assistants (local tooling, not part of the project)
+.agents/
+.claude/
+.continue/
+.forge/
+.aider*
+skills-lock.json
+
 # OS
 .DS_Store
 Thumbs.db
