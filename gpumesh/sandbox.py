@@ -32,16 +32,27 @@ class TaskError(Exception):
         self.user_error = user_error
 
 
-def _posix_limits(cpu_seconds: int):
-    def apply():
-        try:
-            import resource
+def _cpu_limit_preamble(cpu_seconds: int) -> str:
+    """Return a source preamble that caps the task's CPU time.
 
-            resource.setrlimit(resource.RLIMIT_CPU, (cpu_seconds, cpu_seconds))
-        except Exception:
-            pass
+    This used to be a ``preexec_fn`` that called ``resource.setrlimit``
+    between fork and exec. That is documented as unsafe when the parent has
+    threads, and the worker always does — a child forked while another thread
+    held an internal lock could block forever trying to acquire it, hanging
+    the task where no timeout could reach it.
 
-    return apply
+    Running the same call as the first statement of the child instead is
+    thread-safe, needs no fork-time callback, and enforces exactly the same
+    limit. It runs in the child's own interpreter, after exec.
+    """
+    return (
+        "import resource as _r\n"
+        "try:\n"
+        f"    _r.setrlimit(_r.RLIMIT_CPU, ({cpu_seconds}, {cpu_seconds}))\n"
+        "except Exception:\n"
+        "    pass\n"
+        "del _r\n"
+    )
 
 
 def run_task(script: str, payload, timeout: float = 240.0,
@@ -66,13 +77,23 @@ def run_task(script: str, payload, timeout: float = 240.0,
             # Force UTF-8 so task output always matches what the parent expects.
             "PYTHONIOENCODING": "utf-8",
         }
+        entry_path = script_path
         kwargs = {}
         if os.name == "posix":
-            kwargs["preexec_fn"] = _posix_limits(cpu_seconds)
+            # Apply the CPU limit inside the child rather than via preexec_fn.
+            # A separate launcher keeps the user's script line numbers intact
+            # in tracebacks, which prepending the preamble to it would shift.
+            # run_name="__main__" preserves the `if __name__ == "__main__":`
+            # entry point that task scripts rely on.
+            entry_path = os.path.join(workdir, "_gpumesh_launch.py")
+            with open(entry_path, "w", encoding="utf-8", newline="\n") as f:
+                f.write(_cpu_limit_preamble(cpu_seconds))
+                f.write("import runpy\n")
+                f.write(f"runpy.run_path({script_path!r}, run_name='__main__')\n")
             kwargs["start_new_session"] = True
 
         proc = subprocess.Popen(
-            [sys.executable, script_path],
+            [sys.executable, entry_path],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
