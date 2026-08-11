@@ -122,9 +122,11 @@ services:
       - "8732:8732"
       - "48900:48900/udp"
     environment:
-      - GPUMESH_TOKEN=mysecret
       - GPUMESH_COLOR=1
-    command: serve --port 8732 --color
+    # `serve` does not read GPUMESH_TOKEN from the environment (unlike
+    # `join`), so pass it explicitly — otherwise the coordinator starts with a
+    # random token and no worker can authenticate against it.
+    command: serve --port 8732 --color --token mysecret
     volumes:
       - gpumesh_data:/root/.gpumesh
     healthcheck:
@@ -139,10 +141,11 @@ services:
       coordinator:
         condition: service_healthy
     environment:
-      - GPUMESH_URL=http://coordinator:8732
       - GPUMESH_TOKEN=mysecret
       - GPUMESH_COLOR=1
-    command: join --color
+    # The coordinator URL is a required positional argument — `join` on its
+    # own exits with "the following arguments are required: url".
+    command: join http://coordinator:8732 --color
     deploy:
       replicas: 2
     restart: unless-stopped
@@ -155,16 +158,16 @@ Then run:
 
 ```bash
 # Start coordinator + 2 workers
-docker-compose up -d
+docker compose up -d
 
 # Scale to 4 workers
-docker-compose up -d --scale worker=4
+docker compose up -d --scale worker=4
 
 # View logs
-docker-compose logs -f
+docker compose logs -f
 
 # Stop everything
-docker-compose down
+docker compose down
 ```
 
 ---

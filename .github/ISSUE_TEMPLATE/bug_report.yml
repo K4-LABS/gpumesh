@@ -1,0 +1,108 @@
+name: Bug report
+description: Something does not work the way the docs say it should
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. Networking bugs are the hardest to reproduce
+        remotely, so the environment questions below matter more than usual —
+        please fill them in even if they feel irrelevant.
+
+        A misleading error message is a bug worth reporting, even if you
+        worked out the real cause yourself.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What did you expect, and what did you get instead?
+      placeholder: |
+        I ran `gpumesh join http://192.168.1.10:8000 --token secret` on my
+        laptop. I expected it to join the mesh. Instead it retried three
+        times and gave up.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: The exact commands you ran, in order, on which machine.
+      placeholder: |
+        1. On the desktop: gpumesh serve --port 8000 --token secret
+        2. On the laptop:  gpumesh join http://192.168.1.10:8000 --token secret
+        3. Laptop prints the output below
+    validations:
+      required: true
+
+  - type: textarea
+    id: output
+    attributes:
+      label: Full output
+      description: >
+        Paste everything, not just the last line — the lines before an error
+        usually say which address and port were involved. Redact your token.
+      render: shell
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: gpumesh version
+      description: "Output of `gpumesh --version`"
+      placeholder: gpumesh 1.2.0 (3.11.9, Windows)
+    validations:
+      required: true
+
+  - type: dropdown
+    id: install-method
+    attributes:
+      label: How did you install it?
+      options:
+        - pip install gpumesh
+        - pip install -e . (from source)
+        - Docker image
+        - docker compose
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Machines involved
+      description: >
+        OS and Python version for **each** machine. Note anything unusual
+        about the network: VPN, WSL, VirtualBox/VMware, Docker, corporate
+        Wi-Fi, or the two machines being on different subnets.
+      placeholder: |
+        Coordinator: Windows 11, Python 3.11, on Wi-Fi, Docker Desktop installed
+        Worker:      Ubuntu 22.04, Python 3.10, wired, same router
+    validations:
+      required: true
+
+  - type: textarea
+    id: connectivity
+    attributes:
+      label: "Connection problems only: reachability check"
+      description: >
+        From the **worker** machine, run
+        `curl http://<COORDINATOR-IP>:<PORT>/api/workers` and paste the result.
+        HTTP 401 means the machine is reachable and only the token is wrong —
+        that is a very different bug from a timeout. Also paste `ipconfig`
+        (Windows) or `ip addr` (Linux/macOS) from the coordinator.
+      render: shell
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues for this problem
+          required: true
+        - label: I removed my auth token from any output I pasted
+          required: true

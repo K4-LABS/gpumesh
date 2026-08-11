@@ -1,0 +1,73 @@
+name: Feature request
+description: Suggest a capability gpumesh does not have yet
+labels: ["feature-request"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before writing this up, it is worth checking the **Limitations**
+        section of the README. Some gaps are deliberate design boundaries
+        rather than missing work — model sharding and running untrusted code
+        are the two that come up most. Proposals to change those are still
+        welcome, but say why the tradeoff should move.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are you trying to solve?
+      description: >
+        Describe the situation, not the solution. What were you doing when
+        you wanted this?
+      placeholder: |
+        I have four machines with different GPUs and I want the strongest one
+        to always take the first task of a batch, because I care about the
+        first result arriving quickly rather than the whole batch finishing.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like it to do?
+      description: If you have an API or CLI shape in mind, sketch it.
+      placeholder: |
+        gpumesh submit ... --priority latency
+
+        or
+
+        @mesh(schedule="fastest-first")
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What have you tried instead?
+      description: >
+        Workarounds you attempted, and why they were not good enough. This
+        often reveals a simpler fix than the feature itself.
+    validations:
+      required: false
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which part of gpumesh does this touch?
+      options:
+        - Scheduling / task distribution
+        - Networking / discovery
+        - CLI
+        - Python API or decorators
+        - Docker
+        - Docs
+        - Not sure
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: contribute
+    attributes:
+      label: Would you be willing to work on this?
+      options:
+        - label: I would be interested in submitting a PR for this
+          required: false
