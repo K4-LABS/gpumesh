@@ -66,6 +66,13 @@ route to, and every worker would time out against it.
   The same broken recipe was published on the Docker Hub page and is corrected
   there too.
 
+- **gpumesh did not work on Python 3.9 at all**, despite
+  `requires-python = ">=3.9"` and a 3.9 classifier on PyPI. `capability.py`,
+  `claimer.py` and `worker.py` used PEP 604 (`X | None`) annotations without
+  `from __future__ import annotations`, so on 3.9 they were evaluated at
+  definition time and raised `TypeError` on import — the package could not be
+  imported, let alone run. Found by the new CI matrix within minutes of it
+  being added. All three modules now defer annotation evaluation.
 - **`gpumesh serve` ignored `GPUMESH_TOKEN` while `gpumesh join` honoured it.**
   A deployment that set the variable once for both roles gave the coordinator
   a random token while workers authenticated with the variable, so every

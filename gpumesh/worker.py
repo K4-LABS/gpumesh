@@ -13,6 +13,10 @@ Exo RunnerSupervisor pattern:
   wait for the current task (with a grace period), report status, clean up.
 """
 
+# Required for the ``X | None`` annotations below: on Python 3.9 they would
+# otherwise be evaluated at definition time and raise TypeError on import.
+from __future__ import annotations
+
 import hmac
 import json
 import os
