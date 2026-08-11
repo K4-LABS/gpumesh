@@ -5,7 +5,7 @@
 [![PyPI version](https://img.shields.io/pypi/v/gpumesh.svg)](https://pypi.org/project/gpumesh/)
 [![Python](https://img.shields.io/pypi/pyversions/gpumesh.svg)](https://pypi.org/project/gpumesh/)
 [![License](https://img.shields.io/pypi/l/gpumesh.svg)](https://github.com/Samurai007AK/gpumesh/blob/main/LICENSE)
-[![Tests](https://img.shields.io/badge/tests-590%20passed-brightgreen)](https://github.com/Samurai007AK/gpumesh)
+[![Tests](https://img.shields.io/badge/tests-642%20passed-brightgreen)](https://github.com/Samurai007AK/gpumesh)
 [![Status](https://img.shields.io/badge/status-beta-blue)](https://github.com/Samurai007AK/gpumesh)
 [![Docker](https://img.shields.io/badge/docker-ready-2496ED?logo=docker&logoColor=white)](https://hub.docker.com/r/samurai007ak/gpumesh)
 
@@ -469,9 +469,13 @@ Each worker runs a benchmark on join and gets a 0–100 score:
 git clone https://github.com/Samurai007AK/gpumesh.git
 cd gpumesh
 pip install -e ".[dev]"
-pytest                 # 590 tests
+pytest                 # 642 tests
 python -m build        # build wheel + sdist
 ```
+
+Contributions are welcome — issues and pull requests both. See
+[CONTRIBUTING.md](CONTRIBUTING.md) for setup, how the pieces fit together,
+and what makes a change easy to review.
 
 ---
 
