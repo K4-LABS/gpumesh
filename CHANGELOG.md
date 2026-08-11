@@ -50,8 +50,15 @@ route to, and every worker would time out against it.
   The candidate list above is what actually fixes the failure.
 - `_is_private_ip()` no longer raises `ValueError` on a malformed `172.*`
   address.
+- Five setup-wizard tests failed on a clean checkout. They assert on strings
+  containing numbers and URLs, which rich highlights automatically, injecting
+  ANSI escapes inside the asserted text. The test console is now plain, so the
+  suite is green from a fresh clone.
 
 ### Added
+- `CONTRIBUTING.md`: setup, a map of how the components fit together, the
+  invariants that are easy to break unknowingly, and what to include in a bug
+  report.
 - `gpumesh serve --host-ip <IP>` and the `GPUMESH_HOST_IP` environment
   variable pin the address advertised to workers. Auto-detection cannot always
   distinguish a real LAN interface from a VPN or hypervisor one, so a manual

@@ -79,6 +79,25 @@ def _hermetic_wizard(monkeypatch):
     monkeypatch.setattr(_questionary, "text", _fake_text)
     monkeypatch.setattr(_questionary, "confirm", _fake_confirm)
 
+    # rich highlights numbers and URLs automatically, which injects ANSI
+    # escapes *inside* the very strings these tests assert on: "Please enter
+    # 1 or 2" reaches stdout as "Please enter \x1b[1;36m1\x1b[0m or ...", so a
+    # plain substring check fails even though the user sees the right text.
+    # Force a plain, wide console so assertions match what is actually read,
+    # and so wrapping never splits a string mid-assertion.
+    import rich.console as _rich_console
+
+    _RealConsole = _rich_console.Console
+
+    def _plain_console(*args, **kwargs):
+        kwargs.setdefault("highlight", False)
+        kwargs.setdefault("no_color", True)
+        kwargs.setdefault("force_terminal", False)
+        kwargs.setdefault("width", 200)
+        return _RealConsole(*args, **kwargs)
+
+    monkeypatch.setattr("gpumesh.setup_wizard.Console", _plain_console)
+
     # Stub real-world side effects the wizard would otherwise trigger:
     # a self-worker connecting to a fake coordinator, a UDP listener
     # binding port 48900, and netsh firewall commands.
