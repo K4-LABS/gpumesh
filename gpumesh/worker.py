@@ -167,7 +167,14 @@ def _run_function_task(payload: dict, device: str, timeout: float,
 
     kwargs = {}
     if os.name == "posix":
-        kwargs["preexec_fn"] = os.setsid  # new process group for clean kill
+        # start_new_session=True is os.setsid() performed by CPython between
+        # fork and exec, without running Python code in the child. The
+        # equivalent preexec_fn=os.setsid is documented as unsafe when the
+        # parent has threads — and this parent always does (heartbeat thread,
+        # and under a self-worker the coordinator's HTTP threads too). A child
+        # forked while another thread holds an internal lock can block forever
+        # trying to acquire it, hanging the task with no timeout able to help.
+        kwargs["start_new_session"] = True
 
     proc = subprocess.Popen(
         [sys.executable, helper_path],
