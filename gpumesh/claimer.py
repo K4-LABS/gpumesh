@@ -8,6 +8,10 @@ If the token matches, the worker starts a background thread that joins
 the coordinator mesh via ``gpumesh.worker.run_worker``.
 """
 
+# Required for the ``X | None`` annotations below: on Python 3.9 they would
+# otherwise be evaluated at definition time and raise TypeError on import.
+from __future__ import annotations
+
 import hmac
 import json
 import threading
