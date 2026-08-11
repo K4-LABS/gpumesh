@@ -100,34 +100,131 @@ pip install gpumesh[ui]        # Setup wizard (rich + questionary)
 pip install gpumesh[all]       # Everything above
 ```
 
+Or with Docker:
+
+```bash
+docker pull samurai007ak/gpumesh:latest
+```
+
 **Requires:** Python 3.9+, cloudpickle (auto-installed). PyTorch is optional (needed for GPU detection).
+
+Verify the install:
+
+```console
+$ gpumesh --version
+gpumesh 1.2.0 (3.11.9, Windows)
+```
 
 ---
 
-## Quick start
+## Quickstart
 
-### 1. Start a coordinator (one machine)
+From nothing to a task running across two machines. The terminal output below
+is real, copied from an actual run.
+
+### 1. Start a coordinator (machine A)
 
 ```bash
+pip install gpumesh
 gpumesh serve --port 8000 --token mysecret
 ```
 
-> **Your own machine automatically joins the pool** — your CPU/GPU is used alongside any laptops that connect. No extra setup needed.
+```console
+[OK] Coordinator listening on 0.0.0.0:8000
+   Token: mysecret
+
+   Join from THIS machine:   gpumesh join http://127.0.0.1:8000 --token mysecret
+   Join from ANOTHER machine: gpumesh join http://10.126.13.54:8000 --token mysecret
+   (127.0.0.1 always works locally; the LAN IP is for other machines)
+[OK] Self-check: server is up (tested on 127.0.0.1 only)
+[OK] Self-worker started - this machine's CPU/GPU is part of the pool
+[worker] joined mesh as bdffd272eda3
+```
+
+**Copy the `Join from ANOTHER machine` line** — that is the exact command machine B needs.
+
+> Your own machine joins the pool automatically, so the mesh works even before
+> anyone else connects.
 >
-> Windows: run `gpumesh serve` as Administrator so the firewall rules are added automatically.
+> Windows: run as Administrator so the firewall rule is added for you. Without
+> it, workers on other machines may be blocked.
 
 Prefer a guided wizard? Run `gpumesh setup`.
 
-### 2. Join a worker (another machine)
+### 2. Join a worker (machine B)
 
 ```bash
-gpumesh join http://coordinator-ip:8000 --token mysecret
-gpumesh quickjoin http://coordinator-ip:8000 --token mysecret   # one-click: detect GPU + join
+pip install gpumesh
+gpumesh join http://10.126.13.54:8000 --token mysecret
 ```
 
-> **Workers never die** — they survive laptop sleep, WiFi drops, and coordinator restarts, and automatically reconnect when the coordinator comes back.
+```console
+[worker] device=CPU Intel64 Family 6 Model 154 Stepping 3 score=0.242 GFLOP/s
+[worker] joined mesh as 7c1e04ab93f2
+```
 
-### 3. Code normally
+Confirm from either machine:
+
+```console
+$ gpumesh workers
+
+  WORKERS
+  ------------------------------------------------------
+  CPU  bdffd272    machine-a         score=0.242     [alive]
+  CPU  7c1e04ab    machine-b         score=0.310     [alive]
+```
+
+> **Workers never die.** They survive laptop sleep, WiFi drops and coordinator
+> restarts, and reconnect on their own.
+>
+> If the worker reports a timeout instead, it could not reach that address —
+> see [Troubleshooting](#troubleshooting).
+
+### 3. Run a distributed task
+
+Save as `demo.py` on either machine:
+
+```python
+from gpumesh import mesh          # auto-connects using the saved config
+
+@mesh
+def train(lr, epochs):
+    return {"lr": lr, "accuracy": round(0.90 + lr, 3)}
+
+print(train(lr=0.01, epochs=100))                              # one worker
+print(train.map([{"lr": 0.01, "epochs": 100},                  # every worker
+                 {"lr": 0.05, "epochs": 200}]))
+```
+
+```console
+$ python demo.py
+[gpumesh] connected to coordinator at http://10.126.13.54:8000
+{'lr': 0.01, 'accuracy': 0.91}
+[{'lr': 0.01, 'accuracy': 0.91}, {'lr': 0.05, 'accuracy': 0.95}]
+```
+
+That is the whole workflow. `train()` ran on a mesh worker; `train.map()` was
+split across every machine in the pool.
+
+Prefer the CLI? Submit a script instead. (The `examples/` files ship with the
+repository, not the pip package — `git clone` first, or point the command at
+any script of your own that reads a JSON payload on stdin.)
+
+```console
+$ gpumesh submit examples/grid_search.py --payloads examples/payloads.json --wait
+
+Job: examples/grid_search.py (6b9415d1275e)
+
+  #################### 100%  6/6 done  (12s)
+
+  Status: finished
+  Counts: {'done': 6}
+
+  [OK] task 144c05b7a271 [done]  cost=1.0  worker=bdffd272eda3
+    result: {"lr": 0.01, "epochs": 100, "val_accuracy": 0.948, ...}
+```
+
+### Code normally
 
 This is the entire point. Once a worker is connected, every machine sees the same pool. Write normal Python and mark the heavy functions:
 
@@ -346,12 +443,16 @@ docker run -d --name gpumesh-worker \
   join http://coordinator-ip:8732 --token mysecret
 ```
 
-Or use the included `docker-compose.yaml` for a coordinator + N workers with healthchecks:
+Or use the included `docker-compose.yaml` for a coordinator + N workers with healthchecks. It builds from source, so clone the repo first:
 
 ```bash
-GPUMESH_TOKEN=mysecret docker-compose up -d
-docker-compose up -d --scale worker=4   # scale workers
+git clone https://github.com/Samurai007AK/gpumesh.git
+cd gpumesh
+GPUMESH_TOKEN=mysecret docker compose up -d
+WORKER_REPLICAS=4 GPUMESH_TOKEN=mysecret docker compose up -d   # scale workers
 ```
+
+`GPUMESH_TOKEN` is required — compose stops with a clear message if it is unset, rather than starting a coordinator with a random token that no worker can authenticate against.
 
 **Ports:** `8732` (TCP API) and `48900/udp` (LAN discovery).
 
