@@ -66,6 +66,17 @@ route to, and every worker would time out against it.
   The same broken recipe was published on the Docker Hub page and is corrected
   there too.
 
+- **Tasks could hang forever on Linux and macOS.** Both subprocess launch
+  paths used `preexec_fn`, which Python documents as unsafe when the parent
+  has threads — and the worker always has them (heartbeat thread, plus the
+  coordinator's HTTP threads when running as a self-worker). A child forked
+  while another thread held an internal lock could block between `fork` and
+  `exec`, hanging the task where neither the task timeout nor the lease
+  reaper could reach it. Windows was unaffected, having no `fork`, which is
+  why this survived undetected. `worker.py` now uses `start_new_session=True`
+  (the same `setsid`, performed safely by CPython), and `sandbox.py` applies
+  the CPU rlimit inside the child through a launcher that preserves the
+  script's own line numbers in tracebacks.
 - **gpumesh did not work on Python 3.9 at all**, despite
   `requires-python = ">=3.9"` and a 3.9 classifier on PyPI. `capability.py`,
   `claimer.py` and `worker.py` used PEP 604 (`X | None`) annotations without
