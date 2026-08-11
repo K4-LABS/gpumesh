@@ -5,6 +5,10 @@ capability score used by the scheduler. torch and psutil are optional:
 without them the probe falls back to CPU info and a pure-Python benchmark.
 """
 
+# Required for the ``X | None`` annotations below: on Python 3.9 they would
+# otherwise be evaluated at definition time and raise TypeError on import.
+from __future__ import annotations
+
 import os
 import platform
 import socket
