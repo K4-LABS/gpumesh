@@ -122,11 +122,9 @@ services:
       - "8732:8732"
       - "48900:48900/udp"
     environment:
+      - GPUMESH_TOKEN=mysecret
       - GPUMESH_COLOR=1
-    # `serve` does not read GPUMESH_TOKEN from the environment (unlike
-    # `join`), so pass it explicitly — otherwise the coordinator starts with a
-    # random token and no worker can authenticate against it.
-    command: serve --port 8732 --color --token mysecret
+    command: serve --port 8732 --color
     volumes:
       - gpumesh_data:/root/.gpumesh
     healthcheck:

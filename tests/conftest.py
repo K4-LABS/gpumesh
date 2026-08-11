@@ -20,3 +20,20 @@ def _isolate_gpumesh_config(tmp_path, monkeypatch):
     monkeypatch.setattr(connection_manager, "_CONFIG_PATH",
                         str(config_dir / "config.json"))
     yield
+
+
+@pytest.fixture(autouse=True)
+def _isolate_gpumesh_env(monkeypatch):
+    """Clear GPUMESH_* variables so the developer's shell cannot change results.
+
+    Several of these are read as argparse defaults or consulted directly by
+    the routing code, so a contributor who exports GPUMESH_TOKEN for their own
+    mesh would otherwise see unrelated tests fail — the kind of failure that
+    looks like a real bug and wastes an afternoon. Tests that need a value set
+    it explicitly with monkeypatch.setenv.
+    """
+    for name in ("GPUMESH_TOKEN", "GPUMESH_URL", "GPUMESH_HOST_IP",
+                 "GPUMESH_LOCAL", "GPUMESH_VERBOSE", "GPUMESH_COLOR",
+                 "GPUMESH_PORT"):
+        monkeypatch.delenv(name, raising=False)
+    yield

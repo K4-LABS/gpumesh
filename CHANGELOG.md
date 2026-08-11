@@ -66,7 +66,19 @@ route to, and every worker would time out against it.
   The same broken recipe was published on the Docker Hub page and is corrected
   there too.
 
+- **`gpumesh serve` ignored `GPUMESH_TOKEN` while `gpumesh join` honoured it.**
+  A deployment that set the variable once for both roles gave the coordinator
+  a random token while workers authenticated with the variable, so every
+  worker was rejected with a 401 and nothing explained why. `serve` now reads
+  it too; an explicit `--token` still wins.
+- Tests no longer inherit `GPUMESH_*` variables from the developer's shell. A
+  contributor who exported `GPUMESH_TOKEN` for their own mesh would have seen
+  unrelated CLI tests fail.
+
 ### Added
+- Continuous integration: the suite runs on Linux (Python 3.9, 3.11, 3.12),
+  Windows and macOS on every push and pull request. The README test badge is
+  now live rather than a hand-edited number that could drift from reality.
 - `CONTRIBUTING.md`: setup, a map of how the components fit together, the
   invariants that are easy to break unknowingly, and what to include in a bug
   report.

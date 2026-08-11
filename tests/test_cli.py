@@ -241,6 +241,52 @@ class TestCLIArgumentParsing:
             # Verify generated token was used
             mock_serve.assert_called_once_with("0.0.0.0", 8000, "gpumesh.db", "generatedtoken123", discovery=True, safe_mode=False)
 
+    def test_serve_reads_token_from_environment(self, monkeypatch):
+        """GPUMESH_TOKEN is honoured, matching `join`.
+
+        Regression: `join` read the variable and `serve` did not, so a
+        deployment setting it once for both roles (docker compose, systemd)
+        gave the coordinator a random token while workers used the variable.
+        Every worker was rejected with a 401 and nothing said why.
+        """
+        from gpumesh.cli import main
+
+        monkeypatch.setenv("GPUMESH_TOKEN", "token-from-env")
+        with patch("sys.argv", ["gpumesh", "serve"]), \
+             patch("gpumesh.cli.server.serve") as mock_serve, \
+             patch("gpumesh.cli.worker.spawn_local_worker"), \
+             patch("gpumesh.cli.tunnel.open_tunnel"):
+            mock_serve.return_value = MagicMock()
+            try:
+                main()
+            except SystemExit:
+                pass
+
+            mock_serve.assert_called_once_with(
+                "0.0.0.0", 8000, "gpumesh.db", "token-from-env",
+                discovery=True, safe_mode=False,
+            )
+
+    def test_serve_explicit_token_beats_environment(self, monkeypatch):
+        """An explicit --token wins over GPUMESH_TOKEN."""
+        from gpumesh.cli import main
+
+        monkeypatch.setenv("GPUMESH_TOKEN", "token-from-env")
+        with patch("sys.argv", ["gpumesh", "serve", "--token", "explicit"]), \
+             patch("gpumesh.cli.server.serve") as mock_serve, \
+             patch("gpumesh.cli.worker.spawn_local_worker"), \
+             patch("gpumesh.cli.tunnel.open_tunnel"):
+            mock_serve.return_value = MagicMock()
+            try:
+                main()
+            except SystemExit:
+                pass
+
+            mock_serve.assert_called_once_with(
+                "0.0.0.0", 8000, "gpumesh.db", "explicit",
+                discovery=True, safe_mode=False,
+            )
+
     def test_quickjoin_token_required(self):
         """--token is required for quickjoin."""
         import argparse
