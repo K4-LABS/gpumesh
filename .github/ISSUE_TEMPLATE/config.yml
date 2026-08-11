@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Question or general discussion
+    url: https://github.com/Samurai007AK/gpumesh/discussions
+    about: For "how do I", "is this supposed to work like this", and ideas that are not yet a concrete request.
+  - name: Report a security vulnerability
+    url: https://github.com/Samurai007AK/gpumesh/security/advisories/new
+    about: Please do not open a public issue for security problems. Note that no transport encryption and workers executing coordinator-sent code are documented design properties, not vulnerabilities.

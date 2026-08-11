@@ -55,10 +55,26 @@ route to, and every worker would time out against it.
   ANSI escapes inside the asserted text. The test console is now plain, so the
   suite is green from a fresh clone.
 
+- **`docker compose up` could never have worked.** The worker service ran
+  `join --color` with no URL, but the coordinator URL is a required positional
+  argument, so every worker exited immediately with an argparse error. Even
+  with that fixed the mesh could not form: unlike `join`, `gpumesh serve` does
+  not read `GPUMESH_TOKEN` from the environment, so the coordinator generated
+  a random token while workers authenticated with `$GPUMESH_TOKEN` — a
+  guaranteed 401. Both compose recipes now pass the URL and the token
+  explicitly, and fail with a readable message when `GPUMESH_TOKEN` is unset.
+  The same broken recipe was published on the Docker Hub page and is corrected
+  there too.
+
 ### Added
 - `CONTRIBUTING.md`: setup, a map of how the components fit together, the
   invariants that are easy to break unknowingly, and what to include in a bug
   report.
+- GitHub issue templates for bug reports and feature requests. The bug
+  template asks for the reachability check that distinguishes a firewall drop
+  from a wrong token, because that is the question that resolves most reports.
+- A Quickstart in the README that carries the real terminal output of each
+  step, so a reader can tell a working run from a broken one.
 - `gpumesh serve --host-ip <IP>` and the `GPUMESH_HOST_IP` environment
   variable pin the address advertised to workers. Auto-detection cannot always
   distinguish a real LAN interface from a VPN or hypervisor one, so a manual

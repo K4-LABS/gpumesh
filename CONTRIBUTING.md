@@ -7,6 +7,26 @@ scheduling strategy.
 If you are unsure whether something is worth doing, open an issue and ask
 before writing code. A short conversation is cheaper than a rewritten PR.
 
+## Expect rough edges
+
+gpumesh is early-stage — `Development Status :: 4 - Beta`. It works, it is
+tested, and it is used, but it is not settled:
+
+- Internal APIs change without deprecation cycles. The public surface
+  (`@mesh`, `@accelerate`, `GPUMesh`, the CLI) is more stable than the rest.
+- The hardest problems are in networking, and they are hard to reproduce.
+  Most remaining bugs surface only across two real machines with a VPN,
+  hypervisor adapter or firewall in the way — not on loopback.
+- There is no CI yet, so **please run `pytest` locally before opening a PR**.
+- Some errors still tell you the wrong thing. Fixing a misleading message is a
+  genuinely useful contribution, not a nitpick.
+
+New here? Issues labelled
+[`good first issue`](https://github.com/Samurai007AK/gpumesh/labels/good%20first%20issue)
+are scoped so you do not need to understand the whole codebase, and
+[`help wanted`](https://github.com/Samurai007AK/gpumesh/labels/help%20wanted)
+marks the ones where input is most valuable.
+
 ---
 
 ## Setup
@@ -144,6 +164,36 @@ Every behavioural change needs a test. A few conventions:
 
 ---
 
+## Code style
+
+**There is no linter or formatter configured on this project.** No black, no
+ruff, no flake8, no mypy, no pre-commit hooks. That is deliberate for now, and
+it means one thing for you:
+
+> Match the style of the file you are editing. That is the whole rule.
+
+Please do not add a formatter, reformat files you are not otherwise changing,
+or bulk-fix whitespace. A diff that mixes a real change with a reformat is
+hard to review and hard to revert. If you think the project should adopt a
+formatter, open an issue and make the case — do not open a PR that applies
+one.
+
+What the existing code does, so you can match it:
+
+- 4-space indent, double quotes. Most lines stay under 80 characters and
+  almost none exceed 100 — no hard limit is enforced
+- `from __future__ import annotations` at the top of modules using modern
+  type-hint syntax on Python 3.9
+- Type hints on public functions; not required on locals or tests
+- Docstrings on modules, classes and non-obvious functions. They explain
+  *why* something works the way it does, not what the next line says
+- Optional dependencies imported inside the function that needs them, never
+  at module top level
+- Terminal output goes through `gpumesh.ansi.safe_print` and the colour
+  helpers, never bare `print` with escape codes
+
+---
+
 ## Pull requests
 
 1. Branch from `main`: `git checkout -b fix/short-description`
@@ -151,6 +201,20 @@ Every behavioural change needs a test. A few conventions:
 3. Run the full suite — `pytest` must be green
 4. Update `CHANGELOG.md` under `## [Unreleased]`
 5. Open the PR
+
+**Branch naming:** `fix/`, `feat/`, `docs/`, `test/` or `chore/` followed by a
+short hyphenated description — `fix/worker-timeout-message`,
+`docs/windows-setup`.
+
+**A good PR description answers three questions:**
+
+- *What was wrong before?* The behaviour you observed, not the code you read.
+- *What does this change?* One or two sentences.
+- *How do you know it works?* The test you added, or the manual steps you ran
+  — especially for networking changes, where "I ran it across two machines
+  and here is the output" is worth more than any unit test.
+
+Link the issue if there is one (`Fixes #12`).
 
 **Commit messages:** explain *why*, not just what. The subject line says what
 changed; the body says what was wrong before and why this is the right fix.
