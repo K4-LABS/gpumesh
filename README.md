@@ -5,7 +5,7 @@
 [![PyPI version](https://img.shields.io/pypi/v/gpumesh.svg)](https://pypi.org/project/gpumesh/)
 [![Python](https://img.shields.io/pypi/pyversions/gpumesh.svg)](https://pypi.org/project/gpumesh/)
 [![License](https://img.shields.io/pypi/l/gpumesh.svg)](https://github.com/Samurai007AK/gpumesh/blob/main/LICENSE)
-[![Tests](https://img.shields.io/badge/tests-642%20passed-brightgreen)](https://github.com/Samurai007AK/gpumesh)
+[![Tests](https://github.com/Samurai007AK/gpumesh/actions/workflows/tests.yml/badge.svg)](https://github.com/Samurai007AK/gpumesh/actions/workflows/tests.yml)
 [![Status](https://img.shields.io/badge/status-beta-blue)](https://github.com/Samurai007AK/gpumesh)
 [![Docker](https://img.shields.io/badge/docker-ready-2496ED?logo=docker&logoColor=white)](https://hub.docker.com/r/samurai007ak/gpumesh)
 
@@ -443,16 +443,14 @@ docker run -d --name gpumesh-worker \
   join http://coordinator-ip:8732 --token mysecret
 ```
 
-Or use the included `docker-compose.yaml` for a coordinator + N workers with healthchecks. It builds from source, so clone the repo first:
+Or use the included [`docker-compose.yaml`](docker-compose.yaml) for a coordinator + N workers with healthchecks. It pulls the published image, so the file works on its own:
 
 ```bash
-git clone https://github.com/Samurai007AK/gpumesh.git
-cd gpumesh
 GPUMESH_TOKEN=mysecret docker compose up -d
 WORKER_REPLICAS=4 GPUMESH_TOKEN=mysecret docker compose up -d   # scale workers
 ```
 
-`GPUMESH_TOKEN` is required — compose stops with a clear message if it is unset, rather than starting a coordinator with a random token that no worker can authenticate against.
+`GPUMESH_TOKEN` is required — compose stops with a clear message if it is unset, rather than starting a coordinator with a random token that no worker could authenticate against.
 
 **Ports:** `8732` (TCP API) and `48900/udp` (LAN discovery).
 

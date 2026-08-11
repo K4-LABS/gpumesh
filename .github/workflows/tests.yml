@@ -1,0 +1,50 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: ${{ matrix.os }} / Python ${{ matrix.python-version }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        python-version: ["3.9", "3.11", "3.12"]
+        include:
+          # gpumesh does a lot of Windows-specific work (firewall rules,
+          # taskkill process trees, cp1252 console handling), so Windows is
+          # not an afterthought here — but one interpreter is enough to catch
+          # platform regressions without tripling the matrix.
+          - os: windows-latest
+            python-version: "3.11"
+          - os: macos-latest
+            python-version: "3.12"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install
+        # numpy is not a gpumesh extra, but several tests use it via
+        # importorskip to check that non-JSON return values survive the trip
+        # through the coordinator. Without it those tests silently skip, which
+        # is the coverage most worth having.
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev,ui,notebook]" numpy
+
+      - name: Run tests
+        # Several tests bind real loopback sockets and wait on leases, so the
+        # suite is slower than its size suggests. The timeout is a guard
+        # against a hung server thread, not a performance target.
+        timeout-minutes: 25
+        run: pytest -q --durations=10

@@ -1,17 +1,23 @@
+# Coordinator + N workers.
+#
+#     GPUMESH_TOKEN=mysecret docker compose up -d
+#
+# Both services read GPUMESH_TOKEN from the environment. `:?` fails the run
+# with a readable message when it is unset, instead of starting a coordinator
+# with a random token that no worker could ever authenticate against.
+#
+# This uses the published image so the file works on its own. To test local
+# changes instead, replace `image:` with `build: .` in both services.
 services:
   coordinator:
-    build: .
+    image: samurai007ak/gpumesh:latest
     ports:
       - "${GPUMESH_PORT:-8732}:8732"
       - "48900:48900/udp"
     environment:
+      - GPUMESH_TOKEN=${GPUMESH_TOKEN:?set GPUMESH_TOKEN, e.g. GPUMESH_TOKEN=mysecret docker compose up -d}
       - GPUMESH_COLOR=1
-    # `gpumesh serve` does not read GPUMESH_TOKEN from the environment (unlike
-    # `join`), so the token must be passed explicitly — without it the
-    # coordinator generates a random one and no worker can ever authenticate.
-    # `:?` fails the run with a readable message instead of starting a mesh
-    # whose workers are guaranteed to be rejected.
-    command: serve --port 8732 --color --token ${GPUMESH_TOKEN:?set GPUMESH_TOKEN, e.g. GPUMESH_TOKEN=mysecret docker compose up -d}
+    command: serve --port 8732 --color
     volumes:
       - gpumesh_data:/root/.gpumesh
     healthcheck:
@@ -21,17 +27,15 @@ services:
       retries: 3
 
   worker:
-    build: .
+    image: samurai007ak/gpumesh:latest
     depends_on:
       coordinator:
         condition: service_healthy
     environment:
       - GPUMESH_TOKEN=${GPUMESH_TOKEN:?set GPUMESH_TOKEN, e.g. GPUMESH_TOKEN=mysecret docker compose up -d}
       - GPUMESH_COLOR=1
-    # The coordinator URL is a required positional argument — `join` alone
-    # exits with "the following arguments are required: url", so every worker
-    # would crash on startup. --token is omitted deliberately: `join` does
-    # read GPUMESH_TOKEN from the environment.
+    # The coordinator URL is a required positional argument — `join` on its
+    # own exits with "the following arguments are required: url".
     command: join http://coordinator:8732 --color
     deploy:
       replicas: ${WORKER_REPLICAS:-2}

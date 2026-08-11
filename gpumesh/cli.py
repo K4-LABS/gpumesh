@@ -865,8 +865,12 @@ def main():
     p.add_argument("--host-ip", default="",
                    help="address to advertise to workers (or set GPUMESH_HOST_IP); "
                         "use when auto-detection picks a VPN or virtual adapter")
-    p.add_argument("--token", default="",
-                   help="auth token (random if omitted)")
+    # Reads GPUMESH_TOKEN for parity with `join`. Without it, a deployment
+    # that sets the variable once for both roles (docker compose, systemd)
+    # gave the coordinator a random token while workers used the variable —
+    # a mesh that could never authenticate, with no hint as to why.
+    p.add_argument("--token", default=os.environ.get("GPUMESH_TOKEN", ""),
+                   help="auth token (or set GPUMESH_TOKEN; random if omitted)")
     p.add_argument("--public", action="store_true",
                    help="expose a public URL via ngrok")
     p.add_argument("--tailscale", action="store_true",
