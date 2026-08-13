@@ -742,53 +742,35 @@ class TestPortFallbackEdgeCases:
             httpd1.shutdown()
 
     def test_cli_serve_shows_port_suggestion(self, capsys, tmp_path):
-        """cmd_serve suggests alternative port when 8000 is taken."""
-        import socket
+        """A port already in use is reported, with the next port suggested.
 
-        from gpumesh.server import serve
+        Occupying the port for real does not test this. Whether a second bind
+        fails is a kernel policy that differs per platform -- Linux refuses
+        cmd_serve's wildcard bind when 127.0.0.1 is taken, macOS allows it --
+        and where it is allowed cmd_serve starts normally and serves forever,
+        so the test hangs instead of failing. Two CI runs died that way.
 
-        # Start server on port 0 to grab a port
-        httpd = serve("127.0.0.1", 0, str(tmp_path / "db.db"), "token")
-        port = httpd.server_address[1]
+        What is under test is cmd_serve's handling of the error, not the
+        kernel's willingness to produce it, so raise it directly.
+        """
+        args = MagicMock()
+        args.port = 8000
+        args.db = str(tmp_path / "test.db")
+        args.token = "test"
+        args.tailscale = False
+        args.public = False
+        args.safe_mode = False
 
-        try:
-            # There is only a suggestion to make where the second bind
-            # actually fails, and otherwise cmd_serve starts normally and
-            # serves forever — an indefinite hang rather than a failure. So
-            # ask this machine rather than naming platforms.
-            #
-            # The probe must bind what cmd_serve binds: the wildcard address,
-            # with the same SO_REUSEADDR the server sets. That the occupied
-            # socket is on 127.0.0.1 and this one is on 0.0.0.0 is the whole
-            # question — Linux refuses the overlap, macOS permits it, and
-            # probing 127.0.0.1 answers a question nobody asked (macOS
-            # refuses that one too, which is how this test still hung).
-            probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            try:
-                probe.bind(("0.0.0.0", port))
-            except OSError:
-                pass  # good — the overlap is refused here
-            else:
-                pytest.skip("this platform allows re-binding a listening port")
-            finally:
-                probe.close()
-
-            args = MagicMock()
-            args.port = port
-            args.db = str(tmp_path / "test.db")
-            args.token = "test"
-            args.tailscale = False
-            args.public = False
-
+        with patch("gpumesh.cli.utils.try_add_firewall_rule", return_value=True), \
+             patch("gpumesh.cli.server.serve",
+                   side_effect=OSError("Address already in use")):
             with pytest.raises(SystemExit):
                 cmd_serve(args)
 
-            captured = capsys.readouterr()
-            assert "port" in captured.out.lower()
-        finally:
-            httpd.gpumesh_stop.set()
-            httpd.shutdown()
+        captured = capsys.readouterr()
+        assert "8000" in captured.out
+        assert "already in use" in captured.out.lower()
+        assert "8001" in captured.out, "should suggest the next port"
 
 
 class TestThreadTimeoutEdgeCases:
