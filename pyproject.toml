@@ -49,3 +49,12 @@ gpumesh = "gpumesh.cli:main"
 [tool.setuptools.packages.find]
 include = ["gpumesh*"]
 exclude = ["tests*", "scripts*"]
+
+[tool.pytest.ini_options]
+# Almost every test here starts a real server, worker, or subprocess, so the
+# way this suite fails is by blocking rather than by asserting. Without a cap
+# a single stuck test consumes the whole CI job budget and the log ends
+# mid-progress with nothing to go on. This dumps every thread's stack and
+# aborts instead. The slowest legitimate test takes ~21s, so 300s only ever
+# fires on a genuine hang.
+faulthandler_timeout = 300
