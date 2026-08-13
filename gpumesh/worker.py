@@ -398,15 +398,21 @@ def _diagnostics_report(task_id: str, error: Exception,
 
 
 def run_worker(url: str, token: str, task_timeout: float = 240.0,
-               safe_mode: bool = False, persist_connection: bool = True):
+               safe_mode: bool = False, persist_connection: bool = True,
+               stop_event: "threading.Event | None" = None):
     """Join a mesh as a worker and execute tasks until interrupted.
 
     Resilience contract: after a successful registration the worker NEVER
     exits on its own. A coordinator outage, laptop sleep, or WiFi drop only
     pauses it — it retries with capped exponential backoff and automatically
     re-registers when the coordinator returns. Only an explicit signal
-    (Ctrl+C / SIGTERM / SIGBREAK) or a 401 (the coordinator restarted with a
-    different token) stops the worker.
+    (Ctrl+C / SIGTERM / SIGBREAK), a 401 (the coordinator restarted with a
+    different token), or *stop_event* being set stops the worker.
+
+    Pass *stop_event* to shut a worker down from another thread. Signals only
+    reach the main thread, so without it a worker started in a background
+    thread — which is how :func:`start_worker_thread` and every embedded use
+    runs one — could never be stopped at all.
     """
     mesh = MeshClient(url, token)
     info = capability.full_probe()
@@ -493,7 +499,7 @@ def run_worker(url: str, token: str, task_timeout: float = 240.0,
         safe_print(f"{bold(cyan('[worker]'))} {red('failed to register')} with coordinator: {exc}")
         return
 
-    stop = threading.Event()
+    stop = stop_event if stop_event is not None else threading.Event()
 
     # --- Graceful shutdown handler (Exo pattern) ---
     # On SIGTERM/SIGBREAK: stop accepting new tasks immediately, let the
@@ -750,14 +756,20 @@ def spawn_local_worker(url: str, token: str, task_timeout: float = 240.0,
     coordinator's own CPU/GPU automatically joins the pool. Runs in a daemon
     thread; the resilient :func:`run_worker` reconnects automatically.
 
-    Returns the worker thread.
+    Returns the worker thread. Its ``gpumesh_stop`` attribute is the event
+    that shuts the worker down — the same convention ``serve()`` uses for the
+    coordinator — because a daemon thread that outlives its caller is not
+    actually free: it keeps polling, and at interpreter shutdown it can be
+    killed mid-print, leaving stdout's lock held and hanging the process.
     """
+    stop = threading.Event()
     thread = threading.Thread(
         target=run_worker,
-        args=(url, token, task_timeout, safe_mode, persist_connection),
+        args=(url, token, task_timeout, safe_mode, persist_connection, stop),
         daemon=True,
         name="gpumesh-self-worker",
     )
+    thread.gpumesh_stop = stop
     thread.start()
     return thread
 
