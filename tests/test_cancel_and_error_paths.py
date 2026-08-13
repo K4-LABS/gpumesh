@@ -753,17 +753,22 @@ class TestPortFallbackEdgeCases:
 
         try:
             # There is only a suggestion to make where the second bind
-            # actually fails. Windows allows re-binding a listening port, and
-            # so does macOS; there cmd_serve starts normally and then serves
-            # forever, which as a test is an indefinite hang rather than a
-            # failure. Which platforms behave which way is a kernel detail
-            # that changes, so ask this machine instead of naming names.
+            # actually fails, and otherwise cmd_serve starts normally and
+            # serves forever — an indefinite hang rather than a failure. So
+            # ask this machine rather than naming platforms.
+            #
+            # The probe must bind what cmd_serve binds: the wildcard address,
+            # with the same SO_REUSEADDR the server sets. That the occupied
+            # socket is on 127.0.0.1 and this one is on 0.0.0.0 is the whole
+            # question — Linux refuses the overlap, macOS permits it, and
+            # probing 127.0.0.1 answers a question nobody asked (macOS
+            # refuses that one too, which is how this test still hung).
             probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             try:
-                probe.bind(("127.0.0.1", port))
+                probe.bind(("0.0.0.0", port))
             except OSError:
-                pass  # good — a taken port is refused here
+                pass  # good — the overlap is refused here
             else:
                 pytest.skip("this platform allows re-binding a listening port")
             finally:
