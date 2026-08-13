@@ -493,7 +493,9 @@ class TestWorkerBackoff:
         import inspect
         import ast
 
-        source = inspect.getsource(run_worker)
+        # unwrap(): conftest wraps run_worker to hand every worker a stop
+        # event, and getsource() does not follow __wrapped__ on its own.
+        source = inspect.getsource(inspect.unwrap(run_worker))
         tree = ast.parse(source)
 
         # Walk AST to find backoff = POLL_INTERVAL inside a block where task is not None

@@ -331,7 +331,15 @@ class Listener:
 
     def __init__(self, port: int = BROADCAST_PORT,
                  expected_role: str | None = None):
-        self._port = port or get_ephemeral_port()
+        # port=0 means "any free port", and it stays 0 until start() binds.
+        # Resolving it here via get_ephemeral_port() would bind a socket, read
+        # the port, close it, and only bind for real later — between those two
+        # binds anything else on the machine can take the port, and on Linux
+        # the second bind then fails with EADDRINUSE. (Windows hides the race:
+        # its SO_REUSEADDR lets the second bind take the port regardless.)
+        # Letting the kernel assign the port at the one bind that matters has
+        # no window to lose.
+        self._port = port
         self._expected_role = (_validate_role(expected_role)
                                if expected_role is not None else None)
         self._peers: dict[str, Peer] = {}   # key = "hostname:api_port"
@@ -379,6 +387,9 @@ class Listener:
             probe.close()
             self._bind_error = exc
             raise
+        # With port=0 the kernel picked the port; record what it chose so
+        # callers can read `.port` and send beacons to this listener.
+        self._port = probe.getsockname()[1]
         self._bind_error = None
         self._stop.clear()
         self._thread = threading.Thread(target=self._loop, daemon=True,

@@ -348,6 +348,15 @@ def serve(host: str, port: int, db_path: str, token: str,
     _orig_shutdown = httpd.shutdown
     _shutdown_done = threading.Event()
 
+    # Whether the accept loop is running. BaseServer.shutdown() waits on an
+    # event that only serve_forever() sets, so calling it before the loop
+    # starts blocks forever — but skipping it when the loop IS running leaves
+    # the coordinator serving after shutdown() returned. Both cases need the
+    # real answer, and the server object does not expose one, so track it.
+    _serve_lock = threading.Lock()
+    _serving = False
+    _stop_requested = False
+
     def _shutdown_with_listener():
         if _shutdown_done.is_set():
             return  # idempotent — already shut down
@@ -368,12 +377,19 @@ def serve(host: str, port: int, db_path: str, token: str,
             handler.db.close()
         except Exception:
             pass
-        # Only call shutdown if serve_forever was started; otherwise
-        # BaseServer.shutdown() hangs on an unset event
-        if hasattr(httpd, "_BaseServer__serving") and httpd._BaseServer__serving:
+        nonlocal _stop_requested
+        with _serve_lock:
+            _stop_requested = True   # stops a loop that has not started yet
+            serving = _serving
+        if serving:
             _orig_shutdown()
-        else:
-            httpd.server_close()
+        # shutdown() only stops the accept loop — it leaves the listening
+        # socket bound. A coordinator that has "shut down" but still owns the
+        # port is not shut down: restarting on the same port fails with
+        # EADDRINUSE on Linux, and even where SO_REUSEADDR papers over it
+        # (Windows) the old socket lingers as a leaked descriptor.
+        # server_close() is idempotent, so this is safe on either path.
+        httpd.server_close()
 
     httpd.shutdown = _shutdown_with_listener
 
@@ -383,14 +399,22 @@ def serve(host: str, port: int, db_path: str, token: str,
     # shutdown flag, so swallowing the error here keeps Ctrl+C clean.
     _orig_serve_forever = httpd.serve_forever
 
-    def _safe_serve_forever():
+    def _safe_serve_forever(*args, **kwargs):
+        nonlocal _serving
+        with _serve_lock:
+            if _stop_requested:
+                return  # shutdown() ran before this thread got going
+            _serving = True
         try:
-            _orig_serve_forever()
+            _orig_serve_forever(*args, **kwargs)
         except OSError as exc:
             if getattr(exc, "winerror", None) == 10038:
                 pass
             else:
                 raise
+        finally:
+            with _serve_lock:
+                _serving = False
 
     httpd.serve_forever = _safe_serve_forever
 
