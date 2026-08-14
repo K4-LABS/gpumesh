@@ -200,6 +200,22 @@ def deserialize_function(data: str):
         source = textwrap.dedent(metadata["source"])
         func_name = metadata["func_name"]
 
+        # The captured source starts at the function's decorator lines (e.g.
+        # ``@mesh``). Those names cannot be reconstructed from the JSON
+        # metadata, and the function runs bare inside the worker's isolated
+        # subprocess anyway — the decorator's mesh/client behavior is
+        # meaningless there. Drop everything before the ``def`` line so that
+        # exec() does not raise ``NameError: name 'mesh' is not defined``.
+        lines = source.splitlines(keepends=True)
+        def_idx = next(
+            (i for i, line in enumerate(lines)
+             if line.lstrip().startswith(f"def {func_name}(")
+             or line.lstrip().startswith(f"async def {func_name}(")),
+            0,
+        )
+        if def_idx:
+            source = "".join(lines[def_idx:])
+
         # Recreate imported module globals under the names used by the
         # original function, including aliases such as ``np`` for ``numpy``.
         namespace = {}
