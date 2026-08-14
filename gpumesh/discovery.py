@@ -204,9 +204,18 @@ class Beacon:
 
     def _broadcast(self, sock: socket.socket, datagram: bytes,
                    broadcast_addr: str):
+        # The subnet broadcast already went out with the first send; the
+        # 255.255.255.255 fallback is redundant, and on machines without a
+        # route for it (macOS CI runners are the canonical example) the
+        # second send raises "No route to host". A discovery nicety must not
+        # crash the beacon, so drop that error and keep the primary send's
+        # behavior (start() still surfaces it if the subnet broadcast fails).
         sock.sendto(datagram, (broadcast_addr, self._port))
         if broadcast_addr != BROADCAST_ADDR_FALLBACK:
-            sock.sendto(datagram, (BROADCAST_ADDR_FALLBACK, self._port))
+            try:
+                sock.sendto(datagram, (BROADCAST_ADDR_FALLBACK, self._port))
+            except OSError:
+                pass
 
     def _loop(self, sock: socket.socket, datagram: bytes,
               broadcast_addr: str):
@@ -346,6 +355,7 @@ class Listener:
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+        self._sock: socket.socket | None = None
         self._on_peer: Callable[[Peer], None] | None = None
         self._bind_error: OSError | None = None
 
@@ -392,20 +402,32 @@ class Listener:
         self._port = probe.getsockname()[1]
         self._bind_error = None
         self._stop.clear()
+        self._sock = probe
         self._thread = threading.Thread(target=self._loop, daemon=True,
                                         name="gpumesh-listener",
                                         args=(probe,))
         self._thread.start()
 
     def stop(self):
-        """Stop listening and wait for the thread to finish.
+        """Stop listening, wait for the thread, and release the port.
 
-        The socket inside the thread uses a 2-second timeout, so this
-        returns within ~2 seconds under normal conditions.
+        The port is closed here, synchronously, rather than inside the
+        receive thread, so a stopped listener always frees its port. If the
+        close happened only in the thread's exit path, a thread that was
+        slow to wake (a fresh thread starved on a loaded machine — macOS
+        CI runners included) could outlive the 3-second join and leave the
+        socket bound, making the next listener on the same port fail with
+        EADDRINUSE for the rest of the process.
         """
         self._stop.set()
         if self._thread:
             self._thread.join(timeout=3)
+        sock, self._sock = self._sock, None
+        if sock is not None:
+            try:
+                sock.close()
+            except OSError:
+                pass
 
     def peers(self) -> list[Peer]:
         """Return a list of currently alive peers (shallow copies)."""
@@ -418,60 +440,57 @@ class Listener:
     def _loop(self, sock: socket.socket):
         sock.settimeout(2.0)
         iter_count = 0
-        try:
-            while not self._stop.is_set():
+        while not self._stop.is_set():
+            try:
+                data, addr = sock.recvfrom(4096)
+            except socket.timeout:
+                continue
+            except OSError:
+                if self._stop.is_set():
+                    break
+                continue
+
+            iter_count += 1
+
+            # Periodic cleanup of stale peers
+            if iter_count % CLEANUP_EVERY == 0:
+                self.cleanup_stale()
+
+            beacon = parse_beacon(data)
+            if beacon is None:
+                continue
+
+            role = _payload_role(beacon)
+            if role is None or (self._expected_role is not None
+                                and role != self._expected_role):
+                continue
+
+            try:
+                incoming = Peer(beacon, addr)
+            except ValueError:
+                continue
+            peer_key = f"{incoming.hostname}:{incoming.ip}:{incoming.api_port}"
+            new_peer = None
+            on_peer_cb = None
+            with self._lock:
+                if peer_key in self._peers:
+                    peer = self._peers[peer_key]
+                    peer.update(beacon, addr)
+                else:
+                    peer = incoming
+                    self._peers[peer_key] = peer
+                    new_peer = peer
+                # Capture callback under lock to avoid TOCTOU race
+                on_peer_cb = self._on_peer
+
+            # Invoke callback OUTSIDE the lock to prevent deadlock
+            # if the callback calls peers() or cleanup_stale().
+            # Pass a copy to prevent races with concurrent update() calls.
+            if new_peer is not None and on_peer_cb is not None:
                 try:
-                    data, addr = sock.recvfrom(4096)
-                except socket.timeout:
-                    continue
-                except OSError:
-                    if self._stop.is_set():
-                        break
-                    continue
-
-                iter_count += 1
-
-                # Periodic cleanup of stale peers
-                if iter_count % CLEANUP_EVERY == 0:
-                    self.cleanup_stale()
-
-                beacon = parse_beacon(data)
-                if beacon is None:
-                    continue
-
-                role = _payload_role(beacon)
-                if role is None or (self._expected_role is not None
-                                    and role != self._expected_role):
-                    continue
-
-                try:
-                    incoming = Peer(beacon, addr)
-                except ValueError:
-                    continue
-                peer_key = f"{incoming.hostname}:{incoming.ip}:{incoming.api_port}"
-                new_peer = None
-                on_peer_cb = None
-                with self._lock:
-                    if peer_key in self._peers:
-                        peer = self._peers[peer_key]
-                        peer.update(beacon, addr)
-                    else:
-                        peer = incoming
-                        self._peers[peer_key] = peer
-                        new_peer = peer
-                    # Capture callback under lock to avoid TOCTOU race
-                    on_peer_cb = self._on_peer
-
-                # Invoke callback OUTSIDE the lock to prevent deadlock
-                # if the callback calls peers() or cleanup_stale().
-                # Pass a copy to prevent races with concurrent update() calls.
-                if new_peer is not None and on_peer_cb is not None:
-                    try:
-                        on_peer_cb(new_peer.copy())
-                    except Exception:
-                        pass
-        finally:
-            sock.close()
+                    on_peer_cb(new_peer.copy())
+                except Exception:
+                    pass
 
     def cleanup_stale(self):
         """Remove peers that haven't been seen recently."""
