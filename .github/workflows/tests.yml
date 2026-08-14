@@ -33,6 +33,101 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: pip
 
+      # TEMPORARY DIAGNOSTIC (to be reverted): macOS runs the suite ~10x
+      # slower than Linux (~31% of tests in the 25-minute cap, no hangs).
+      # This probe breaks down raw subsystem costs on the runner itself so
+      # the mechanism can be identified. Output lands in the artifact below.
+      - name: Probe macOS performance (diagnostic)
+        if: runner.os == 'macOS'
+        run: |
+          python - <<'PY' > probe.txt 2>&1
+          import json, platform, socket, sqlite3, subprocess, sys, threading, time
+          import urllib.request
+          from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+          out = {
+              "machine": platform.machine(),
+              "python": sys.version.split()[0],
+              "platform": platform.platform(),
+              "impl": platform.python_implementation(),
+          }
+
+          def timeit(fn, n=1):
+              t0 = time.perf_counter()
+              for _ in range(n):
+                  fn()
+              return (time.perf_counter() - t0) / n
+
+          def _mk_thread():
+              t = threading.Thread(target=lambda: None)
+              t.start()
+              t.join()
+          out["thread_ms"] = round(timeit(_mk_thread, 50) * 1000, 2)
+
+          def _spawn():
+              subprocess.run([sys.executable, "-c", "pass"], capture_output=True)
+          out["spawn_ms"] = round(timeit(_spawn, 10) * 1000, 1)
+
+          class H(BaseHTTPRequestHandler):
+              def do_GET(self):
+                  self.send_response(200)
+                  self.end_headers()
+                  self.wfile.write(b"{}")
+              def log_message(self, *a):
+                  pass
+
+          srv = ThreadingHTTPServer(("127.0.0.1", 0), H)
+          port = srv.server_address[1]
+          threading.Thread(target=srv.serve_forever, daemon=True).start()
+
+          def _http():
+              urllib.request.urlopen(f"http://127.0.0.1:{port}/x", timeout=5).read()
+          out["http_roundtrip_ms"] = round(timeit(_http, 50) * 1000, 2)
+
+          def _conn():
+              s = socket.socket()
+              s.connect(("127.0.0.1", port))
+              s.close()
+          out["tcp_connect_ms"] = round(timeit(_conn, 50) * 1000, 2)
+
+          srv.shutdown()
+          srv.server_close()
+
+          conn = sqlite3.connect(":memory:")
+          conn.execute("create table t (a int)")
+
+          def _sql():
+              conn.execute("insert into t values (1)")
+              conn.execute("select count(*) from t")
+          out["sqlite_ops_ms"] = round(timeit(_sql, 200) * 1000, 3)
+          conn.close()
+
+          from gpumesh.capability import _bench_memory_bandwidth_python, _bench_python
+
+          t0 = time.perf_counter()
+          g = _bench_python()
+          out["bench_python_s"] = round(time.perf_counter() - t0, 3)
+          out["bench_gflops"] = round(g, 4)
+
+          t0 = time.perf_counter()
+          bw = _bench_memory_bandwidth_python()
+          out["bench_bw_s"] = round(time.perf_counter() - t0, 3)
+          out["bench_bw_gbps"] = round(bw, 2)
+
+          def _cpu():
+              s = 0
+              for i in range(2_000_000):
+                  s += i
+              return s
+          out["cpu_2m_loop_ms"] = round(timeit(_cpu, 3), 1)
+
+          t0 = time.perf_counter()
+          time.sleep(0.5)
+          out["sleep_500ms_actual"] = round(time.perf_counter() - t0, 3)
+
+          print(json.dumps(out, indent=2))
+          PY
+
       - name: Install
         # numpy is not a gpumesh extra, but several tests use it via
         # importorskip to check that non-JSON return values survive the trip
@@ -43,8 +138,24 @@ jobs:
           pip install -e ".[dev,ui,notebook]" numpy
 
       - name: Run tests
-        # Several tests bind real loopback sockets and wait on leases, so the
-        # suite is slower than its size suggests. The timeout is a guard
-        # against a hung server thread, not a performance target.
-        timeout-minutes: 25
-        run: pytest -q --durations=10
+        # TEMPORARY DIAGNOSTIC: macOS is scoped to the slowest region (the
+        # first ~240 tests — where the last run died at test ~213) so the run
+        # completes and its junit.xml lands in the artifact. The 45-minute
+        # timeout is the cap for that region on macOS; put it back to 25 and
+        # restore the full suite once the slowness is fixed.
+        timeout-minutes: 45
+        run: |
+          pytest -q --durations=50 --junitxml=junit.xml \
+            ${{ runner.os == 'macOS' && 'tests/test_accelerate.py tests/test_api.py tests/test_api_edge_cases.py tests/test_cancel_and_error_paths.py tests/test_capability.py tests/test_claim_reachability.py tests/test_claimer.py tests/test_cli.py' || '' }}
+
+      # TEMPORARY DIAGNOSTIC: artifacts are downloadable without auth for a
+      # public repo, so the probe + per-test times can be read directly.
+      - name: Upload diagnostics (temporary)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: diag-${{ matrix.os }}-${{ matrix.python-version }}
+          path: |
+            probe.txt
+            junit.xml
+          if-no-files-found: ignore
