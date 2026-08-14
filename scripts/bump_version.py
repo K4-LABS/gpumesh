@@ -67,6 +67,18 @@ def update_version_in_file(filepath: Path, new_version: str) -> bool:
             f'version = "{new_version}"',
             content
         )
+    # Update the version in the Dockerfile (ARG default + image label)
+    elif filepath.name == "Dockerfile":
+        new_content = re.sub(
+            r'ARG VERSION=[0-9.]+',
+            f'ARG VERSION={new_version}',
+            content
+        )
+        new_content = re.sub(
+            r'LABEL version="[^"]+"',
+            f'LABEL version="{new_version}"',
+            new_content
+        )
     else:
         return False
     
@@ -94,6 +106,7 @@ def main():
     files_to_update = [
         project_root / "gpumesh" / "__init__.py",
         project_root / "pyproject.toml",
+        project_root / "Dockerfile",
     ]
     
     for filepath in files_to_update:

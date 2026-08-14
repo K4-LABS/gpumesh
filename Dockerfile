@@ -13,6 +13,10 @@ RUN python -m build --wheel
 # Stage 2: Minimal runtime
 FROM python:3.11-slim
 
+# Version for image labels. Kept in sync with pyproject.toml by
+# scripts/bump_version.py; override with --build-arg VERSION=x.y.z.
+ARG VERSION=1.2.0
+
 # Labels for Docker Hub
 LABEL maintainer="samurai007ak"
 LABEL description="Borrow your friends' GPUs: a distributed compute mesh in pure Python"
