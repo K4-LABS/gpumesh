@@ -19,15 +19,12 @@ DOCKER_HUB_README.md
 CHANGELOG.md
 .env.example
 
-# Local AI-assistant tooling and dev scratch — nothing the image needs
+# Local AI-assistant tooling — nothing the image needs
 .agents/
 .claude/
 .continue/
 .forge/
 skills-lock.json
-HANDOFF.md
-LAUNCH_CHECKLIST.md
-ci.log
 
 # Not needed for the wheel build inside the image
 tests/
