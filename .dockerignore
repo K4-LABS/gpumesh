@@ -18,5 +18,20 @@ Thumbs.db
 DOCKER_HUB_README.md
 CHANGELOG.md
 .env.example
+
+# Local AI-assistant tooling and dev scratch — nothing the image needs
+.agents/
+.claude/
+.continue/
+.forge/
+skills-lock.json
+HANDOFF.md
+LAUNCH_CHECKLIST.md
+ci.log
+
+# Not needed for the wheel build inside the image
+tests/
+scripts/
+
 # NOTE: README.md is intentionally NOT excluded — pyproject.toml references it
 # as the package readme, so the wheel build inside the Docker image needs it.

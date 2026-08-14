@@ -93,10 +93,10 @@ results = train.map([{"lr": 0.01}, {"lr": 0.05}, {"lr": 0.1}])
 
 ## 🐳 Docker Images
 
-| Tag | Description | Size |
-|-----|-------------|------|
-| `latest` | Latest stable release | ~50 MB (compressed) |
-| `1.1.0` | Version 1.1.0 (robustness release) | ~50 MB (compressed) |
+| Tag | Description |
+|-----|-------------|
+| `latest` | Latest stable release |
+| `1.2.0` | Version 1.2.0 (result-envelope release) |
 
 ### Pull Commands
 
@@ -105,7 +105,7 @@ results = train.map([{"lr": 0.01}, {"lr": 0.05}, {"lr": 0.1}])
 docker pull samurai007ak/gpumesh:latest
 
 # Specific version
-docker pull samurai007ak/gpumesh:1.1.0
+docker pull samurai007ak/gpumesh:1.2.0
 ```
 
 ---
@@ -264,7 +264,7 @@ Each worker runs a benchmark on join and gets a **0-100 score**:
 | Rate limiting | ✅ 5 failures → blocked |
 | Process isolation | ✅ Tasks in subprocesses |
 | File permissions | ✅ 0o600 on token files |
-| Token hashing | ✅ SHA-256 + salt |
+| Token hashing | ✅ SHA-256, in memory only — never written to the database |
 
 > ⚠️ Workers execute code from the coordinator. Only share your URL and token with people you trust.
 
