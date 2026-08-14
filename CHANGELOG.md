@@ -4,6 +4,8 @@ All notable changes to gpumesh are documented here.
 
 ## [Unreleased]
 
+## [1.3.0] — 2026-08-14
+
 The theme of this release is **the coordinator no longer guesses how workers
 reach it**. Which of a coordinator's addresses is usable is a property of the
 network between two machines, not of the coordinator alone — so a machine with

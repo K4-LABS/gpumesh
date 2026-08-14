@@ -2,7 +2,7 @@ from __future__ import annotations
 
 """gpumesh - distributed compute sharing over a mesh of volunteer machines."""
 
-__version__ = "1.2.0"
+__version__ = "1.3.0"
 
 from .api import GPUMesh  # noqa: F401
 from .accelerate import accelerate, install as accelerate_install  # noqa: F401

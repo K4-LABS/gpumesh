@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "gpumesh"
-version = "1.2.0"
+version = "1.3.0"
 description = "Borrow your friends' GPUs: a terminal-based distributed compute mesh in pure Python"
 readme = "README.md"
 requires-python = ">=3.9"
