@@ -20,6 +20,27 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from gpumesh.ansi import safe_print, green, yellow, red, cyan, bold
 
 
+class _FastBindHTTPServer(ThreadingHTTPServer):
+    """ThreadingHTTPServer whose bind skips the reverse-DNS lookup.
+
+    ``socketserver.HTTPServer.server_bind`` calls ``socket.getfqdn(host)``
+    to set ``server_name``, and ``getfqdn`` does a reverse lookup
+    (``gethostbyaddr``). On a machine with a slow or broken resolver —
+    macOS CI runners are the canonical example, where a single lookup can
+    block for tens of seconds — every claim server start would hang at
+    bind. ``server_name`` is cosmetic here, so set it to the plain host
+    string instead of paying for DNS.
+    """
+
+    def server_bind(self):
+        from socketserver import TCPServer
+
+        TCPServer.server_bind(self)
+        host, port = self.server_address[:2]
+        self.server_name = host
+        self.server_port = port
+
+
 def claim_candidates(body: dict) -> list:
     """Extract the coordinator URLs to try, best first.
 
@@ -182,7 +203,7 @@ def start_claim_server(token: str, port: int = 0) -> tuple[ThreadingHTTPServer, 
     with ClaimHandler._claim_lock:
         ClaimHandler._claimed = False
 
-    httpd = ThreadingHTTPServer(("0.0.0.0", port), ClaimHandler)
+    httpd = _FastBindHTTPServer(("0.0.0.0", port), ClaimHandler)
     actual_port = httpd.server_address[1]
 
     # On Windows, suppress the WinError 10038 noise when shutting down

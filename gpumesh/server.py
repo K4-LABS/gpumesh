@@ -26,6 +26,27 @@ from .security import SecurityManager
 REAP_INTERVAL = 5.0
 
 
+class _FastBindHTTPServer(ThreadingHTTPServer):
+    """ThreadingHTTPServer whose bind skips the reverse-DNS lookup.
+
+    ``socketserver.HTTPServer.server_bind`` calls ``socket.getfqdn(host)``
+    to set ``server_name``, and ``getfqdn`` does a reverse lookup
+    (``gethostbyaddr``). On a machine with a slow or broken resolver —
+    macOS CI runners are the canonical example, where a single lookup can
+    block for tens of seconds — every coordinator start would hang at
+    bind. ``server_name`` is cosmetic here (nothing reads it), so set it
+    to the plain host string instead of paying for DNS.
+    """
+
+    def server_bind(self):
+        from socketserver import TCPServer
+
+        TCPServer.server_bind(self)
+        host, port = self.server_address[:2]
+        self.server_name = host
+        self.server_port = port
+
+
 class CoordinatorHandler(BaseHTTPRequestHandler):
     server_version = "gpumesh"
     db: Database = None
@@ -321,7 +342,7 @@ def serve(host: str, port: int, db_path: str, token: str,
                     "gpumesh_security": SecurityManager(token)})
     handler.start_time = time.monotonic()
     handler._shutdown_event = threading.Event()
-    httpd = ThreadingHTTPServer((host, port), handler)
+    httpd = _FastBindHTTPServer((host, port), handler)
     stop = threading.Event()
     t = threading.Thread(target=_reaper, args=(handler.db, stop), daemon=True)
     t.start()
