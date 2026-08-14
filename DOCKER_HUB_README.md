@@ -96,7 +96,7 @@ results = train.map([{"lr": 0.01}, {"lr": 0.05}, {"lr": 0.1}])
 | Tag | Description |
 |-----|-------------|
 | `latest` | Latest stable release |
-| `1.2.0` | Version 1.2.0 (result-envelope release) |
+| `1.3.0` | Version 1.3.0 (reachability release) |
 
 ### Pull Commands
 
@@ -105,7 +105,7 @@ results = train.map([{"lr": 0.01}, {"lr": 0.05}, {"lr": 0.1}])
 docker pull samurai007ak/gpumesh:latest
 
 # Specific version
-docker pull samurai007ak/gpumesh:1.2.0
+docker pull samurai007ak/gpumesh:1.3.0
 ```
 
 ---

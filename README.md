@@ -112,7 +112,7 @@ Verify the install:
 
 ```console
 $ gpumesh --version
-gpumesh 1.2.0 (3.11.9, Windows)
+gpumesh 1.3.0 (3.11.9, Windows)
 ```
 
 ---
