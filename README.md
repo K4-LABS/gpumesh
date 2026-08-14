@@ -293,10 +293,10 @@ Like `%%time`, the cell's own output displays normally. Loading the extension al
 | Command | Description |
 |---------|-------------|
 | `gpumesh setup` | Interactive setup wizard (coordinator or worker) |
-| `gpumesh serve` | Start the coordinator (`--port`, `--token`, `--public`, `--tailscale`, `--no-discovery`, `--safe-mode`, `--no-self-worker`) |
+| `gpumesh serve` | Start the coordinator (`--port`, `--token`, `--db`, `--host-ip`, `--public`, `--tailscale`, `--no-discovery`, `--safe-mode`, `--no-self-worker`) |
 | `gpumesh join URL` | Join a mesh as a worker (`--token`, `--timeout`, `--safe-mode`) |
-| `gpumesh quickjoin [URL]` | One-click: install, detect GPU, join (`--token`, `--tailscale`, `--safe-mode`) |
-| `gpumesh worker` | Broadcast presence and wait to be claimed (`--token`, `--claim-port`) |
+| `gpumesh quickjoin [URL]` | One-click: install, detect GPU, join (`--token`, `--tailscale`, `--port`, `--timeout`, `--safe-mode`) |
+| `gpumesh worker` | Broadcast presence and wait to be claimed (`--token`, `--claim-port`, `--timeout`, `--safe-mode`) |
 | `gpumesh radar` | Scan for nearby devices (live radar; `--mode coordinator|worker`) |
 | `gpumesh show-connection` | Show the saved URL + token |
 | `gpumesh disconnect` | Clear the saved connection |
@@ -305,7 +305,7 @@ Like `%%time`, the cell's own output displays normally. Loading the extension al
 
 | Command | Description |
 |---------|-------------|
-| `gpumesh submit SCRIPT --payloads FILE` | Submit a script job (`--wait` blocks until done, `--wait-timeout`) |
+| `gpumesh submit SCRIPT --payloads FILE` | Submit a script job (`--name`, `--wait` blocks until done, `--wait-timeout`) |
 | `gpumesh status JOB_ID` | Show job progress and results |
 | `gpumesh cancel JOB_ID` | Cancel a running job |
 | `gpumesh retry JOB_ID` | Re-queue failed/timed-out tasks |
@@ -318,7 +318,18 @@ Like `%%time`, the cell's own output displays normally. Loading the extension al
 | `gpumesh workers` | List connected workers and their status |
 | `gpumesh devices` | Show all GPUs/CPUs as one unified pool |
 
-All commands accept `--url URL --token TOKEN`, or use the connection saved by `join`/`serve`, or the `GPUMESH_URL` / `GPUMESH_TOKEN` environment variables.
+Job and monitoring commands (`submit`, `status`, `cancel`, `retry`, `workers`, `devices`, `kill`) accept `--url URL --token TOKEN`. If you omit them, gpumesh falls back to the `GPUMESH_URL` / `GPUMESH_TOKEN` environment variables, then to the connection saved by `join`/`serve`.
+
+### Environment variables
+
+| Variable | Where it applies | Effect |
+|----------|------------------|--------|
+| `GPUMESH_URL` | Job/monitoring commands | Coordinator URL when `--url` is omitted |
+| `GPUMESH_TOKEN` | All commands | Auth token; also read by `serve` and `join` when `--token` is omitted |
+| `GPUMESH_HOST_IP` | `serve` | Pin the address advertised to workers (same as `--host-ip`) |
+| `GPUMESH_LOCAL=1` | `@mesh` / `@accelerate` | Force local execution, never touch the mesh |
+| `GPUMESH_VERBOSE=1` | `@mesh` / `@accelerate` | Print which device handled each task |
+| `GPUMESH_COLOR` | All output | `1` forces colour, `0` disables it, `auto` (default) checks whether stdout is a TTY |
 
 ---
 
@@ -568,7 +579,7 @@ Each worker runs a benchmark on join and gets a 0–100 score:
 git clone https://github.com/Samurai007AK/gpumesh.git
 cd gpumesh
 pip install -e ".[dev]"
-pytest                 # 642 tests
+pytest                 # 649 tests on Linux (Windows: 645 + 3 skips + 1 xpass)
 python -m build        # build wheel + sdist
 ```
 

@@ -92,6 +92,26 @@ route to, and every worker would time out against it.
 - Tests no longer inherit `GPUMESH_*` variables from the developer's shell. A
   contributor who exported `GPUMESH_TOKEN` for their own mesh would have seen
   unrelated CLI tests fail.
+- **Coordinator and worker startup stalled ~35s on machines with a broken
+  reverse-DNS resolver.** Every `serve()`, `start_coordinator()` and claim
+  server paid a ~35s `gethostbyaddr()` block: CPython's
+  `HTTPServer.server_bind()` calls `socket.getfqdn(host)`, and `utils` asked
+  `getaddrinfo(gethostname())` for the LAN-IP candidates. On the macOS CI
+  runner — where the resolver stalls — the suite took over 25 minutes and hit
+  the job cap; the same machine now runs it in ~7 minutes. The bind path uses
+  a `ThreadingHTTPServer` subclass that skips the reverse lookup, and the
+  hostname enumeration is time-boxed to 2s so a slow resolver degrades
+  startup instead of freezing it.
+- **A worker beacon crashed at startup when the network had no route for the
+  `255.255.255.255` fallback broadcast.** The redundant send to the global
+  broadcast address raised `OSError` (errno 65 on macOS) and killed the
+  beacon before it ever advertised. That send is now tolerated — a machine
+  with no route for it still broadcasts on its own subnet.
+- **A `Listener` could leak its UDP port after `stop()`.** If the receive
+  thread was slow to wake, `stop()` returned while the socket was still
+  bound, and the next listener on the same fixed port (48900) failed with
+  `EADDRINUSE`. `stop()` now closes the socket synchronously instead of
+  waiting on the thread.
 
 ### Added
 - Continuous integration: the suite runs on Linux (Python 3.9, 3.11, 3.12),

@@ -17,7 +17,10 @@ tested, and it is used, but it is not settled:
 - The hardest problems are in networking, and they are hard to reproduce.
   Most remaining bugs surface only across two real machines with a VPN,
   hypervisor adapter or firewall in the way — not on loopback.
-- There is no CI yet, so **please run `pytest` locally before opening a PR**.
+- CI runs the full suite on Linux, Windows and macOS for every push and pull
+  request — but **please run `pytest` locally before opening a PR** anyway.
+  The suite is real servers and sockets, and a red local run will be a red
+  CI run.
 - Some errors still tell you the wrong thing. Fixing a misleading message is a
   genuinely useful contribution, not a nitpick.
 
@@ -40,8 +43,9 @@ pip install -e ".[dev]"
 pytest
 ```
 
-You should see **642 passed**. If you do not, that is a bug — please open an
-issue with your OS and Python version before doing anything else.
+You should see **649 passed** on Linux (Windows shows 3 skips and 1 xpass,
+all intentional). If you do not, that is a bug — please open an issue with
+your OS and Python version before doing anything else.
 
 Python 3.9 or newer. The only required runtime dependency is `cloudpickle`;
 everything else (`torch`, `psutil`, `rich`, `questionary`, `pyngrok`, `pandas`)
