@@ -41,3 +41,63 @@ def test_full_probe_includes_gpu_memory_fields():
         assert info["gpu_memory_total_mb"] > 0
     if "gpu_memory_free_mb" in info:
         assert info["gpu_memory_free_mb"] >= 0
+
+
+class _FakeProps:
+    """Stand-in for torch._C._CudaDeviceProperties."""
+
+    def __init__(self, **kwargs):
+        for key, value in kwargs.items():
+            setattr(self, key, value)
+
+
+def _fake_torch(props):
+    """A fake torch module whose CUDA device has the given properties."""
+    import types
+
+    mod = types.ModuleType("torch")
+    mod.cuda = types.SimpleNamespace(
+        is_available=lambda: True,
+        get_device_name=lambda i: "NVIDIA GeForce RTX 3060",
+        get_device_properties=lambda i: props,
+        mem_get_info=lambda i: (8 * 1024**3, 12 * 1024**3),
+    )
+    mod.backends = types.SimpleNamespace(mps=None)
+    return mod
+
+
+def test_probe_device_new_torch_memory_attribute():
+    """torch >= 2.8 renamed total_mem -> total_memory."""
+    import sys
+    from unittest.mock import patch
+
+    props = _FakeProps(total_memory=12 * 1024**3)
+    with patch.dict(sys.modules, {"torch": _fake_torch(props)}):
+        info = probe_device()
+    assert info["device"] == "cuda"
+    assert info["gpu_memory_total_mb"] == 12288.0
+
+
+def test_probe_device_old_torch_memory_attribute():
+    """Older torch exposes total_mem; the fallback must still work."""
+    import sys
+    from unittest.mock import patch
+
+    props = _FakeProps(total_mem=12 * 1024**3)
+    with patch.dict(sys.modules, {"torch": _fake_torch(props)}):
+        info = probe_device()
+    assert info["device"] == "cuda"
+    assert info["gpu_memory_total_mb"] == 12288.0
+
+
+def test_gpu_memory_info_new_torch_memory_attribute():
+    """get_gpu_memory_info works with the renamed attribute too."""
+    import sys
+    from unittest.mock import patch
+
+    props = _FakeProps(total_memory=12 * 1024**3)
+    with patch.dict(sys.modules, {"torch": _fake_torch(props)}):
+        result = get_gpu_memory_info(0)
+    assert result is not None
+    assert result["total_mb"] == 12288.0
+    assert result["free_mb"] == 8192.0
