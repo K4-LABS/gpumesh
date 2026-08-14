@@ -5,6 +5,7 @@ import platform
 import socket
 import subprocess
 import sys
+import threading
 
 from .ansi import safe_print, green, yellow, red, bold, cyan, dim
 
@@ -80,15 +81,30 @@ def _gather_candidate_ips() -> list:
         s.close()
     if udp_ip:
         candidates.append(udp_ip)
-    try:
-        for info in socket.getaddrinfo(socket.gethostname(), None):
-            ip = info[4][0]
-            if ":" in ip:  # skip IPv6
-                continue
-            if ip not in candidates:
-                candidates.append(ip)
-    except OSError:
-        pass
+
+    # getaddrinfo on the bare hostname is a secondary source (the
+    # default-route address above is the primary), but on a machine with a
+    # slow or broken resolver it can block for tens of seconds — macOS CI
+    # runners are the canonical example — which would hang every
+    # coordinator and worker start. Give it a short deadline and fall back
+    # to what we already have if the resolver does not answer in time.
+    extra: list = []
+
+    def _lookup_hostname():
+        try:
+            for info in socket.getaddrinfo(socket.gethostname(), None):
+                ip = info[4][0]
+                if ":" in ip:  # skip IPv6
+                    continue
+                if ip not in extra:
+                    extra.append(ip)
+        except OSError:
+            pass
+
+    lookup = threading.Thread(target=_lookup_hostname, daemon=True)
+    lookup.start()
+    lookup.join(timeout=2.0)
+    candidates.extend(extra)
     return candidates
 
 
