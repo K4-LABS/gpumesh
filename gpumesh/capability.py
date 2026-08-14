@@ -32,8 +32,12 @@ def probe_device() -> dict:
             info["device_name"] = torch.cuda.get_device_name(0)
             try:
                 props = torch.cuda.get_device_properties(0)
-                info["gpu_memory_total_mb"] = round(props.total_mem / (1024**2), 1)
-            except (RuntimeError, OSError):
+                # torch >= 2.8 renamed total_mem -> total_memory; support both.
+                total_mem = getattr(props, "total_memory", None)
+                if total_mem is None:
+                    total_mem = getattr(props, "total_mem", 0)
+                info["gpu_memory_total_mb"] = round(total_mem / (1024**2), 1)
+            except (RuntimeError, OSError, AttributeError):
                 pass
             try:
                 free, total = torch.cuda.mem_get_info(0)
@@ -62,7 +66,11 @@ def get_gpu_memory_info(device_index: int = 0) -> dict | None:
         if not torch.cuda.is_available():
             return None
         props = torch.cuda.get_device_properties(device_index)
-        total = props.total_mem / (1024**2)
+        # torch >= 2.8 renamed total_mem -> total_memory; support both.
+        total_mem = getattr(props, "total_memory", None)
+        if total_mem is None:
+            total_mem = getattr(props, "total_mem", 0)
+        total = total_mem / (1024**2)
         free, total2 = torch.cuda.mem_get_info(device_index)
         return {
             "device_index": device_index,
@@ -71,7 +79,7 @@ def get_gpu_memory_info(device_index: int = 0) -> dict | None:
             "free_mb": round(free / (1024**2), 1),
             "used_mb": round((total2 - free) / (1024**2), 1),
         }
-    except (ImportError, RuntimeError, OSError):
+    except (ImportError, RuntimeError, OSError, AttributeError):
         return None
 
 
