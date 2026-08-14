@@ -211,8 +211,59 @@ class TestSourceFallback:
             len(mb).to_bytes(4, byteorder="big") + mb + combined[4 + metadata_len:]
         ).decode("ascii")
 
-        func = deserialize_function(forced)
-        assert func(size=4) == {"size": 4, "squared": 16}
+    def test_cross_version_without_source_raises_cleanly(self):
+        """A version mismatch with no source fallback must fail loudly.
+
+        Regression: a function defined in a heredoc/interactive session has
+        no source file, so inspect.getsource() cannot capture it and the
+        metadata carries no ``source`` key. On a worker running a different
+        Python version, cloudpickle.loads() of foreign bytecode can "succeed"
+        and return a function that hard-crashes the interpreter (0xC0000005
+        on Windows) the moment it is called. The deserializer must refuse
+        instead of handing the worker a bomb.
+        """
+        import base64
+        import json
+        import sys
+        import cloudpickle
+        from gpumesh.serializer import deserialize_function
+
+        def original(x):
+            return x * 2
+
+        # Build a payload exactly like _serialize_with_cloudpickle but with a
+        # fake, different python_version and NO source key (as if the function
+        # had been defined in a heredoc where getsource fails).
+        func_bytes = cloudpickle.dumps(original)
+        metadata = {
+            "method": "cloudpickle",
+            "modules": [],
+            "module_globals": {},
+            "func_name": "original",
+            "python_version": "9.9",  # guaranteed different from any real one
+        }
+        metadata_bytes = json.dumps(metadata).encode("utf-8")
+        combined = (
+            len(metadata_bytes).to_bytes(4, byteorder="big")
+            + metadata_bytes
+            + func_bytes
+        )
+        payload = base64.b64encode(combined).decode("ascii")
+
+        with pytest.raises(ValueError, match="no source"):
+            deserialize_function(payload)
+
+        # Same payload with a matching version must still work (cloudpickle
+        # path is fine when versions agree).
+        metadata["python_version"] = f"{sys.version_info.major}.{sys.version_info.minor}"
+        metadata_bytes = json.dumps(metadata).encode("utf-8")
+        combined = (
+            len(metadata_bytes).to_bytes(4, byteorder="big")
+            + metadata_bytes
+            + func_bytes
+        )
+        payload = base64.b64encode(combined).decode("ascii")
+        assert deserialize_function(payload)(21) == 42
 
 
 class TestResultEnvelope:

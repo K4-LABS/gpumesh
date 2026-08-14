@@ -145,9 +145,24 @@ def deserialize_function(data: str):
 
     # Check for Python version mismatch
     if source_version and source_version != current_version:
-        # If we have source code, try that first
         if "source" in metadata:
             method = "source"
+        else:
+            # Cross-version cloudpickle is not safe here: loads() can
+            # "succeed" and return a function whose bytecode (pickled under a
+            # different Python version) crashes the interpreter when called —
+            # a native segfault (0xC0000005 on Windows) inside the task
+            # subprocess, with no traceback to diagnose. Without source to
+            # rebuild from, refuse up front so the failure is a clean error
+            # the user can act on instead of a worker crash.
+            raise ValueError(
+                f"Cannot run this task on a Python {current_version} worker: the "
+                f"function was serialized on Python {source_version} with no source "
+                f"fallback (it was likely defined in an interactive session or "
+                f"heredoc, where inspect.getsource() cannot capture it). Define the "
+                f"function in a .py file so its source can be shipped, or use the "
+                f"same Python version on all machines."
+            )
 
     # Ensure required modules are importable
     for mod_name in metadata.get("modules", []):
