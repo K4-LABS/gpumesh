@@ -142,11 +142,11 @@ jobs:
         # first ~240 tests — where the last run died at test ~213) so the run
         # completes and its junit.xml lands in the artifact. The 45-minute
         # timeout is the cap for that region on macOS; put it back to 25 and
-        # restore the full suite once the slowness is fixed.
+        # restore the full suite once the slowness is fixed. This must stay on
+        # one line: Windows steps run in PowerShell, where backslash is not a
+        # line continuation.
         timeout-minutes: 45
-        run: |
-          pytest -q --durations=50 --junitxml=junit.xml \
-            ${{ runner.os == 'macOS' && 'tests/test_accelerate.py tests/test_api.py tests/test_api_edge_cases.py tests/test_cancel_and_error_paths.py tests/test_capability.py tests/test_claim_reachability.py tests/test_claimer.py tests/test_cli.py' || '' }}
+        run: pytest -q --durations=50 --junitxml=junit.xml ${{ runner.os == 'macOS' && 'tests/test_accelerate.py tests/test_api.py tests/test_api_edge_cases.py tests/test_cancel_and_error_paths.py tests/test_capability.py tests/test_claim_reachability.py tests/test_claimer.py tests/test_cli.py' || '' }}
 
       # TEMPORARY DIAGNOSTIC: artifacts are downloadable without auth for a
       # public repo, so the probe + per-test times can be read directly.
