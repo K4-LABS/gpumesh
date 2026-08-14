@@ -171,6 +171,49 @@ class TestSourceFallback:
         assert "source" in metadata
         assert "my_func" in metadata["source"]
 
+    def test_decorated_function_survives_source_fallback(self, tmp_path):
+        """@mesh-decorated functions work when the source path is used.
+
+        Regression: with mismatched Python versions the worker reconstructs
+        the function from its source, which includes the ``@mesh`` decorator
+        line. exec() of that source used to raise ``NameError: name 'mesh'
+        is not defined`` because decorator names are not in the metadata.
+        """
+        import base64
+        import json
+        import sys
+        from gpumesh.serializer import _serialize_with_cloudpickle, \
+            deserialize_function
+
+        # Define the function in a real module so inspect.getsource works.
+        mod = tmp_path / "decorated_mod.py"
+        mod.write_text(
+            "from gpumesh import mesh\n\n"
+            "@mesh\n"
+            "def heavy(size=8):\n"
+            "    return {'size': size, 'squared': size * size}\n",
+            encoding="utf-8",
+        )
+        sys.path.insert(0, str(tmp_path))
+        try:
+            import decorated_mod
+            data = _serialize_with_cloudpickle(decorated_mod.heavy)
+        finally:
+            sys.path.remove(str(tmp_path))
+
+        # Force the worker's source path by faking a Python version mismatch.
+        combined = base64.b64decode(data)
+        metadata_len = int.from_bytes(combined[:4], byteorder="big")
+        metadata = json.loads(combined[4:4 + metadata_len])
+        metadata["python_version"] = "9.9"
+        mb = json.dumps(metadata).encode("utf-8")
+        forced = base64.b64encode(
+            len(mb).to_bytes(4, byteorder="big") + mb + combined[4 + metadata_len:]
+        ).decode("ascii")
+
+        func = deserialize_function(forced)
+        assert func(size=4) == {"size": 4, "squared": 16}
+
 
 class TestResultEnvelope:
     """Tests for the task-result envelope.
