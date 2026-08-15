@@ -430,11 +430,20 @@ class TestWorkerStopsDuringAnOutage:
         assert lease_failed.wait(30), "the worker never tried to lease again"
         return thread, stop
 
+    # ids are explicit on purpose: pytest derives a parametrize id from a
+    # value by probing ``getattr(value, "__name__", None)``, and
+    # ``urllib.error.HTTPError`` inherits its ``__getattr__`` from
+    # ``tempfile._TemporaryFileWrapper`` — ``addinfourl`` is an alias for it.
+    # That ``__getattr__`` reads ``self.__dict__['file']``, which is absent
+    # when the HTTPError was built with ``fp=None`` (the base is deliberately
+    # not initialized then) and raises ``KeyError`` — a non-``AttributeError``,
+    # so ``getattr``'s default does not catch it. Python 3.9 crashes the whole
+    # collection with exit code 2 on that probe; 3.10+ happens to survive.
     @pytest.mark.parametrize("lease_error,branch", [
         (socket.timeout("coordinator gone"), "unreachable"),
         (urllib.error.HTTPError("http://127.0.0.1:1/api/lease", 500,
                                 "server error", None, None), "answered 500"),
-    ])
+    ], ids=["unreachable", "answered-500"])
     def test_a_stop_mid_backoff_is_noticed_at_once(self, monkeypatch,
                                                    lease_error, branch):
         """Both failure branches wait on the event, not on the clock.
