@@ -1,0 +1,18 @@
+# Two platforms, both fully configured, rather than a long list of
+# half-set-up ones. An empty or broken sponsor button is worse than no button.
+#
+# MAINTAINER TODO before launch — each of these needs a real account or the
+# button on the repository sidebar will 404:
+#
+#   1. `github:` requires GitHub Sponsors to be enabled on the account
+#      (github.com/sponsors -> "Get sponsored"). Until enrolment is approved,
+#      comment this line out.
+#   2. `thanks_dev:` requires signing in at thanks.dev with the same GitHub
+#      account. The value is the literal prefix `u/gh/` followed by the GitHub
+#      username. Until the account exists, comment this line out.
+#
+# Confirm the username below is the account the funding should land in — it is
+# taken from the repository owner, not from anything the maintainer confirmed.
+
+github: [Samurai007AK]
+thanks_dev: u/gh/Samurai007AK

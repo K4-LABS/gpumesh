@@ -1,6 +1,9 @@
 name: Feature request
 description: Suggest a capability gpumesh does not have yet
-labels: ["feature-request"]
+# `enhancement` rather than `feature-request`: it is a GitHub default label
+# that already exists on every repository. A form referencing a label that has
+# not been created silently drops it.
+labels: ["enhancement", "needs-triage"]
 body:
   - type: markdown
     attributes:

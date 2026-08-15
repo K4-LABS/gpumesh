@@ -1,0 +1,80 @@
+name: scorecard
+
+# OpenSSF Scorecard.
+#
+# Scorecard runs the checks a security-conscious downstream user would run by
+# hand before adopting a dependency — is the workflow token scoped down, are
+# actions pinned, is branch protection on, are there unfixed vulnerable
+# dependencies, is there a fuzzing or SAST story, is the release signed. For a
+# project asking strangers to execute code sent over a network, the score is
+# a large part of the argument for trusting it.
+#
+# MANUAL STEP (cannot be done from this file):
+#   To have the score appear as a badge and to publish results to the OpenSSF
+#   API, the repository must be public and the "Branch-Protection" check needs
+#   a token with admin read. The `publish_results: true` setting below is what
+#   feeds https://api.securityscorecards.dev — nothing else is required for
+#   the SARIF upload to the Security tab.
+#   Badge markdown, once the first run completes:
+#     https://api.scorecard.dev/projects/github.com/Samurai007AK/gpumesh/badge
+
+on:
+  # Re-scored weekly. Scorecard's answer changes when GitHub changes settings,
+  # when a dependency picks up an advisory, or when someone edits a workflow —
+  # none of which are events this repo emits.
+  schedule:
+    - cron: "43 5 * * 1"
+  # Branch protection is one of the highest-weighted checks, so a change to it
+  # should re-score immediately rather than wait up to a week.
+  branch_protection_rule:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analysis:
+    name: Scorecard analysis
+    runs-on: ubuntu-latest
+    permissions:
+      # Needed to upload the SARIF result to the code-scanning dashboard.
+      security-events: write
+      # Needed by the Branch-Protection and Webhooks checks to read repository
+      # administrative settings. Read-only.
+      id-token: write
+      contents: read
+      actions: read
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Run analysis
+        uses: ossf/scorecard-action@2d1146689b8cda280b9bc96326124645441f03bc # v2.4.4
+        with:
+          results_file: results.sarif
+          results_format: sarif
+          # Publishing makes the result readable by anyone evaluating gpumesh
+          # and is what powers the badge. It publishes the score, not source.
+          publish_results: true
+
+      - name: Upload SARIF artifact
+        # Kept because the Security tab retains findings but not the raw file,
+        # and the raw file is what you diff when a score moves and you want to
+        # know which check changed.
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: scorecard-sarif
+          path: results.sarif
+          retention-days: 5
+
+      - name: Upload to code scanning
+        uses: github/codeql-action/upload-sarif@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
+        with:
+          sarif_file: results.sarif

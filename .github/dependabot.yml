@@ -1,0 +1,109 @@
+version: 2
+
+updates:
+  # ---------------------------------------------------------------------------
+  # GitHub Actions
+  # ---------------------------------------------------------------------------
+  # Every action in .github/workflows is pinned to a full commit SHA, which is
+  # the only pin a tag-repointing attack cannot defeat — but a SHA pin is also
+  # a pin that never moves on its own, which is how a repo ends up running a
+  # two-year-old action with a known bug. Dependabot reads the `# vX.Y.Z`
+  # comment beside each SHA, so it can still open a normal version-bump PR
+  # against the pin and rewrite both the SHA and the comment.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "07:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 5
+    labels: ["dependencies", "github-actions"]
+    commit-message:
+      prefix: "ci"
+    groups:
+      actions:
+        patterns: ["*"]
+    cooldown:
+      # A brand-new release of an action is the single riskiest thing to
+      # install automatically. Both of the supply-chain incidents this repo's
+      # hardening is a response to — the tj-actions/changed-files compromise
+      # and the Shai-Hulud npm worm — were caught within days of the malicious
+      # version going live, by people who happened to look. A repo that
+      # auto-merges within hours is downstream of nobody having looked yet.
+      #
+      # Waiting is nearly free: the security benefit of being seven days
+      # newer is negligible, and the cost of being seven days behind a
+      # backdoor is total. Security advisories are exempt from cooldown by
+      # design, so genuine urgent fixes still arrive immediately.
+      default-days: 7
+      semver-major-days: 14
+
+  # ---------------------------------------------------------------------------
+  # Python
+  # ---------------------------------------------------------------------------
+  - package-ecosystem: pip
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "07:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 5
+    labels: ["dependencies", "python"]
+    commit-message:
+      prefix: "deps"
+      prefix-development: "deps-dev"
+    groups:
+      # Grouped so a quiet week produces one reviewable PR instead of six
+      # near-identical ones. Runtime and tooling are split because they carry
+      # very different risk: a bad bump to cloudpickle breaks every mesh in
+      # the field, while a bad bump to ruff breaks a CI job.
+      runtime:
+        applies-to: version-updates
+        dependency-type: production
+        patterns: ["*"]
+      tooling:
+        applies-to: version-updates
+        dependency-type: development
+        patterns: ["*"]
+      security:
+        applies-to: security-updates
+        patterns: ["*"]
+    cooldown:
+      default-days: 7
+      semver-major-days: 14
+    ignore:
+      # torch releases are enormous, frequent, and CUDA-build-specific; the
+      # floor in pyproject.toml is deliberately low and there is nothing for
+      # Dependabot to usefully do here. Security advisories still come
+      # through — `ignore` applies to version updates, not to alerts.
+      - dependency-name: torch
+        update-types: ["version-update:semver-patch"]
+
+  # ---------------------------------------------------------------------------
+  # Docker
+  # ---------------------------------------------------------------------------
+  # The Dockerfile pins python:3.11-slim by digest. A digest is immutable, so
+  # it stops receiving the weekly Debian security rebuilds that the mutable
+  # tag silently picks up — which is precisely the tradeoff a digest pin makes
+  # and precisely why it needs an automated bumper attached to it. Dependabot
+  # rewrites the digest and records which tag it now points at.
+  - package-ecosystem: docker
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "07:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 3
+    labels: ["dependencies", "docker"]
+    commit-message:
+      prefix: "docker"
+    cooldown:
+      # Shorter than the others on purpose: base-image bumps are almost always
+      # OS security patches, and the threat model for an official Docker
+      # Hub library image is different from that of a single-maintainer
+      # package on PyPI.
+      default-days: 3
+      semver-major-days: 14

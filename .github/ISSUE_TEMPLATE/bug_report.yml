@@ -1,6 +1,6 @@
 name: Bug report
 description: Something does not work the way the docs say it should
-labels: ["bug"]
+labels: ["bug", "needs-triage"]
 body:
   - type: markdown
     attributes:
@@ -52,7 +52,7 @@ body:
     attributes:
       label: gpumesh version
       description: "Output of `gpumesh --version`"
-      placeholder: gpumesh 1.2.0 (3.11.9, Windows)
+      placeholder: gpumesh 2.0.0 (3.11.9, Windows)
     validations:
       required: true
 

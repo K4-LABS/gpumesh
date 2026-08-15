@@ -1,0 +1,76 @@
+# Line-ending normalisation.
+#
+# This repo is developed on Windows with core.autocrlf=true, which is a
+# per-clone setting rather than a property of the repository. That is why
+# `git diff` currently shows whole-file churn on files nobody edited: whether
+# a checkout produces CRLF or LF depends on who cloned it. .gitattributes
+# moves that decision into the repo, so every clone agrees.
+#
+# The rule below is "normalise text to LF in the index, let the platform
+# decide in the working tree". Windows editors still see CRLF locally; the
+# blobs stored in git are always LF.
+* text=auto
+
+# -- Explicitly LF, everywhere, no exceptions --------------------------------
+#
+# Anything that is read by a Linux kernel or a POSIX shell must be LF in the
+# working tree too, not just in the index. A CRLF shebang line makes the
+# kernel look for an interpreter named "/bin/sh\r" and fail with a confusing
+# "no such file or directory" that names a file which plainly exists. The same
+# applies to files copied into the Docker image and executed there.
+*.sh            text eol=lf
+*.bash          text eol=lf
+Dockerfile      text eol=lf
+*.dockerfile    text eol=lf
+.dockerignore   text eol=lf
+docker-compose*.yaml text eol=lf
+docker-compose*.yml  text eol=lf
+
+# Python is LF by convention (PEP 8 / the interpreter's own sources) and the
+# package is built inside Linux containers and on Linux CI runners.
+*.py            text eol=lf
+*.pyi           text eol=lf
+
+# CI and packaging metadata: consumed by Linux runners and by build backends.
+*.yml           text eol=lf
+*.yaml          text eol=lf
+*.toml          text eol=lf
+*.cfg           text eol=lf
+*.ini           text eol=lf
+*.in            text eol=lf
+*.json          text eol=lf
+.gitattributes  text eol=lf
+.gitignore      text eol=lf
+.pre-commit-config.yaml text eol=lf
+
+# Documentation and licence text. LF keeps the sdist byte-identical whichever
+# machine builds it, which matters for the reproducible-build check in CI.
+*.md            text eol=lf
+LICENSE         text eol=lf
+py.typed        text eol=lf
+
+# -- Explicitly CRLF ---------------------------------------------------------
+#
+# Windows batch files are only ever run by cmd.exe. Some cmd constructs
+# (notably multi-line `if`/`for` blocks and a trailing `goto :eof`) misparse
+# with bare LF endings, so these keep CRLF in the working tree.
+*.bat           text eol=crlf
+*.cmd           text eol=crlf
+*.ps1           text eol=crlf
+
+# -- Binary ------------------------------------------------------------------
+*.png           binary
+*.jpg           binary
+*.gif           binary
+*.ico           binary
+*.pdf           binary
+*.whl           binary
+*.gz            binary
+*.zip           binary
+*.pyc           binary
+
+# -- Repository language stats and diff hygiene ------------------------------
+# Vendored/generated content should not skew GitHub's language bar or clutter
+# `git diff` output.
+*.lock          -diff
+skills-lock.json linguist-generated=true
