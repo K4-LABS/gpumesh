@@ -277,8 +277,10 @@ indent-width = 4
 
 # Matches `requires-python` above. Ruff would infer this, but stating it means
 # the pyupgrade rules cannot start rewriting 3.9-compatible code the moment
-# someone edits requires-python without thinking about it.
-target-version = "2.0.0"
+# someone edits requires-python without thinking about it. (This is the
+# interpreter floor, py39 — not the package version. A previous draft wrote
+# "2.0.0" here and broke every ruff invocation with a TOML parse error.)
+target-version = "py39"
 
 extend-exclude = [
     "examples",
