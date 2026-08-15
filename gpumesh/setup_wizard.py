@@ -10,6 +10,7 @@ All old manual paths (Tailscale, LAN IP) are preserved as fallbacks.
 
 from __future__ import annotations
 
+import os
 import platform
 import secrets
 import shutil
@@ -92,30 +93,115 @@ def _has_tailscale() -> bool:
         return False
 
 
+# Shown with every address rejection. One string, so the wizard always tells
+# the user the same thing to type no matter which check failed.
+_ADDRESS_HINT = ("Type an address like 192.168.1.10:8000, or a full URL "
+                 "like http://192.168.1.10:8000.")
+
+# Every re-prompting question needs an explicit way out, or a user who does
+# not have the answer to hand is stuck in a loop with no exit but Ctrl+C.
+# The first entry is the one shown in prompts.
+_QUIT_WORDS = ("q", "quit", "cancel")
+
+
+def _parse_port(raw: str, original: str) -> int:
+    """Parse the port half of a user-entered address, or raise ValueError."""
+    try:
+        port = int(raw)
+    except (TypeError, ValueError):
+        raise ValueError(
+            f"'{raw}' is not a port number (in '{original}'). {_ADDRESS_HINT}"
+        ) from None
+    if not 1 <= port <= 65535:
+        raise ValueError(
+            f"Port {port} is out of range 1-65535 (in '{original}'). "
+            f"{_ADDRESS_HINT}"
+        )
+    return port
+
+
+def _check_host(host: str, original: str):
+    """Reject host parts that cannot appear in a URL."""
+    if not host:
+        raise ValueError(f"'{original}' has no host. {_ADDRESS_HINT}")
+    if "/" in host or any(ch.isspace() for ch in host):
+        raise ValueError(f"'{original}' is not a valid address. {_ADDRESS_HINT}")
+
+
 def _parse_url(ip_or_url: str, default_port: int = 8000) -> str:
-    """Parse a user-entered IP or URL into a normalized http:// URL."""
-    url = ip_or_url.strip()
-    if url.startswith("http://") or url.startswith("https://"):
-        return url
+    """Parse a user-entered IP or URL into a normalized http:// URL.
+
+    Raises ValueError on anything that cannot become a working URL. This
+    used to normalize unconditionally, which meant every typo was accepted
+    here and only failed much later as an unexplained connection error on
+    the far side: a mistyped port became "http://192.168.1.10:80o0:8000",
+    an empty answer became "http://:8000", and because the scheme test was
+    case-sensitive "HTTP://host:8000" became "http://HTTP://host:8000".
+    Reject at the keystroke that caused it, and say what to type instead.
+    """
+    url = (ip_or_url or "").strip()
+    if not url:
+        raise ValueError(f"No address entered. {_ADDRESS_HINT}")
+
+    # URL schemes are case-insensitive (RFC 3986), so compare lowered but
+    # return the user's host untouched — hostnames may be case-sensitive to
+    # look at even though they resolve case-insensitively.
+    lowered = url.lower()
+    for scheme in ("http://", "https://"):
+        if lowered.startswith(scheme):
+            rest = url[len(scheme):]
+            if not rest or rest.startswith("/"):
+                raise ValueError(f"'{url}' has no host. {_ADDRESS_HINT}")
+            return scheme + rest
+    if "://" in url:
+        got = url.split("://", 1)[0]
+        raise ValueError(
+            f"'{got}://' is not a supported scheme — gpumesh speaks http and "
+            f"https. {_ADDRESS_HINT}"
+        )
+
     if url.startswith("["):
+        # Bracketed IPv6 literal: the brackets are what separate the address
+        # from the port, since the address itself is full of colons.
         bracket_end = url.find("]")
-        if bracket_end != -1:
-            rest = url[bracket_end + 1:]
-            if rest.startswith(":"):
-                try:
-                    port = int(rest[1:])
-                    return f"http://{url[:bracket_end + 1]}:{port}"
-                except ValueError:
-                    pass
-            return f"http://{url}:{default_port}"
+        if bracket_end == -1:
+            raise ValueError(
+                f"'{url}' is missing the closing ']'. Type an IPv6 address as "
+                f"[::1]:8000."
+            )
+        host = url[:bracket_end + 1]
+        if len(host) <= 2:
+            raise ValueError(f"'{url}' has no host. {_ADDRESS_HINT}")
+        rest = url[bracket_end + 1:]
+        if not rest:
+            return f"http://{host}:{default_port}"
+        if not rest.startswith(":"):
+            raise ValueError(
+                f"'{url}' has unexpected text after the address. Type an IPv6 "
+                f"address as [::1]:8000."
+            )
+        return f"http://{host}:{_parse_port(rest[1:], url)}"
+
     if ":" in url:
-        parts = url.rsplit(":", 1)
+        host, _, raw_port = url.rpartition(":")
+        port = _parse_port(raw_port, url)
+    else:
+        host, port = url, default_port
+    _check_host(host, url)
+    return f"http://{host}:{port}"
+
+
+def _response_header(obj, name: str) -> str:
+    """Read a header off either a urlopen response or an HTTPError."""
+    for source in (getattr(obj, "headers", None), getattr(obj, "info", None)):
         try:
-            port = int(parts[1])
-            return f"http://{parts[0]}:{port}"
-        except ValueError:
-            pass
-    return f"http://{url}:{default_port}"
+            headers = source() if callable(source) else source
+            value = headers.get(name) if headers is not None else None
+        except Exception:
+            value = None
+        if value:
+            return str(value)
+    return ""
 
 
 def _probe_claim_port(ip: str) -> int:
@@ -125,6 +211,9 @@ def _probe_claim_port(ip: str) -> int:
     import urllib.request
 
     common_ports = [49152, 49153, 49154, 8080, 9000, 10000, 12345, 50000]
+    # First port that answered HTTP without identifying itself as gpumesh.
+    # It is a fallback, not an answer: see the return below.
+    fallback = 0
     for port in common_ports:
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -132,18 +221,112 @@ def _probe_claim_port(ip: str) -> int:
             result = sock.connect_ex((ip, port))
             sock.close()
             if result == 0:
+                # ANY HTTP response proves something is listening and speaking
+                # HTTP. The old test — accept only 400/404/405 — rejected the
+                # very server it was hunting for: claimer.ClaimHandler defines
+                # no do_GET, so BaseHTTPRequestHandler answers a GET with 501,
+                # and the coordinator then reported "Could not find a claim
+                # server" about a worker that was perfectly claimable.
+                answered = False
+                server = ""
                 try:
                     probe_url = f"http://{ip}:{port}/api/claim"
                     req = urllib.request.Request(probe_url, method="GET")
-                    urllib.request.urlopen(req, timeout=2)
+                    with urllib.request.urlopen(req, timeout=2) as resp:
+                        answered = True
+                        server = _response_header(resp, "Server")
                 except urllib.error.HTTPError as exc:
-                    if exc.code in (400, 404, 405):
-                        return port
+                    answered = True
+                    server = _response_header(exc, "Server")
                 except Exception:
                     pass
+                if answered:
+                    # claimer sets server_version = "gpumesh-claim", so a
+                    # worker that names itself is a certainty and we can stop.
+                    if "gpumesh-claim" in server.lower():
+                        return port
+                    if fallback == 0:
+                        fallback = port
         except Exception:
             pass
-    return 0
+    # Nothing self-identified. Returning the first HTTP responder is still
+    # better than giving up: this only runs against a peer that just
+    # broadcast a gpumesh beacon, and a wrong guess fails loudly on the
+    # claim POST a moment later instead of stalling the whole flow with
+    # "could not find a claim server".
+    return fallback
+
+
+def _ask_url(prompt: str) -> str | None:
+    """Prompt for a coordinator address until it parses, or the user quits.
+
+    Returns None when the user gives up (Ctrl+C, or the quit word), which is
+    the caller's cue to print its own "nothing entered" message and stop.
+    """
+    while True:
+        answer = questionary.text(prompt).ask()
+        if answer is None:
+            return None
+        answer = answer.strip()
+        if answer.lower() in _QUIT_WORDS:
+            return None
+        try:
+            return _parse_url(answer)
+        except ValueError as exc:
+            # Re-prompt rather than return: a typo in an IP address is the
+            # single most likely thing to happen here, and making the user
+            # restart 'gpumesh setup' over one is why people give up.
+            _console.print(f"  {exc}", style="red")
+            _console.print(f"  Try again, or type '{_QUIT_WORDS[0]}' to quit.",
+                           style="yellow")
+
+
+def _ask_token(prompt: str, min_length: int = 0) -> str | None:
+    """Prompt for a token until it is acceptable, or the user quits.
+
+    ``min_length`` is only set where the wizard is *choosing* a token (the
+    worker's own). When it is *receiving* one that a coordinator generated,
+    any non-empty answer has to be allowed — we do not get to re-specify
+    somebody else's token.
+    """
+    # questionary's own validator has to let the quit word through, or the
+    # advertised way out is the one answer the prompt refuses to accept.
+    too_short = (f"Token must be at least {min_length} characters"
+                 if min_length else "Token cannot be empty")
+    complaint = f"{too_short} (or '{_QUIT_WORDS[0]}' to quit)."
+
+    while True:
+        answer = questionary.text(
+            prompt,
+            validate=lambda t: (
+                True
+                if (t.strip().lower() in _QUIT_WORDS
+                    or len(t.strip()) >= max(min_length, 1))
+                else complaint
+            ),
+        ).ask()
+        if answer is None:
+            return None
+        answer = answer.strip()
+        # A real token is a secrets.token_urlsafe() string, so treating a
+        # bare "q" as "quit" costs nothing anyone will ever type on purpose.
+        if answer.lower() in _QUIT_WORDS:
+            return None
+        if not answer:
+            _console.print(
+                f"  Token cannot be empty. Type it again, or "
+                f"'{_QUIT_WORDS[0]}' to quit.",
+                style="red",
+            )
+            continue
+        if min_length and len(answer) < min_length:
+            _console.print(
+                f"  Token must be at least {min_length} characters. Type it "
+                f"again, or '{_QUIT_WORDS[0]}' to quit.",
+                style="red",
+            )
+            continue
+        return answer
 
 
 # ── visual helpers ─────────────────────────────────────────────────────────
@@ -261,6 +444,61 @@ def run_setup_wizard():
 #  COORDINATOR SETUP (with radar)
 # ============================================================================
 
+# What the wizard binds to when nothing overrides it. `gpumesh serve` defaults
+# to loopback, and the wizard deliberately does not: option 1 is literally
+# "Same WiFi / LAN (auto-discover nearby devices)", and every part of that —
+# the UDP radar, the claim POST to a worker, the worker dialling back — needs
+# a socket other machines can reach. A loopback bind here would not be a safer
+# wizard, it would be a wizard that cannot complete its own flow. So the
+# exposure is chosen on purpose, resolved through the same helper `serve` uses
+# so an override still works, and announced with the same warning.
+WIZARD_LAN_BIND_HOST = "0.0.0.0"
+
+
+def _resolve_wizard_bind_host() -> str:
+    """Resolve the wizard's bind address through cli's single resolver.
+
+    Imported lazily: cli imports this module (for `gpumesh setup`), so a
+    module-level import would be a cycle.
+    """
+    from types import SimpleNamespace
+
+    from .cli import _resolve_bind_host
+
+    # argparse pre-fills `serve --host` from GPUMESH_HOST; do the same so the
+    # env override reaches the same resolver by the same route. Only when
+    # neither is set does the wizard supply its own default, because cli's
+    # (loopback) is the one answer this flow cannot use.
+    env_host = os.environ.get("GPUMESH_HOST", "").strip()
+    return _resolve_bind_host(
+        SimpleNamespace(host=env_host or WIZARD_LAN_BIND_HOST)
+    )
+
+
+def _announce_bind_host(bind_host: str, port: int):
+    """Print what this bind address means for the user's machine."""
+    from .cli import _is_loopback_bind, _print_exposure_warning
+
+    if _is_loopback_bind(bind_host):
+        # Reachable only when someone set GPUMESH_HOST. Honour it — but the
+        # rest of this flow is about to look broken, so say why now rather
+        # than let the radar scan silently find nothing for 30 seconds.
+        _console.print(
+            f"  Bound to {bind_host} only (GPUMESH_HOST is set), so machines "
+            f"on your network CANNOT reach this coordinator.",
+            style="yellow",
+        )
+        _console.print(
+            "  Discovery and claiming need a reachable socket: unset "
+            "GPUMESH_HOST, or set it to 0.0.0.0, to use this mode.",
+            style="yellow",
+        )
+        _console.print()
+        return
+    # The same banner `gpumesh serve` prints, from the same function, so
+    # there is one wording of this warning to keep honest.
+    _print_exposure_warning(bind_host, port)
+
 
 def _setup_coordinator_radar(device: str):
     """Set up this machine as the coordinator with live radar."""
@@ -333,13 +571,15 @@ def _setup_coordinator_radar(device: str):
     # Start the coordinator server in background
     from . import server, connection_manager
 
+    bind_host = _resolve_wizard_bind_host()
+
     try:
-        httpd = server.serve("0.0.0.0", 8000, "gpumesh.db", token)
+        httpd = server.serve(bind_host, 8000, "gpumesh.db", token)
     except OSError as exc:
         _console.print(f"  [ERROR] Failed to start server: {exc}", style="red")
         _console.print("  Port 8000 may already be in use.", style="yellow")
         try:
-            httpd = server.serve("0.0.0.0", 8001, "gpumesh.db", token)
+            httpd = server.serve(bind_host, 8001, "gpumesh.db", token)
             coordinator_url = f"http://{lan_ip}:8001"
             _console.print("  Server started on port 8001 instead.", style="green")
         except OSError:
@@ -364,6 +604,12 @@ def _setup_coordinator_radar(device: str):
 
     # Try to add firewall rules now that the actual port is known
     actual_port = int(coordinator_url.rsplit(":", 1)[-1]) if ":" in coordinator_url else 8000
+
+    # Say out loud what this bind means before the user starts handing the
+    # token to friends. `gpumesh serve` does this; the wizard used to bind
+    # wider than `serve` does and print nothing at all.
+    _announce_bind_host(bind_host, actual_port)
+
     firewall_ok = try_add_firewall_rule(actual_port)
     if not firewall_ok:
         show_firewall_hint(actual_port)
@@ -696,6 +942,24 @@ def _setup_coordinator_manual(
     connection_manager.save_connection(coordinator_url, token)
 
 
+def _serve_target(url: str, default_port: int = 8000) -> tuple[str, int]:
+    """Split an advertised coordinator URL into (host, port) for `serve`.
+
+    The printed `gpumesh serve` command has to name a bind address now that
+    the default is loopback, and the only address we know is reachable is
+    the one this panel just advertised.
+    """
+    from urllib.parse import urlsplit
+
+    parts = urlsplit(url)
+    host = parts.hostname or ""
+    try:
+        port = parts.port or default_port
+    except ValueError:
+        port = default_port
+    return host, port
+
+
 def _show_coordinator_instructions(url: str, token: str, mode: str):
     """Show coordinator instructions (shared by all modes)."""
     _console.print()
@@ -716,13 +980,30 @@ def _show_coordinator_instructions(url: str, token: str, mode: str):
     )
     _console.print()
 
+    # `gpumesh serve` binds 127.0.0.1 unless told otherwise, so a command
+    # without --host starts a coordinator that no worker can ever reach —
+    # while the panel above advertises a LAN/tailnet URL and step 3 tells the
+    # friend to dial exactly that. Name the bind address explicitly, and say
+    # what opening it means in the same breath as the command that opens it.
+    serve_host, serve_port = _serve_target(url)
+
     if mode == "tailscale":
         _console.print("  STEP-BY-STEP INSTRUCTIONS:", style="bold")
         _console.print()
         _console.print("  Step 1: Start the coordinator on this machine:", style="cyan")
         _console.print(
-            f"    gpumesh serve --port 8000 --token {token} --tailscale",
+            f"    gpumesh serve --host {serve_host} --port {serve_port} "
+            f"--token {token} --tailscale",
             style="green",
+        )
+        _console.print(
+            f"    EXPOSURE: --host opens port {serve_port} to your tailnet. "
+            f"Anyone who can",
+            style="yellow",
+        )
+        _console.print(
+            "    reach it AND has the token runs code on this machine as you.",
+            style="yellow",
         )
         _console.print()
         _console.print(
@@ -749,7 +1030,19 @@ def _show_coordinator_instructions(url: str, token: str, mode: str):
         _console.print()
         _console.print("  Step 1: Start the coordinator on this machine:", style="cyan")
         _console.print(
-            f"    gpumesh serve --port 8000 --token {token}", style="green",
+            f"    gpumesh serve --host 0.0.0.0 --port {serve_port} "
+            f"--token {token}",
+            style="green",
+        )
+        _console.print(
+            f"    EXPOSURE: --host 0.0.0.0 opens port {serve_port} to your "
+            f"whole LAN. Anyone",
+            style="yellow",
+        )
+        _console.print(
+            "    who can reach it AND has the token runs code on this machine "
+            "as you.",
+            style="yellow",
         )
         _console.print()
         _console.print(
@@ -780,12 +1073,71 @@ def _show_coordinator_instructions(url: str, token: str, mode: str):
 # ============================================================================
 
 def _setup_worker_radar(device: str):
-    """Set up this machine as a worker with claim-based discovery."""
+    """Set up this machine as a worker: pick a network, then join.
+
+    This used to jump straight into the LAN broadcast, which left the wizard
+    with no way to join a coordinator that is not on the same LAN — no URL
+    and token entry at all — even though the coordinator side offers
+    Tailscale and its own printed instructions tell the friend to run
+    'gpumesh setup'. The two halves of the documented flow never met. The
+    choices below deliberately mirror the coordinator's, so the person
+    reading out the instructions and the person following them see the same
+    three options in the same order.
+    """
 
     _console.print()
     _console.print(_step_badge(1, 2, "Worker role", done=True))
     _console.print("  Let's add this machine to the mesh.", style="bold green")
     _console.print()
+
+    tailscale_ok = _has_tailscale()
+
+    _console.print(_step_badge(2, 2, "Network setup"))
+    _console.print("  How will this machine reach the coordinator?", style="bold")
+    _console.print()
+    if tailscale_ok:
+        net_choices = [
+            "1) Same WiFi / LAN (let a coordinator discover and claim this machine)",
+            "2) Tailscale (the coordinator is on a different network)",
+            "3) Manual setup (enter the coordinator's URL and token yourself)",
+        ]
+    else:
+        net_choices = [
+            "1) Same WiFi / LAN (let a coordinator discover and claim this machine)",
+            "2) Manual setup (enter the coordinator's URL and token yourself)",
+        ]
+        _console.print(
+            "  Tailscale not found. Install from: https://tailscale.com/download",
+            style="yellow",
+        )
+        _console.print(
+            "  Then run 'gpumesh setup' again for remote connections.",
+            style="yellow",
+        )
+    _console.print()
+
+    net_choice = questionary.select(
+        "",
+        choices=net_choices,
+        style=questionary.Style([
+            ("pointer", "bold cyan"),
+            ("selected", "bold"),
+        ]),
+    ).ask()
+
+    if net_choice is None:
+        return
+
+    if tailscale_ok and net_choice.startswith("2)"):
+        _setup_worker_tailscale(device)
+        return
+
+    manual_choice = "3)" if tailscale_ok else "2)"
+    if net_choice.startswith(manual_choice):
+        _setup_worker_manual(device)
+        return
+
+    # --- LAN / claim mode (default) ---
     _console.print(
         "  This worker will broadcast its presence on the LAN.", style="cyan",
     )
@@ -818,22 +1170,17 @@ def _setup_worker_radar_scan(device: str):
     _console.print(
         "  (Other coordinators will need this to connect)", style="cyan",
     )
+    _console.print(
+        f"  At least 8 characters, or '{_QUIT_WORDS[0]}' to quit.", style="cyan",
+    )
     _console.print()
 
-    token = questionary.text(
-        "Token:",
-        validate=lambda t: True if len(t.strip()) >= 8 else "Token must be at least 8 characters.",
-    ).ask()
-
+    # Re-prompt on a bad token instead of returning. Returning meant one
+    # mistyped character cost the user the entire wizard — hardware detection
+    # included — and the only instruction offered was to start over.
+    token = _ask_token("Token:", min_length=8)
     if token is None:
-        return
-
-    token = token.strip()
-    if not token:
-        _console.print("  Token cannot be empty. Try again: gpumesh setup", style="red")
-        return
-    if len(token) < 8:
-        _console.print("  Token must be at least 8 characters.", style="red")
+        _console.print("  Cancelled. Try again: gpumesh setup", style="yellow")
         return
 
     # Confirm broadcast
@@ -873,19 +1220,17 @@ def _setup_worker_tailscale(device: str):
     _console.print("    - The Token (a random code)", style="cyan")
     _console.print()
 
-    url = questionary.text("Coordinator Tailscale URL:").ask()
-    if url is None or not url.strip():
+    url = _ask_url("Coordinator Tailscale URL:")
+    if url is None:
         _console.print("  No URL provided. Try again: gpumesh setup", style="red")
         return
-    url = _parse_url(url)
 
     # Get token
     _console.print()
-    token = questionary.text("Token:").ask()
-    if token is None or not token.strip():
+    token = _ask_token("Token:")
+    if token is None:
         _console.print("  No token provided. Try again: gpumesh setup", style="red")
         return
-    token = token.strip()
 
     # Save and join
     connection_manager.save_connection(url, token)
@@ -930,26 +1275,27 @@ def _setup_worker_manual(device: str):
     )
     _console.print("    - The Token (a random code)", style="cyan")
     _console.print(
-        "  They can find this by running 'gpumesh serve' on their machine",
+        "  They get these by running 'gpumesh serve --host 0.0.0.0' — a plain",
+        style="yellow",
+    )
+    _console.print(
+        "  'gpumesh serve' only listens on their own machine, so it cannot be "
+        "joined.",
         style="yellow",
     )
     _console.print()
 
-    ip = questionary.text(
-        "Coordinator IP address (e.g. 192.168.1.10):",
-    ).ask()
-    if ip is None or not ip.strip():
+    url = _ask_url("Coordinator IP address (e.g. 192.168.1.10):")
+    if url is None:
         _console.print("  No IP provided. Try again: gpumesh setup", style="red")
         return
-    url = _parse_url(ip)
     _console.print(f"  Connecting to: {url}", style="cyan")
 
     _console.print()
-    token = questionary.text("Token:").ask()
-    if token is None or not token.strip():
+    token = _ask_token("Token:")
+    if token is None:
         _console.print("  No token provided. Try again: gpumesh setup", style="red")
         return
-    token = token.strip()
 
     connection_manager.save_connection(url, token)
 

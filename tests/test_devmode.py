@@ -158,6 +158,298 @@ class TestMeshDecorator:
         assert result == {"sum": 5}
 
 
+def _distribute_like_the_coordinator(function, params, timeout=300.0, **hints):
+    """Stand-in for ``GPUMesh.distribute`` that models its argument contract.
+
+    Not ``[function(**p) for p in params]``: the real distribute builds each
+    payload as ``{"_params": {k: v for k, v in p.items() if k != "cost"}, ...}``
+    (api.py) and the worker executes ``payload["_params"]`` and nothing else,
+    so ``cost`` provably never reaches the function on the mesh path. A fake
+    that forwarded the whole payload would model a mesh that does not exist,
+    and would agree with the very bug these tests exist to catch.
+    """
+    return [function(**{k: v for k, v in p.items() if k != "cost"})
+            for p in params]
+
+
+class _FakeMesh:
+    """A mesh with one live worker whose distribute() matches api.py."""
+
+    def __init__(self):
+        self.distributed = []
+
+    def workers(self):
+        return [{"alive": True}]
+
+    def devices(self):
+        return [{"device": "cpu"}]
+
+    def distribute(self, function, params, timeout=300.0, **hints):
+        self.distributed.append(params)
+        return _distribute_like_the_coordinator(function, params,
+                                                timeout=timeout, **hints)
+
+
+@pytest.fixture
+def no_coordinator(monkeypatch):
+    """Force the ``_afn is None`` branch — the genuine no-coordinator path.
+
+    ``_ensure_afn`` re-runs ``connect()`` on first use, and this machine may
+    well have a real connection saved by ``gpumesh join``, which would quietly
+    route these tests through AcceleratedFunction and test nothing. Marking the
+    module already-connected with no mesh makes ``connect()`` a no-op that
+    returns None, so ``_afn`` stays None the way it does on a laptop that never
+    joined a mesh.
+    """
+    import importlib
+
+    mesh_module = importlib.import_module("gpumesh.mesh")
+    monkeypatch.setattr(mesh_module, "_connected", True)
+    monkeypatch.setattr(mesh_module, "_mesh", None)
+    return mesh_module
+
+
+class TestCostAnnotatedPayloads:
+    """A ``cost``-annotated payload must behave identically on both paths.
+
+    Regression: ``MeshFunction.map``'s local branch was
+    ``[self._bound_fn(**p) for p in params_list]``, so a payload annotated the
+    way examples/payloads.json and the README teach raised ``TypeError:
+    evaluate() got an unexpected keyword argument 'cost'`` the instant no
+    coordinator was configured — i.e. exactly when the local fallback was
+    supposed to be saving the run. ``GPUMesh.distribute`` has stripped it since
+    1.1.0; this is the same defect in the ``@mesh`` front door.
+    """
+
+    @staticmethod
+    def _tracked():
+        """A user function that would raise if it were ever handed ``cost``."""
+        seen = []
+
+        def evaluate(lr):
+            seen.append(lr)
+            return {"lr": lr, "score": lr * 10}
+
+        return evaluate, seen
+
+    def test_map_local_fallback_accepts_cost(self, no_coordinator):
+        """The bug, directly: no coordinator, cost-annotated payload."""
+        from gpumesh.mesh import MeshFunction
+
+        evaluate, seen = self._tracked()
+        fn = MeshFunction(evaluate, None)
+        assert fn._afn is None, "fixture must force the local branch"
+
+        results = fn.map([{"lr": 0.1, "cost": 2.0}, {"lr": 0.2, "cost": 5.0}])
+
+        assert results == [{"lr": 0.1, "score": 1.0}, {"lr": 0.2, "score": 2.0}]
+        assert seen == [0.1, 0.2]
+
+    def test_map_local_and_mesh_return_the_same_thing(self, no_coordinator):
+        """Same payload, both paths, byte-identical results.
+
+        This is the property the fallback is supposed to have and the one the
+        bug broke: code that works with the mesh up keeps working with it down.
+        """
+        from gpumesh.mesh import MeshFunction
+
+        payloads = [{"lr": 0.1, "cost": 2.0}, {"lr": 0.25, "cost": 1.0}]
+
+        local_fn, local_seen = self._tracked()
+        local = MeshFunction(local_fn, None)
+        assert local._afn is None
+        local_results = local.map(payloads)
+
+        mesh_fn_, mesh_seen = self._tracked()
+        fake = _FakeMesh()
+        remote = MeshFunction(mesh_fn_, fake)
+        assert remote._afn is not None, "mesh-configured branch expected"
+        mesh_results = remote.map(payloads)
+
+        assert local_results == mesh_results
+        assert local_seen == mesh_seen == [0.1, 0.25]
+        # And the hint really did travel to the scheduler rather than being
+        # dropped on the floor — stripping it must not mean losing it.
+        assert fake.distributed == [payloads]
+
+    def test_user_function_never_receives_cost(self, no_coordinator):
+        """Assert on the kwargs themselves, not just on not crashing.
+
+        A function with ``**kwargs`` would swallow ``cost`` silently and pass
+        the test above while still being handed a scheduler hint it has no
+        business seeing.
+        """
+        from gpumesh.mesh import MeshFunction
+
+        captured = []
+
+        def greedy(**kwargs):
+            captured.append(kwargs)
+            return kwargs
+
+        local = MeshFunction(greedy, None)
+        assert local._afn is None
+        local.map([{"lr": 0.1, "cost": 2.0}])
+
+        remote = MeshFunction(greedy, _FakeMesh())
+        remote.map([{"lr": 0.1, "cost": 2.0}])
+
+        assert captured == [{"lr": 0.1}, {"lr": 0.1}]
+        assert not any("cost" in kw for kw in captured)
+
+    def test_map_falls_back_locally_when_distribute_fails(self, no_coordinator):
+        """The other local branch: a mesh is configured but unreachable.
+
+        ``AcceleratedFunction.map`` catches the failure and re-runs the batch
+        here, which is the path a user actually hits when the coordinator dies
+        mid-session — and it has to strip ``cost`` too.
+        """
+        import warnings
+
+        from gpumesh.mesh import MeshFunction
+
+        class DeadMesh(_FakeMesh):
+            def distribute(self, function, params, timeout=300.0, **hints):
+                raise ConnectionRefusedError("coordinator is gone")
+
+        evaluate, seen = self._tracked()
+        fn = MeshFunction(evaluate, DeadMesh())
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            results = fn.map([{"lr": 0.1, "cost": 2.0}])
+
+        assert results == [{"lr": 0.1, "score": 1.0}]
+        assert seen == [0.1]
+
+    def test_map_falls_back_locally_when_no_workers_are_alive(self, no_coordinator):
+        """And the third: a reachable coordinator with an empty pool."""
+        import warnings
+
+        from gpumesh.mesh import MeshFunction
+
+        class EmptyMesh(_FakeMesh):
+            def workers(self):
+                return []
+
+        evaluate, seen = self._tracked()
+        fn = MeshFunction(evaluate, EmptyMesh())
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            results = fn.map([{"lr": 0.1, "cost": 2.0}])
+
+        assert results == [{"lr": 0.1, "score": 1.0}]
+        assert seen == [0.1]
+
+    def test_map_of_empty_list_is_still_empty(self, no_coordinator):
+        from gpumesh.mesh import MeshFunction
+
+        evaluate, _ = self._tracked()
+        assert MeshFunction(evaluate, None).map([]) == []
+
+
+class TestDirectCallKeepsItsArguments:
+    """``__call__`` must NOT strip ``cost`` — the mirror-image bug.
+
+    There is no payload on this path: the arguments are the caller's own, and
+    ``_remote_call`` puts them into ``_params`` verbatim. So a ``cost`` keyword
+    here can only mean the user's function declares a ``cost`` parameter, and
+    dropping it locally would break that function exactly the way the payload
+    bug broke the other one.
+    """
+
+    def test_call_delivers_a_declared_cost_argument_locally(self, no_coordinator):
+        from gpumesh.mesh import MeshFunction
+
+        def price(lr, cost):
+            return {"lr": lr, "cost": cost}
+
+        fn = MeshFunction(price, None)
+        assert fn._afn is None
+        assert fn(lr=0.1, cost=2.0) == {"lr": 0.1, "cost": 2.0}
+
+    def test_call_delivers_a_declared_cost_argument_via_the_mesh(self, no_coordinator):
+        """Same call, mesh configured, same answer.
+
+        ``_FakeMesh`` has no ``jobs`` endpoint, so ``_remote_call`` raises
+        ``_MeshUnavailable`` and lands on accelerate's own local fallback —
+        which is the branch that would have differed had a strip been added
+        there. The assertion is that both routes agree.
+        """
+        from gpumesh.mesh import MeshFunction
+
+        def price(lr, cost):
+            return {"lr": lr, "cost": cost}
+
+        fn = MeshFunction(price, _FakeMesh())
+        assert fn._afn is not None
+        assert fn(lr=0.1, cost=2.0) == {"lr": 0.1, "cost": 2.0}
+
+    def test_call_never_invents_a_cost_argument(self, no_coordinator):
+        """A plain call reaches a plain signature untouched, both paths."""
+        from gpumesh.mesh import MeshFunction
+
+        captured = []
+
+        def greedy(**kwargs):
+            captured.append(kwargs)
+            return kwargs
+
+        MeshFunction(greedy, None)(lr=0.1)
+        MeshFunction(greedy, _FakeMesh())(lr=0.1)
+        assert captured == [{"lr": 0.1}, {"lr": 0.1}]
+
+
+class TestPlacementHintsAreNotStripped:
+    """``gpu``/``gpu_memory_mb``/``cpu_cores`` are not ``cost``.
+
+    They ride at the same payload level, so it is tempting to strip them
+    alongside it. They must not be: ``distribute()`` writes them there from
+    the *decorator's* keywords (``@mesh(gpu="A100")``), never from a user
+    payload, and a key of that name inside a ``.map()`` payload is an ordinary
+    parameter that lands in ``_params`` and reaches the function on the mesh
+    path. Dropping it locally would invent a new asymmetry rather than remove
+    one, so both paths must deliver it.
+    """
+
+    @pytest.mark.parametrize("hint_name", ["gpu", "gpu_memory_mb", "cpu_cores"])
+    def test_a_payload_key_named_like_a_hint_reaches_the_function(
+        self, hint_name, no_coordinator
+    ):
+        from gpumesh.mesh import MeshFunction
+
+        captured = []
+
+        def takes_anything(**kwargs):
+            captured.append(kwargs)
+            return kwargs
+
+        payload = [{"lr": 0.1, hint_name: "A100", "cost": 3.0}]
+
+        MeshFunction(takes_anything, None).map(payload)
+        MeshFunction(takes_anything, _FakeMesh()).map(payload)
+
+        expected = {"lr": 0.1, hint_name: "A100"}
+        assert captured == [expected, expected]
+
+    def test_decorator_hints_never_appear_in_the_payload(self, no_coordinator):
+        """``@mesh(gpu=...)`` is a scheduler instruction, not an argument.
+
+        It is carried to distribute() as a keyword, so it cannot collide with
+        the payload — which is why there is nothing to strip locally.
+        """
+        from gpumesh.mesh import MeshFunction
+
+        captured = []
+
+        def takes_anything(**kwargs):
+            captured.append(kwargs)
+            return kwargs
+
+        fn = MeshFunction(takes_anything, None, gpu="A100", cores=8)
+        fn.map([{"lr": 0.1, "cost": 2.0}])
+        assert captured == [{"lr": 0.1}]
+
+
 class TestMeshHelpers:
     """mesh.devices() / device_count() / total_score() work."""
 

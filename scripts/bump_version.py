@@ -46,6 +46,12 @@ def bump_version(current: str, bump_type: str) -> str:
         return bump_type
 
 
+def _today() -> str:
+    """Release date for CITATION.cff, in the CFF-required YYYY-MM-DD form."""
+    from datetime import date
+    return date.today().isoformat()
+
+
 def update_version_in_file(filepath: Path, new_version: str) -> bool:
     """Update version in a file. Returns True if updated."""
     if not filepath.exists():
@@ -79,6 +85,24 @@ def update_version_in_file(filepath: Path, new_version: str) -> bool:
             f'LABEL version="{new_version}"',
             new_content
         )
+    # Update the citation metadata. GitHub renders this verbatim into the
+    # "Cite this repository" panel and into people's bibliographies, so a
+    # stale version here is wrong in someone else's published work rather
+    # than just wrong in our tree. It also carries a release date, which is
+    # the one field in this script that is not simply the version string.
+    elif filepath.name == "CITATION.cff":
+        new_content = re.sub(
+            r'^version:\s*\S+',
+            f'version: {new_version}',
+            content,
+            flags=re.MULTILINE,
+        )
+        new_content = re.sub(
+            r'^date-released:\s*"[^"]*"',
+            f'date-released: "{_today()}"',
+            new_content,
+            flags=re.MULTILINE,
+        )
     else:
         return False
     
@@ -107,6 +131,7 @@ def main():
         project_root / "gpumesh" / "__init__.py",
         project_root / "pyproject.toml",
         project_root / "Dockerfile",
+        project_root / "CITATION.cff",
     ]
     
     for filepath in files_to_update:

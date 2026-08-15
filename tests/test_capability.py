@@ -1,4 +1,40 @@
+import sys
+import types
+from unittest.mock import patch
+
+import pytest
+
 from gpumesh.capability import full_probe, get_gpu_memory_info, probe_device
+
+_GPU_KEYS = {"gpu_memory_total_mb", "gpu_memory_free_mb", "gpu_memory_used_mb"}
+
+
+def _has_cuda():
+    """True only on a machine with a working CUDA device.
+
+    Used by ``skipif`` so that the handful of assertions which genuinely need
+    real hardware are reported as *skipped* on a CPU-only box. The alternative
+    — an ``if result is not None:`` that quietly asserts nothing — is how this
+    file previously managed to look like coverage on every CI runner in
+    existence while testing nothing at all there.
+    """
+    try:
+        import torch
+
+        return bool(torch.cuda.is_available())
+    except Exception:
+        return False
+
+
+_NEEDS_GPU = pytest.mark.skipif(not _has_cuda(), reason="requires a CUDA GPU")
+
+
+def _torch_without_gpu():
+    """A fake torch module reporting no CUDA and no MPS."""
+    mod = types.ModuleType("torch")
+    mod.cuda = types.SimpleNamespace(is_available=lambda: False)
+    mod.backends = types.SimpleNamespace(mps=None)
+    return mod
 
 
 def test_probe_device_has_required_fields():
@@ -19,28 +55,88 @@ def test_full_probe_score_positive():
     assert info["score"] > 0
 
 
-def test_get_gpu_memory_info_returns_none_without_cuda():
-    """get_gpu_memory_info returns None when CUDA is not available."""
-    result = get_gpu_memory_info(0)
-    # On a machine without CUDA, this should be None
-    # On a machine with CUDA, it should be a dict
-    if result is not None:
-        assert "total_mb" in result
-        assert "free_mb" in result
-        assert "used_mb" in result
-        assert result["total_mb"] > 0
-        assert result["free_mb"] >= 0
+def test_get_gpu_memory_info_returns_none_when_cuda_is_absent():
+    """Absence is reported as None — not as zeros, and not as a crash.
+
+    The condition is forced rather than inherited from the host. The previous
+    version of this test called ``get_gpu_memory_info(0)`` and only asserted
+    inside ``if result is not None``, so on the CPU-only machines that run CI
+    and that most contributors use, it executed no assertion whatsoever.
+    Faking ``torch.cuda.is_available() -> False`` exercises the same branch
+    identically on every machine.
+    """
+    with patch.dict(sys.modules, {"torch": _torch_without_gpu()}):
+        assert get_gpu_memory_info(0) is None
 
 
-def test_full_probe_includes_gpu_memory_fields():
-    """full_probe should include gpu memory fields when CUDA is available."""
+def test_get_gpu_memory_info_returns_none_without_torch():
+    """No torch at all is the other CPU-only shape, and must not raise.
+
+    ``None`` in ``sys.modules`` is what the import system turns into
+    ImportError, which is the case ``capability`` catches to fall back.
+    """
+    with patch.dict(sys.modules, {"torch": None}):
+        assert get_gpu_memory_info(0) is None
+
+
+def test_probe_device_reports_cpu_when_torch_sees_no_gpu():
+    """The CPU fallback has to be complete, not just non-crashing.
+
+    Every field the scheduler and the wizard read must still be there, and
+    the GPU-only fields must be *absent* rather than present-and-zero — a
+    zero would be indistinguishable from a real GPU with no free memory.
+    """
+    with patch.dict(sys.modules, {"torch": _torch_without_gpu()}):
+        info = probe_device()
+    assert info["device"] == "cpu"
+    assert info["device_name"]
+    assert info["hostname"]
+    assert info["cpu_count"] >= 1
+    assert not _GPU_KEYS & set(info)
+
+
+def test_probe_device_falls_back_to_cpu_without_torch():
+    with patch.dict(sys.modules, {"torch": None}):
+        info = probe_device()
+    assert info["device"] == "cpu"
+    assert not _GPU_KEYS & set(info)
+
+
+def test_full_probe_reports_gpu_memory_only_when_there_is_a_gpu():
+    """The GPU fields are all-or-nothing, and tied to the reported device.
+
+    Both branches assert. On CPU-only hardware — the machine this suite
+    actually runs on nearly everywhere — the claim under test is that
+    ``full_probe`` says so by *omitting* the three memory keys while still
+    returning everything a caller needs to schedule work.
+    """
     info = full_probe()
-    # These fields are always present (may be None if no CUDA)
-    # On CPU-only machines, they simply won't be in the dict
-    if "gpu_memory_total_mb" in info:
+    present = _GPU_KEYS & set(info)
+    if info["device"] == "cuda":
+        assert present == _GPU_KEYS, f"partial GPU memory report: {present}"
         assert info["gpu_memory_total_mb"] > 0
-    if "gpu_memory_free_mb" in info:
         assert info["gpu_memory_free_mb"] >= 0
+        assert info["gpu_memory_used_mb"] >= 0
+    else:
+        assert not present, (
+            f"device is {info['device']!r} but full_probe reported {present} "
+            f"— a CPU-only worker must not advertise GPU memory"
+        )
+    assert {"hostname", "device", "cpu_count", "cpu_cores", "score",
+            "gflops", "bandwidth_gbps"} <= set(info)
+
+
+@_NEEDS_GPU
+def test_get_gpu_memory_info_describes_a_real_device():
+    """The positive case, visibly skipped where it cannot run."""
+    result = get_gpu_memory_info(0)
+    assert result is not None
+    assert result["device_index"] == 0
+    assert result["device_name"]
+    assert result["total_mb"] > 0
+    assert result["free_mb"] >= 0
+    assert result["used_mb"] >= 0
+    assert result["free_mb"] <= result["total_mb"]
 
 
 class _FakeProps:
