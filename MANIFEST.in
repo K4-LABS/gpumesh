@@ -1,5 +1,54 @@
+# Controls the sdist only. The wheel's contents come from
+# [tool.setuptools.packages.find] and [tool.setuptools.package-data].
+
+# NOTE: every root-level file is listed EXPLICITLY and there is deliberately
+# no `include *.md` or `global-include *.md` here. This repository contains
+# gitignored operator notes (HANDOFF.md) carrying a live coordinator token,
+# and MANIFEST.in does not consult .gitignore — a root-level wildcard would
+# package that file into every sdist and publish it to PyPI. Add new files to
+# this list one at a time.
 include README.md
 include LICENSE
 include CHANGELOG.md
+include CONTRIBUTING.md
+include SECURITY.md
+
+# Community health and project-governance documents. Listed individually for
+# the reason above. Missing entries produce a harmless build warning, so it is
+# safe to leave a line here for a file that has not landed yet.
+include CODE_OF_CONDUCT.md
+include GOVERNANCE.md
+include SUPPORT.md
+include THREAT_MODEL.md
+include CITATION.cff
+
+recursive-include docs *.md
+
 recursive-include gpumesh *.py
-recursive-include examples *.py *.json
+
+# PEP 561 marker. `recursive-include gpumesh *.py` does not match it, and
+# without this line the sdist ships a package whose type hints are invisible
+# to downstream checkers even though the wheel's are not.
+include gpumesh/py.typed
+
+recursive-include examples *.py *.json *.md
+
+# Ship the tests in the sdist. Downstream packagers (conda-forge, Debian,
+# Homebrew) build from the sdist and run the suite as their build gate; an
+# sdist without tests means they either skip verification or vendor the tests
+# out of git by hand.
+recursive-include tests *.py
+
+# Reproducibility inputs: an sdist that can be built but not linted or
+# containerised is only half a source distribution.
+include pyproject.toml
+include MANIFEST.in
+include Dockerfile
+include docker-compose.yaml
+include .dockerignore
+include .pre-commit-config.yaml
+
+global-exclude __pycache__
+global-exclude *.py[cod]
+global-exclude *.db
+global-exclude *.db-*

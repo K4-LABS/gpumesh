@@ -3,6 +3,79 @@
 import pytest
 
 
+def _force_source_path(data, python_version="9.9", drop_key=False):
+    """Rewrite a serialized payload's python_version to force the source path.
+
+    ``"9.9"`` can never match a real interpreter, so the deserializer takes the
+    same branch a worker on a mismatched Python minor version would.
+    ``drop_key=True`` removes the key entirely, as a pre-0.8.1 client would;
+    ``python_version=None`` leaves it present but JSON null.
+    """
+    import base64
+    import json
+
+    combined = base64.b64decode(data)
+    metadata_len = int.from_bytes(combined[:4], byteorder="big")
+    metadata = json.loads(combined[4:4 + metadata_len])
+    if drop_key:
+        metadata.pop("python_version", None)
+    else:
+        metadata["python_version"] = python_version
+    mb = json.dumps(metadata).encode("utf-8")
+    return base64.b64encode(
+        len(mb).to_bytes(4, byteorder="big") + mb + combined[4 + metadata_len:]
+    ).decode("ascii")
+
+
+def _payload_from_module_source(tmp_path, mod_name, source, attr,
+                                python_version="9.9"):
+    """Serialize ``attr`` from a real on-disk module, forcing the source path.
+
+    inspect.getsource() needs a real file, so the function under test has to
+    live in one. The module is removed from sys.modules afterwards: these tests
+    reuse short names like ``decorated_mod``, and a stale entry would hand a
+    later test the previous test's module instead of importing its own.
+    """
+    import sys
+    from gpumesh.serializer import _serialize_with_cloudpickle
+
+    (tmp_path / f"{mod_name}.py").write_text(source, encoding="utf-8")
+    sys.path.insert(0, str(tmp_path))
+    try:
+        mod = __import__(mod_name)
+        data = _serialize_with_cloudpickle(getattr(mod, attr))
+    finally:
+        sys.path.remove(str(tmp_path))
+        sys.modules.pop(mod_name, None)
+
+    return _force_source_path(data, python_version)
+
+
+def _source_payload(func_name, source, **metadata_overrides):
+    """Build a method='source' payload directly from source text.
+
+    Some of the shapes under test (a callable object, a method) cannot be fed
+    through inspect.getsource() at all, so the payload is assembled by hand
+    exactly as _serialize_with_source() would.
+    """
+    import base64
+    import json
+
+    metadata = {
+        "method": "source",
+        "modules": [],
+        "module_globals": {},
+        "func_name": func_name,
+        "source": source,
+        "python_version": "9.9",
+    }
+    metadata.update(metadata_overrides)
+    mb = json.dumps(metadata).encode("utf-8")
+    return base64.b64encode(
+        len(mb).to_bytes(4, byteorder="big") + mb
+    ).decode("ascii")
+
+
 class TestSerializeDeserialize:
     """Tests for function serialization round-trip."""
 
@@ -179,37 +252,20 @@ class TestSourceFallback:
         line. exec() of that source used to raise ``NameError: name 'mesh'
         is not defined`` because decorator names are not in the metadata.
         """
-        import base64
-        import json
-        import sys
-        from gpumesh.serializer import _serialize_with_cloudpickle, \
-            deserialize_function
+        from gpumesh.serializer import deserialize_function
 
-        # Define the function in a real module so inspect.getsource works.
-        mod = tmp_path / "decorated_mod.py"
-        mod.write_text(
+        forced = _payload_from_module_source(
+            tmp_path,
+            "decorated_mod",
             "from gpumesh import mesh\n\n"
             "@mesh\n"
             "def heavy(size=8):\n"
             "    return {'size': size, 'squared': size * size}\n",
-            encoding="utf-8",
+            "heavy",
         )
-        sys.path.insert(0, str(tmp_path))
-        try:
-            import decorated_mod
-            data = _serialize_with_cloudpickle(decorated_mod.heavy)
-        finally:
-            sys.path.remove(str(tmp_path))
 
-        # Force the worker's source path by faking a Python version mismatch.
-        combined = base64.b64decode(data)
-        metadata_len = int.from_bytes(combined[:4], byteorder="big")
-        metadata = json.loads(combined[4:4 + metadata_len])
-        metadata["python_version"] = "9.9"
-        mb = json.dumps(metadata).encode("utf-8")
-        forced = base64.b64encode(
-            len(mb).to_bytes(4, byteorder="big") + mb + combined[4 + metadata_len:]
-        ).decode("ascii")
+        func = deserialize_function(forced)
+        assert func(size=4) == {"size": 4, "squared": 16}
 
     def test_cross_version_without_source_raises_cleanly(self):
         """A version mismatch with no source fallback must fail loudly.
@@ -264,6 +320,437 @@ class TestSourceFallback:
         )
         payload = base64.b64encode(combined).decode("ascii")
         assert deserialize_function(payload)(21) == 42
+
+
+class TestDecoratorStripping:
+    """Only gpumesh's own decorators may be removed from captured source."""
+
+    def test_non_gpumesh_decorator_is_preserved(self):
+        """Stripping every decorator silently changes what the task does.
+
+        Regression: the source path dropped all lines before the ``def``, so a
+        function carrying both ``@mesh`` and e.g. ``@torch.no_grad()`` ran with
+        the second decorator applied on a same-version worker and without it on
+        a cross-version one — different behaviour, no warning.
+        """
+        from gpumesh.serializer import deserialize_function
+
+        payload = _source_payload(
+            "heavy",
+            "@mesh\n"
+            "@functools.lru_cache\n"
+            "def heavy(x=1):\n"
+            "    return x + 1\n",
+            module_globals={"functools": "functools"},
+        )
+
+        func = deserialize_function(payload)
+        assert func(x=3) == 4
+        # @functools.lru_cache survived; stripping it leaves a bare function.
+        assert hasattr(func, "cache_info")
+
+    def test_multiline_gpumesh_decorator_is_fully_removed(self):
+        """A @mesh(...) call spanning lines must not leave a fragment behind."""
+        from gpumesh.serializer import deserialize_function
+
+        payload = _source_payload(
+            "heavy",
+            "@mesh(\n"
+            '    gpu="A100",\n'
+            '    note="a ( unbalanced paren in a string",\n'
+            ")\n"
+            "def heavy(x=1):\n"
+            "    return x * 3\n",
+        )
+
+        assert deserialize_function(payload)(x=4) == 12
+
+    @pytest.mark.parametrize("quotes", ['"""', "'''"])
+    def test_triple_quoted_decorator_arg_does_not_end_the_span(self, quotes):
+        """A multi-line string argument must not be read as real brackets.
+
+        Regression: the bracket scan restarted from "no string is open" on
+        every line, so the ``) ) )`` sitting in the note's *text* closed the
+        decorator's parenthesis three lines early. The span ended there, and
+        the leftover closing quotes, comma and paren were prepended to the def,
+        so exec() raised SyntaxError before the task could run at all.
+        """
+        from gpumesh.serializer import deserialize_function
+
+        payload = _source_payload(
+            "train",
+            "@accelerate(\n"
+            "    mesh,\n"
+            f"    note={quotes}\n"
+            "    ) ) ) not real brackets\n"
+            f"    {quotes},\n"
+            ")\n"
+            "def train(lr=0.1):\n"
+            "    return lr * 2\n",
+        )
+
+        assert deserialize_function(payload)(lr=0.5) == 1.0
+
+    def test_single_quoted_decorator_arg_with_bracket_is_removed(self):
+        """The single-line case the scanner already handled must stay handled."""
+        from gpumesh.serializer import deserialize_function
+
+        payload = _source_payload(
+            "train",
+            "@mesh(\n"
+            "    gpu='A100',\n"
+            "    note=') unbalanced inside a single-quoted string',\n"
+            ")\n"
+            "def train(lr=0.1):\n"
+            "    return lr * 4\n",
+        )
+
+        assert deserialize_function(payload)(lr=0.5) == 2.0
+
+    def test_hash_inside_a_decorator_arg_is_not_a_comment(self):
+        """``#`` inside a string must not stop the scan mid-line.
+
+        If it did, the ``)`` after it would go uncounted and the span would run
+        past the closing paren into the def.
+        """
+        from gpumesh.serializer import deserialize_function
+
+        payload = _source_payload(
+            "train",
+            "@mesh(\n"
+            '    note="# not a comment )",\n'
+            '    gpu="A100",\n'
+            ")\n"
+            "def train(lr=1):\n"
+            "    return lr + 1\n",
+        )
+
+        assert deserialize_function(payload)(lr=1) == 2
+
+    @pytest.mark.parametrize("decorator", [
+        "@mesh",
+        '@mesh(gpu="A100")',
+        "@accelerate",
+        "@accelerate(mesh)",
+        "@gpumesh.mesh",
+    ])
+    def test_gpumesh_decorator_forms_are_stripped(self, decorator):
+        from gpumesh.serializer import deserialize_function
+
+        payload = _source_payload(
+            "heavy",
+            f"{decorator}\ndef heavy(x=1):\n    return x + 10\n",
+        )
+        assert deserialize_function(payload)(x=1) == 11
+
+    def test_unavailable_decorator_names_itself_in_the_error(self):
+        """A preserved decorator that will not resolve must say so."""
+        from gpumesh.serializer import deserialize_function
+
+        payload = _source_payload(
+            "heavy",
+            "@mesh\n"
+            "@some_missing_decorator\n"
+            "def heavy(x=1):\n"
+            "    return x\n",
+        )
+
+        with pytest.raises(ValueError, match="some_missing_decorator"):
+            deserialize_function(payload)
+
+    @pytest.mark.parametrize("def_line", [
+        "def heavy (x=1):",
+        "async  def heavy(x=1):",
+        "def heavy[T](x=1):",
+    ])
+    def test_def_line_variants_are_recognized(self, def_line):
+        """These are all legal ``def`` forms the literal startswith() missed.
+
+        When the def line is not found the decorator lines stay put and exec()
+        fails with the original ``NameError: name 'mesh' is not defined``.
+        PEP 695 generics only parse on 3.12+, so this checks the stripping
+        itself rather than executing the result.
+        """
+        from gpumesh.serializer import _strip_gpumesh_decorators
+
+        stripped = _strip_gpumesh_decorators(
+            f"@mesh\n{def_line}\n    return x\n", "heavy"
+        )
+        assert "@mesh" not in stripped
+        assert stripped.startswith(def_line)
+
+
+class TestSourceFallbackRefusals:
+    """Shapes the source fallback cannot honestly rebuild must be refused."""
+
+    def test_method_is_refused(self):
+        """A method rebuilt at module level still declares ``self``.
+
+        The worker calls func(**params) with no instance, so without this check
+        the failure surfaces inside the subprocess as a confusing "missing 1
+        required positional argument: 'self'".
+        """
+        from gpumesh.serializer import deserialize_function
+
+        payload = _source_payload(
+            "heavy",
+            "    @mesh\n"
+            "    def heavy(self, x):\n"
+            "        return x * 2\n",
+        )
+
+        with pytest.raises(ValueError, match="method"):
+            deserialize_function(payload)
+
+    def test_classmethod_is_refused(self):
+        from gpumesh.serializer import deserialize_function
+
+        payload = _source_payload(
+            "heavy",
+            "    def heavy(cls, x):\n        return x\n",
+        )
+        with pytest.raises(ValueError, match="'cls'"):
+            deserialize_function(payload)
+
+    def test_callable_object_is_refused(self):
+        """A callable instance is captured as its class, which would construct.
+
+        The worker calls ``Heavy(**params)``; if __init__ accepted the kwargs
+        the task would silently return an instance instead of a result.
+        """
+        from gpumesh.serializer import deserialize_function
+
+        payload = _source_payload(
+            "Heavy",
+            "class Heavy:\n"
+            "    def __init__(self, x=1):\n"
+            "        self.x = x\n"
+            "    def __call__(self, x=1):\n"
+            "        return x * 2\n",
+        )
+
+        with pytest.raises(ValueError, match="not a function"):
+            deserialize_function(payload)
+
+    def test_async_function_is_refused(self):
+        """The subprocess never awaits, so a coroutine cannot be a result."""
+        from gpumesh.serializer import deserialize_function
+
+        payload = _source_payload(
+            "heavy",
+            "@mesh\nasync def heavy(x=1):\n    return x * 2\n",
+        )
+
+        with pytest.raises(ValueError, match="async"):
+            deserialize_function(payload)
+
+    def test_malformed_source_payload_does_not_blame_the_python_version(self):
+        """Dead wording: this guard cannot be reached via a version mismatch."""
+        import base64
+        import json
+        from gpumesh.serializer import deserialize_function
+
+        metadata = {
+            "method": "source",
+            "modules": [],
+            "module_globals": {},
+            "func_name": "heavy",
+            "python_version": f"{__import__('sys').version_info.major}."
+                              f"{__import__('sys').version_info.minor}",
+        }
+        mb = json.dumps(metadata).encode("utf-8")
+        payload = base64.b64encode(
+            len(mb).to_bytes(4, byteorder="big") + mb
+        ).decode("ascii")
+
+        with pytest.raises(ValueError, match="malformed or truncated"):
+            deserialize_function(payload)
+
+
+class TestUnknownPythonVersion:
+    """A missing python_version means 'unknown' — which is not a mismatch.
+
+    ``python_version`` only exists from v0.8.1 on, so an older client sends a
+    payload without it. Nothing about that says the two machines disagree, and
+    the overwhelmingly common case is that they agree, so an unknown version
+    must not divert the payload away from cloudpickle. Only a version we were
+    actually told about, and that differs, may do that.
+    """
+
+    @staticmethod
+    def _marker_payload(tmp_path, mod_name, **force):
+        """A working cloudpickle payload whose source rebuild is detectable.
+
+        The pickled bytes are valid for this interpreter, so the deserializer
+        succeeds either way and the only observable difference is which path
+        ran: cloudpickle keeps the module global ``MARKER`` in the function's
+        globals, the source rebuild exec's into a fresh namespace without it.
+        """
+        import sys
+        from gpumesh.serializer import _serialize_with_cloudpickle
+
+        (tmp_path / f"{mod_name}.py").write_text(
+            "from gpumesh import mesh\n\n"
+            "MARKER = 'original'\n\n"
+            "@mesh\n"
+            "def heavy(x=1):\n"
+            "    return (x, MARKER)\n",
+            encoding="utf-8",
+        )
+        sys.path.insert(0, str(tmp_path))
+        try:
+            mod = __import__(mod_name)
+            data = _serialize_with_cloudpickle(mod.heavy)
+        finally:
+            sys.path.remove(str(tmp_path))
+            sys.modules.pop(mod_name, None)
+
+        return _force_source_path(data, **force)
+
+    def test_absent_python_version_uses_cloudpickle(self, tmp_path):
+        """Regression: an absent version forced the source path and lost globals.
+
+        The payload carries a ``source`` key (every cloudpickle payload does,
+        when getsource can see the file), so treating the unknown version as a
+        mismatch sent it down the source path. That path only restores
+        *module-valued* globals, so ``MARKER`` vanished and the rebuilt function
+        raised ``NameError`` when it was called — inside the task subprocess,
+        long after the deserializer had already declared success.
+        """
+        from gpumesh.serializer import deserialize_function
+
+        payload = self._marker_payload(tmp_path, "absent_ver_mod", drop_key=True)
+        assert deserialize_function(payload)(x=1) == (1, "original")
+
+    def test_null_python_version_uses_cloudpickle(self, tmp_path):
+        """An explicit JSON null must be treated like an absent key."""
+        from gpumesh.serializer import deserialize_function
+
+        payload = self._marker_payload(tmp_path, "null_ver_mod",
+                                       python_version=None)
+        assert deserialize_function(payload)(x=1) == (1, "original")
+
+    def test_absent_python_version_keeps_bound_methods_working(self, tmp_path):
+        """A pre-0.8.1 client's bound method must not hit the source refusal.
+
+        cloudpickle ships a bound method with its instance attached and it
+        simply works. The source path cannot: it rebuilds the method body as a
+        bare function with no instance, so it refuses outright. Diverting a
+        legacy payload to source therefore broke bound methods that had worked
+        since v0.5.0.
+        """
+        import sys
+        from gpumesh.serializer import (
+            _serialize_with_cloudpickle, deserialize_function,
+        )
+
+        (tmp_path / "legacy_method_mod.py").write_text(
+            "class Trainer:\n"
+            "    def __init__(self, scale):\n"
+            "        self.scale = scale\n\n"
+            "    def work(self, x):\n"
+            "        return x * self.scale\n",
+            encoding="utf-8",
+        )
+        # Unlike the other helpers here, the module has to stay importable
+        # across the deserialize call: cloudpickle records ``Trainer`` by
+        # reference, so unpickling re-imports it. Tearing the module down first
+        # would make cloudpickle.loads() fail and fall back to source, which is
+        # the very path this test exists to prove we no longer take.
+        sys.path.insert(0, str(tmp_path))
+        try:
+            mod = __import__("legacy_method_mod")
+            data = _serialize_with_cloudpickle(mod.Trainer(3).work)
+            payload = _force_source_path(data, drop_key=True)
+            assert deserialize_function(payload)(4) == 12
+        finally:
+            sys.path.remove(str(tmp_path))
+            sys.modules.pop("legacy_method_mod", None)
+
+    def test_matching_version_still_uses_cloudpickle(self, tmp_path):
+        """The same-version path must be untouched by the unknown-version rule."""
+        import sys
+        from gpumesh.serializer import deserialize_function
+
+        payload = self._marker_payload(
+            tmp_path, "same_ver_mod",
+            python_version=f"{sys.version_info.major}.{sys.version_info.minor}",
+        )
+        assert deserialize_function(payload)(x=1) == (1, "original")
+
+    def test_known_mismatch_with_source_still_prefers_source(self, tmp_path):
+        """A version we were told about, and that differs, still diverts.
+
+        Foreign bytecode is the one case where losing ``MARKER`` beats handing
+        cloudpickle.loads() bytes that can crash the interpreter outright, so
+        this half of the decision table must not move.
+        """
+        from gpumesh.serializer import deserialize_function
+
+        payload = self._marker_payload(tmp_path, "known_diff_mod",
+                                       python_version="9.9")
+        func = deserialize_function(payload)
+        with pytest.raises(NameError):
+            func(x=1)
+
+    def test_unknown_version_without_source_still_runs(self):
+        """v0.5.0 sent neither key; refusing would break every task it submits."""
+        import base64
+        import json
+        import cloudpickle
+        from gpumesh.serializer import deserialize_function
+
+        def original(x):
+            return x * 3
+
+        metadata = {
+            "method": "cloudpickle",
+            "modules": [],
+            "module_globals": {},
+            "func_name": "original",
+        }
+        mb = json.dumps(metadata).encode("utf-8")
+        payload = base64.b64encode(
+            len(mb).to_bytes(4, byteorder="big") + mb
+            + cloudpickle.dumps(original)
+        ).decode("ascii")
+
+        assert deserialize_function(payload)(5) == 15
+
+
+class TestWorkerErrorClassification:
+    """A deliberate refusal must not be reported as an unexpected error."""
+
+    def test_cross_version_refusal_becomes_a_task_error(self, monkeypatch):
+        """Regression: a bare ValueError missed the TaskError branch.
+
+        worker.py's task loop forwards ``user_error`` from TaskError and posts
+        anything else as "Unexpected error: ...", which labelled this
+        deliberate refusal a surprise.
+        """
+        from gpumesh import sandbox, serializer, worker
+
+        message = (
+            "Cannot run this task on a Python 3.11 worker: the function was "
+            "serialized on Python 3.9 with no source fallback"
+        )
+
+        def boom(_data):
+            raise ValueError(message)
+
+        monkeypatch.setattr(serializer, "deserialize_function", boom)
+
+        with pytest.raises(sandbox.TaskError) as excinfo:
+            worker._run_function_task({"_func": "irrelevant"}, "cpu", 10)
+
+        assert str(excinfo.value) == message
+        # Failed once, not retried. The refusal is deterministic for a given
+        # pair of Python versions, and the "a retry may land on a
+        # matching-version worker" hope this used to rest on never actually
+        # fires: BUSY_POLL_INTERVAL is 0.1s, so the same incompatible worker
+        # re-leases the task long before any other worker polls. Retrying only
+        # produced three identical failures and three diagnostics blocks.
+        assert excinfo.value.user_error is True
 
 
 class TestResultEnvelope:

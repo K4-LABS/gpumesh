@@ -481,37 +481,171 @@ class TestWaitForJobPiped:
 #  Worker Backoff Reset Tests
 # ============================================================================
 
+class _RecordingStop(threading.Event):
+    """A stop event that records how long the worker asks to wait.
+
+    The waits are the observable the backoff *is*: ``run_worker`` never
+    exposes the variable, but every value it takes is handed straight to
+    ``stop.wait(...)``. Recording them turns a question about the source text
+    into a question about behaviour — and, incidentally, only records anything
+    at all if the loop really does wait on the event rather than sleeping,
+    which is the other property worth having.
+
+    Waits from the worker's own thread return immediately, so the loop runs at
+    full speed and the test costs milliseconds instead of the seconds it is
+    nominally asking for. Waits from any other thread — the heartbeat's — get a
+    real short wait, so that thread paces itself instead of spinning. After
+    *stop_after* recorded waits the event sets itself, which is how the worker
+    is brought to a stop without the test having to guess when it is done.
+    """
+
+    def __init__(self, worker_thread_name, stop_after):
+        super().__init__()
+        self.waits = []
+        self._worker_thread_name = worker_thread_name
+        self._stop_after = stop_after
+        self._waits_lock = threading.Lock()
+
+    def wait(self, timeout=None):
+        if threading.current_thread().name != self._worker_thread_name:
+            return super().wait(min(timeout if timeout is not None else 0.05,
+                                    0.05))
+        with self._waits_lock:
+            self.waits.append(timeout)
+            reached_the_end = len(self.waits) >= self._stop_after
+        if reached_the_end:
+            self.set()
+        return self.is_set()
+
+
+def _run_worker_against(answers, stop_after, thread_name="test-backoff-worker",
+                        timeout=20.0):
+    """Drive ``run_worker`` against a scripted mesh and return its waits.
+
+    *answers* is called as ``answers(method, path, body)`` for every
+    coordinator call and returns a response or raises. Nothing here touches
+    the network: the point is which value the loop passes to ``stop.wait``
+    after each answer, and a real coordinator would make that a matter of
+    timing rather than of construction.
+    """
+    from gpumesh import worker as worker_mod
+
+    class _FakeMeshClient:
+        def __init__(self, base_url, token):
+            self.base_url = base_url
+            self.token = token
+
+        def call(self, method, path, body=None, timeout=30.0):
+            return answers(method, path, body)
+
+    stop = _RecordingStop(thread_name, stop_after)
+    with ExitStack() as stack:
+        stack.enter_context(patch.object(worker_mod, "MeshClient",
+                                         _FakeMeshClient))
+        stack.enter_context(patch.object(
+            worker_mod.capability, "full_probe",
+            lambda: {"device": "cpu", "device_name": "stub-cpu", "score": 1.0,
+                     "hostname": "stub-host", "cpu_cores": 1},
+        ))
+        thread = threading.Thread(
+            target=worker_mod.run_worker,
+            args=("http://127.0.0.1:1", "tok"),
+            kwargs={"persist_connection": False, "stop_event": stop},
+            daemon=True,
+            name=thread_name,
+        )
+        thread.start()
+        thread.join(timeout=timeout)
+        assert not thread.is_alive(), (
+            f"the worker was still running after {timeout}s — it never took "
+            f"the {stop_after} waits this test scripts for it, and stopped "
+            f"somewhere else instead"
+        )
+    return stop.waits
+
+
 class TestWorkerBackoff:
-    """Tests for worker backoff reset behavior."""
+    """What the worker waits after a lease attempt, and when that resets.
 
-    def test_backoff_resets_only_on_task(self):
-        """Backoff should only reset when a task is obtained."""
-        from gpumesh.worker import run_worker, POLL_INTERVAL
-        # Verify backoff reset logic: backoff is only reset when work is obtained
-        # This is verified by checking the run_worker source code uses backoff = POLL_INTERVAL
-        # after task is not None check (not on empty polls)
-        import inspect
-        import ast
+    This used to be an AST test: it parsed ``inspect.getsource`` of
+    ``inspect.unwrap(run_worker)``, hunted for an assignment to ``backoff``,
+    and asserted that its line number was greater than 1. That is true of every
+    assignment in every file, so it could not fail for the reason it named —
+    but it *could* fail for another one, and did: conftest wraps ``run_worker``
+    in an autouse fixture, ``unwrap`` follows ``__wrapped__`` to whatever is
+    underneath, and under some orderings that is something whose source has no
+    ``backoff =`` in it at all. The local then never got bound and the failure
+    surfaced as ``UnboundLocalError: assign_line``, which names neither the
+    backoff nor the ordering that caused it.
 
-        # unwrap(): conftest wraps run_worker to hand every worker a stop
-        # event, and getsource() does not follow __wrapped__ on its own.
-        source = inspect.getsource(inspect.unwrap(run_worker))
-        tree = ast.parse(source)
+    Reading the source was the wrong shape for the question. The backoff is
+    observable without it — every value it takes is passed to ``stop.wait`` —
+    and a test of that does not care what ``unwrap`` returns, or whether the
+    fixture that wraps it ran first.
+    """
 
-        # Walk AST to find backoff = POLL_INTERVAL inside a block where task is not None
-        backoff_resets_after_task = False
-        for node in ast.walk(tree):
-            if isinstance(node, ast.If):
-                if_condition = ast.dump(node.test)
-                task_check_was_none = 'task is None' in if_condition or 'None' in if_condition
-            if isinstance(node, ast.Assign) and any(
-                isinstance(t, ast.Name) and t.id == 'backoff' for t in node.targets
-            ):
-                assign_line = node.lineno
+    # A failed lease and an answered one must produce visibly different waits,
+    # which they will not if POLL_INTERVAL and BUSY_POLL_INTERVAL are ever
+    # tuned to the same number. Asserted rather than assumed, because the test
+    # below would otherwise pass for the wrong reason.
+    def test_the_two_delays_are_distinguishable(self):
+        from gpumesh.worker import BUSY_POLL_INTERVAL, POLL_INTERVAL
 
-        # The backoff reset should exist at a higher line than the task-is-None check
-        assert assign_line > 0, "Could not find backoff assignment in run_worker"
-        assert assign_line > 1, "backoff reset line should be after task check"
+        assert POLL_INTERVAL != BUSY_POLL_INTERVAL
+
+    def test_the_backoff_paces_failures_and_resets_when_the_mesh_answers(self):
+        """One failed lease, one answered lease, one failed lease.
+
+        The three waits that produces are the whole behaviour:
+
+        * a failed lease waits the network backoff, which starts at
+          POLL_INTERVAL — not the fast idle poll, because a coordinator that
+          did not answer will not answer any sooner for being asked again in
+          100 ms;
+        * an answered lease with nothing queued waits BUSY_POLL_INTERVAL, the
+          short poll that keeps an interactive @mesh call feeling immediate;
+        * the *next* failed lease waits POLL_INTERVAL again, not double it.
+          That last one is the reset, and it is asserted as an outcome rather
+          than at a particular line because the reconnection path sets it in
+          more than one place — on a successful re-registration and again on a
+          lease the coordinator answered. Which of them did it is an
+          implementation detail; that none of them did is the regression.
+          Without a reset the backoff carries across a reconnection, so a
+          worker whose coordinator came back goes on waiting as though it were
+          still offline, for longer and longer, having already been told
+          otherwise.
+        """
+        from gpumesh.worker import BUSY_POLL_INTERVAL, POLL_INTERVAL
+
+        leases = iter([
+            urllib.error.URLError("coordinator gone"),
+            None,                                       # answered, nothing queued
+            urllib.error.URLError("coordinator gone again"),
+        ])
+
+        def answers(method, path, body):
+            if path == "/api/register":
+                return {"worker_id": "w-backoff"}
+            if path == "/api/heartbeat":
+                # Answered so the heartbeat thread never flags a re-register
+                # from the side and sends the main loop down another branch.
+                return {"ok": True}
+            if path == "/api/lease":
+                step = next(leases)
+                if isinstance(step, BaseException):
+                    raise step
+                return step
+            return {"workers": []}
+
+        waits = _run_worker_against(answers, stop_after=3)
+
+        assert waits == [POLL_INTERVAL, BUSY_POLL_INTERVAL, POLL_INTERVAL], (
+            f"the worker's lease pacing was {waits}, expected "
+            f"[{POLL_INTERVAL}, {BUSY_POLL_INTERVAL}, {POLL_INTERVAL}]. A "
+            f"third wait of {2 * POLL_INTERVAL} means the backoff was not "
+            f"reset when the coordinator answered, so a reconnected worker "
+            f"keeps backing off as if it were still offline"
+        )
 
 
 # ============================================================================

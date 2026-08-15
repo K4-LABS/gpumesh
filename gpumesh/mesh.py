@@ -32,15 +32,24 @@ from .ansi import safe_print, green, yellow, dim
 _GPUMesh = None
 _AcceleratedFunction = None
 _MeshUnavailable = None
+_local_kwargs = None
 _connection_manager = None
 
 
 def _ensure_api():
-    global _GPUMesh, _AcceleratedFunction, _MeshUnavailable, _connection_manager
+    global _GPUMesh, _AcceleratedFunction, _MeshUnavailable, _local_kwargs
+    global _connection_manager
     if _GPUMesh is None:
         accel = importlib.import_module(".accelerate", "gpumesh")
         _AcceleratedFunction = accel.AcceleratedFunction
         _MeshUnavailable = accel._MeshUnavailable
+        # Borrowed rather than reimplemented on purpose. accelerate.map() and
+        # this module's map() are the same fallback wearing two coats — both
+        # answer "what kwargs does this payload become when it runs here?" —
+        # and the answer drifting between them is precisely the bug this
+        # import exists to close. See accelerate._local_kwargs for why only
+        # ``cost`` is stripped.
+        _local_kwargs = accel._local_kwargs
         _GPUMesh = importlib.import_module(".api", "gpumesh").GPUMesh
         _connection_manager = importlib.import_module(
             ".connection_manager", "gpumesh"
@@ -135,20 +144,49 @@ class MeshFunction:
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
         # AcceleratedFunction already falls back to local execution internally
         # (mesh down / no workers), so plain delegation is sufficient.
+        #
+        # Deliberately no ``cost`` strip on this path, unlike map() below.
+        # There is no payload here: the arguments are the caller's own, written
+        # out by hand at the call site, and on the mesh path they go into
+        # ``_params`` verbatim (accelerate._remote_call builds the payload from
+        # the merged kwargs). So ``train(lr=0.1, cost=2.0)`` can only mean the
+        # user's function declares a ``cost`` parameter, and both paths already
+        # deliver it. Stripping here would break that function on the local
+        # path — the mirror image of the bug fixed in map(), and no better for
+        # being symmetrical about it.
         self._ensure_afn()
         if self._afn is not None:
             return self._afn(*args, **kwargs)
         return self._bound_fn(*args, **kwargs)
 
     def map(self, params_list: list[dict]) -> list[dict]:
-        """Distribute across all connected laptops. Falls back to local."""
+        """Distribute across all connected laptops. Falls back to local.
+
+        The local branch strips ``cost`` for the same reason
+        ``GPUMesh.distribute`` has since 1.1.0: it is a scheduler hint riding
+        at the payload's top level, never an argument to the user's function.
+        The mesh branch never showed it to the function, so a payload annotated
+        the way examples/payloads.json teaches ran fine while the mesh was up
+        and raised ``unexpected keyword argument 'cost'`` the moment it was
+        not — i.e. exactly when the fallback was supposed to be saving you.
+
+        Placement hints (``gpu``/``gpu_memory_mb``/``cpu_cores``) are NOT
+        stripped and must not be: unlike ``cost``, they are written at the
+        payload top level by ``distribute()`` from the decorator's own
+        keywords, so they never originate in a user payload. A key of that
+        name in a ``.map()`` payload is an ordinary parameter, lands in
+        ``_params``, and reaches the function on the mesh path — dropping it
+        locally would invent a fresh asymmetry rather than remove one.
+        """
         if not params_list:
             return []
         self._ensure_afn()
         if self._afn is not None:
-            # AcceleratedFunction.map falls back to local execution itself.
+            # AcceleratedFunction.map falls back to local execution itself,
+            # and applies the same strip on its own fallback branches.
             return self._afn.map(params_list)
-        return [self._bound_fn(**p) for p in params_list]
+        _ensure_api()
+        return [self._bound_fn(**_local_kwargs(p)) for p in params_list]
 
 
 def mesh_fn(fn_or_args=None, *, gpu: str | None = None,

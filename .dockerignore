@@ -26,6 +26,17 @@ CHANGELOG.md
 .forge/
 skills-lock.json
 
+# Local operator notes and scratch scripts. These are gitignored for the same
+# reason: they describe one particular two-laptop setup and carry its live
+# coordinator token and SSH credentials. The builder stage does `COPY . .`, so
+# without these lines both files land in a build layer. The published image is
+# clean today only because the build is multi-stage and the runtime stage
+# copies nothing but the wheel — but `--target builder`, a BuildKit cache
+# export, or any future single-stage refactor would publish them. Excluding
+# them here makes that safe by construction rather than by accident.
+HANDOFF.md
+worker_fix.bat
+
 # Not needed for the wheel build inside the image
 tests/
 scripts/

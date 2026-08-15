@@ -89,6 +89,18 @@ def _isolate_gpumesh_config(tmp_path, monkeypatch):
     yield
 
 
+# Every GPUMESH_* variable cleared before each test. Named and module-level so
+# a test can assert against it: the list has to keep up with the package, and
+# the cost of it silently falling behind is measured in dozens of confusing
+# failures, not one. See tests/test_claimer.py::TestGpumeshEnvIsolation, which
+# scans the package for environment reads and checks every one appears here.
+ISOLATED_GPUMESH_ENV_VARS = (
+    "GPUMESH_TOKEN", "GPUMESH_URL", "GPUMESH_HOST", "GPUMESH_HOST_IP",
+    "GPUMESH_CLAIM_HOST", "GPUMESH_LOCAL", "GPUMESH_VERBOSE", "GPUMESH_COLOR",
+    "GPUMESH_DEVICE", "GPUMESH_PORT",
+)
+
+
 @pytest.fixture(autouse=True)
 def _isolate_gpumesh_env(monkeypatch):
     """Clear GPUMESH_* variables so the developer's shell cannot change results.
@@ -98,9 +110,20 @@ def _isolate_gpumesh_env(monkeypatch):
     mesh would otherwise see unrelated tests fail — the kind of failure that
     looks like a real bug and wastes an afternoon. Tests that need a value set
     it explicitly with monkeypatch.setenv.
+
+    The two bind variables were the expensive omission. ``GPUMESH_HOST`` is
+    read by ``_resolve_bind_host`` AND used as the ``--host`` argparse
+    default, so exporting it flips the coordinator's bind out from under every
+    test that asserts on the loopback default — 5 failures. ``GPUMESH_CLAIM_HOST``
+    is worse: with it set, the claim server binds somewhere the tests cannot
+    dial and 46 tests error out. Both are variables the README and
+    CONTRIBUTING now actively suggest exporting, so this is not a hypothetical
+    developer — it is the developer who followed the docs.
+
+    Clearing here rather than in each test is what makes the opt-in shape
+    work: this runs at setup, before the test body, so a test that genuinely
+    wants a value just calls monkeypatch.setenv and wins.
     """
-    for name in ("GPUMESH_TOKEN", "GPUMESH_URL", "GPUMESH_HOST_IP",
-                 "GPUMESH_LOCAL", "GPUMESH_VERBOSE", "GPUMESH_COLOR",
-                 "GPUMESH_PORT"):
+    for name in ISOLATED_GPUMESH_ENV_VARS:
         monkeypatch.delenv(name, raising=False)
     yield

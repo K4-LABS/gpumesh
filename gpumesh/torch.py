@@ -46,13 +46,84 @@ def _ensure_torch():
         try:
             import torch as _torch
             import torch.nn as _nn
-        except ImportError:
+        except ImportError as exc:
+            # Chain the original, and quote it. An ImportError out of
+            # ``import torch`` does not always mean torch is missing: a broken
+            # CUDA install raises one too, from a failed DLL load deep inside
+            # the package. Swallowing it made the two look identical, and sent
+            # people off to reinstall a package they already had.
             raise ImportError(
                 "PyTorch is required for gpumesh.torch. "
-                "Install with: pip install torch"
-            )
+                f"Install with: pip install torch (import failed with: {exc})"
+            ) from exc
         torch = _torch
         nn = _nn
+
+
+def _local_cuda_index(alive, target, local_hostname) -> int:
+    """Position of ``target`` among this machine's CUDA rows in ``alive``.
+
+    The mesh inventory is not ``torch.cuda``'s device list. It is rows a
+    coordinator collected, in the order it collected them, and mapping the Nth
+    local CUDA row to ``cuda:N`` is an assumption nothing enforces. A stale row
+    — a card that has since been removed, or an inventory predating a reboot
+    with fewer GPUs — makes it produce an index this process cannot address,
+    which torch would report much later as an opaque invalid-device error.
+    Check it against torch's own count and name both numbers.
+
+    ``alive`` must be the *unfiltered* alive list: the index counts positions
+    within the inventory, so computing it from a filtered subset shifts it.
+    """
+    idx = 0
+    for candidate in alive:
+        if candidate["hostname"] == local_hostname and candidate["device"] == "cuda":
+            if candidate["id"] == target["id"]:
+                break
+            idx += 1
+    count = torch.cuda.device_count()
+    if idx >= count:
+        raise RuntimeError(
+            f"The mesh inventory places this device at cuda:{idx}, but this "
+            f"process can see only {count} CUDA device(s). The inventory is "
+            f"probably stale — restart the worker on this machine so it "
+            f"re-registers its current hardware."
+        )
+    return idx
+
+
+def _reported_free_memory_mb(entry: dict):
+    """Free VRAM a mesh row reports, or ``None`` when it reports none.
+
+    Same distinction as ``accelerate._reported_capacity``: an *absent* key
+    means unknown, and unknown must not be read as zero. The chain here is
+    ``is not None`` rather than truthiness, though, and that difference is
+    deliberate. ``free or total or 0`` treated a GPU with 0 MB free as if it
+    had said nothing and fell back to its *total*, so a fully occupied 24 GB
+    card sailed through ``min_memory_mb=8000`` and the task landed on the one
+    device with no room for it.
+
+    ``accelerate._reported_capacity`` now uses the same ``is not None`` rule,
+    and the coordinator reports JSON ``null`` — not ``0.0`` — when nobody has
+    measured a worker's free VRAM yet, so "unknown" and "measured empty" are
+    finally distinct values on the wire. That is what lets both sides be strict
+    about a reported zero without punishing a worker whose first heartbeat has
+    not landed. The two functions still differ on the *absent* case, and
+    deliberately: accelerate is validating a request and lets an unmeasured
+    device through for the scheduler to judge, whereas here we are *choosing* a
+    device, so an unmeasured card is skipped in favour of one that certainly
+    has room.
+    """
+    for key in ("gpu_memory_free_mb", "gpu_memory_total_mb"):
+        value = entry.get(key)
+        if value is not None:
+            return value
+    return None
+
+
+def _has_room(entry: dict, min_memory_mb: float) -> bool:
+    """True when a mesh row reports enough free VRAM, or reports none at all."""
+    free = _reported_free_memory_mb(entry)
+    return free is None or free >= min_memory_mb
 
 
 def device(mesh: GPUMesh, index: int = 0):
@@ -61,8 +132,21 @@ def device(mesh: GPUMesh, index: int = 0):
     A ``torch.device`` can only address hardware visible to the current
     process. If ``index`` selects a remote worker, this function raises
     :class:`RemoteDeviceError`; use ``mesh.distribute`` for remote work.
+
+    ``index`` must be non-negative. An index past the end of the inventory
+    wraps, so round-robin callers can keep counting up.
     """
     _ensure_torch()
+    # Negative indices used to fall straight through the wrap below into
+    # Python's own negative indexing and quietly return the *last* entry. That
+    # is not a selection anybody asked for: an index that reached -1 by
+    # arithmetic is a bug in the caller, and silently handing back a different
+    # device (possibly a remote one) hides it.
+    if index < 0:
+        raise ValueError(
+            f"device index must be >= 0, got {index}. Indices name mesh "
+            f"inventory entries and are wrapped, not counted from the end."
+        )
     alive = [d for d in mesh.devices() if d["status"] == "alive"]
 
     if not alive:
@@ -86,13 +170,7 @@ def device(mesh: GPUMesh, index: int = 0):
                 "The selected mesh device is CUDA, but CUDA is not available "
                 "to this PyTorch process."
             )
-        local_cuda_idx = 0
-        for candidate in alive:
-            if candidate["hostname"] == local_hostname and candidate["device"] == "cuda":
-                if candidate["id"] == target["id"]:
-                    break
-                local_cuda_idx += 1
-        return torch.device(f"cuda:{local_cuda_idx}")
+        return torch.device(f"cuda:{_local_cuda_index(alive, target, local_hostname)}")
 
     if target["device"] == "mps":
         mps = getattr(torch.backends, "mps", None)
@@ -146,8 +224,10 @@ def device_count(mesh: GPUMesh) -> int:
 def setup_torch(mesh: GPUMesh = None, min_memory_mb: float = 0) -> str:
     """Auto-detect the best device and backend for PyTorch.
 
-    Returns the device string ("cuda:0", "mps", "cpu").
-    If mesh is provided, uses mesh device inventory for detection.
+    Returns the device string ("cuda:N", "mps", "cpu").
+    If mesh is provided, uses mesh device inventory for detection — including
+    which local CUDA index the chosen entry corresponds to, so this agrees with
+    ``device()`` on a machine with more than one GPU.
     If min_memory_mb is provided, filters out GPUs with less free VRAM.
 
     Usage:
@@ -160,23 +240,32 @@ def setup_torch(mesh: GPUMesh = None, min_memory_mb: float = 0) -> str:
     if mesh is not None:
         try:
             devices = mesh.devices()
-            alive = [d for d in devices if d["status"] == "alive"]
-            if alive:
+            inventory = [d for d in devices if d["status"] == "alive"]
+            if inventory:
+                # The memory filter narrows what we may *choose*; the local
+                # CUDA index is still a position within the whole inventory, so
+                # the unfiltered list is kept for _local_cuda_index.
+                alive = inventory
                 if min_memory_mb > 0:
-                    alive = [
-                        d for d in alive
-                        if (d.get("gpu_memory_free_mb") or d.get("gpu_memory_total_mb") or 0) >= min_memory_mb
-                    ]
+                    alive = [d for d in alive if _has_room(d, min_memory_mb)]
                 if alive:
                     best = max(alive, key=lambda d: d["score"])
                     local_hostname = socket.gethostname()
                     if best["hostname"] == local_hostname:
                         if best["device"] == "cuda" and torch.cuda.is_available():
-                            return "cuda:0"
+                            # Name the card the mesh entry actually refers to.
+                            # This returned "cuda:0" unconditionally, so on a
+                            # multi-GPU box it and device() disagreed about the
+                            # same inventory row — one of them was always wrong.
+                            return f"cuda:{_local_cuda_index(inventory, best, local_hostname)}"
                         elif best["device"] == "mps":
                             mps = getattr(torch.backends, "mps", None)
                             if mps and mps.is_available():
                                 return "mps"
+        # Everything above is a best-effort hint. A coordinator that is down, or
+        # an inventory stale enough that _local_cuda_index refuses it, falls
+        # through to plain local detection rather than failing the caller —
+        # unlike device(), which is asked for one specific entry and says so.
         except Exception:
             pass
 

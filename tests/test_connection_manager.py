@@ -62,6 +62,124 @@ class TestSaveConnection:
         assert data["token"] == "newtoken"
 
 
+class TestPermissionWarnings:
+    """The config file holds the mesh token in plaintext, and that token is
+    remote code execution on every node. If the tightening fails, saying
+    nothing leaves the user believing a lock is in place that is not.
+    """
+
+    def test_warns_when_chmod_fails(self, isolated_config, monkeypatch, capsys):
+        def _boom(path, mode):
+            raise PermissionError(13, "Permission denied")
+
+        # Force the POSIX branch so the assertion is about chmod alone and
+        # does not depend on whether a real icacls run happens to succeed.
+        monkeypatch.setattr(cm.os, "name", "posix")
+        monkeypatch.setattr(cm.os, "chmod", _boom)
+        cm.save_connection("http://192.168.1.10:8000", "mytoken")
+        out = capsys.readouterr().out
+        assert "WARNING" in out
+        assert str(isolated_config) in out
+        assert "0600" in out
+
+    def test_still_saves_when_chmod_fails(self, isolated_config, monkeypatch):
+        """A warning, not a failure — refusing to save is the worse outcome."""
+        def _boom(path, mode):
+            raise PermissionError(13, "Permission denied")
+
+        monkeypatch.setattr(cm.os, "name", "posix")
+        monkeypatch.setattr(cm.os, "chmod", _boom)
+        cm.save_connection("http://192.168.1.10:8000", "mytoken")
+        data = json.loads(isolated_config.read_text())
+        assert data["token"] == "mytoken"
+
+    def test_warns_when_icacls_fails(self, isolated_config, monkeypatch, capsys):
+        """Windows is the primary platform and icacls is what actually
+        restricts the ACL there; chmod only flips the read-only bit."""
+        import subprocess
+
+        class _Result:
+            returncode = 5
+            stdout = b""
+            stderr = b"Access is denied."
+
+        monkeypatch.setattr(cm.os, "name", "nt")
+        monkeypatch.setenv("USERNAME", "tester")
+        monkeypatch.setattr(subprocess, "run", lambda *a, **k: _Result())
+        cm.save_connection("http://192.168.1.10:8000", "mytoken")
+        out = capsys.readouterr().out
+        assert "WARNING" in out
+        assert "icacls" in out
+        assert "Access is denied" in out
+
+    def test_warns_when_icacls_raises(self, isolated_config, monkeypatch, capsys):
+        import subprocess
+
+        def _boom(*args, **kwargs):
+            raise FileNotFoundError("icacls not found")
+
+        monkeypatch.setattr(cm.os, "name", "nt")
+        monkeypatch.setenv("USERNAME", "tester")
+        monkeypatch.setattr(subprocess, "run", _boom)
+        cm.save_connection("http://192.168.1.10:8000", "mytoken")
+        out = capsys.readouterr().out
+        assert "WARNING" in out
+        assert "icacls" in out
+
+    def test_warns_when_username_is_missing(self, isolated_config, monkeypatch, capsys):
+        """The old code raised KeyError here and swallowed it whole."""
+        monkeypatch.setattr(cm.os, "name", "nt")
+        monkeypatch.delenv("USERNAME", raising=False)
+        cm.save_connection("http://192.168.1.10:8000", "mytoken")
+        out = capsys.readouterr().out
+        assert "WARNING" in out
+        assert "USERNAME" in out
+
+    def test_no_warning_on_a_normal_save(self, isolated_config, monkeypatch, capsys):
+        monkeypatch.setattr(cm.os, "name", "posix")
+        cm.save_connection("http://192.168.1.10:8000", "mytoken")
+        assert "WARNING" not in capsys.readouterr().out
+
+    @pytest.mark.skipif(os.name == "nt",
+                        reason="st_mode carries no ACL information on Windows")
+    def test_load_warns_on_a_world_readable_token_file(self, isolated_config,
+                                                       monkeypatch, capsys):
+        """Catches files that predate the chmod, or arrived via a backup."""
+        monkeypatch.setattr(cm, "_warned_world_readable", False)
+        cm.save_connection("http://192.168.1.10:8000", "mytoken")
+        os.chmod(str(isolated_config), 0o644)
+        capsys.readouterr()
+
+        assert cm.load_connection() is not None
+        out = capsys.readouterr().out
+        assert "WARNING" in out
+        assert "readable by other users" in out
+
+    @pytest.mark.skipif(os.name == "nt",
+                        reason="st_mode carries no ACL information on Windows")
+    def test_load_warns_only_once(self, isolated_config, monkeypatch, capsys):
+        """A security warning repeated on every call reads as a glitch."""
+        monkeypatch.setattr(cm, "_warned_world_readable", False)
+        cm.save_connection("http://192.168.1.10:8000", "mytoken")
+        os.chmod(str(isolated_config), 0o644)
+        cm.load_connection()
+        capsys.readouterr()
+
+        cm.load_connection()
+        assert "WARNING" not in capsys.readouterr().out
+
+    @pytest.mark.skipif(os.name == "nt",
+                        reason="st_mode carries no ACL information on Windows")
+    def test_load_is_quiet_for_a_locked_down_file(self, isolated_config,
+                                                  monkeypatch, capsys):
+        monkeypatch.setattr(cm, "_warned_world_readable", False)
+        cm.save_connection("http://192.168.1.10:8000", "mytoken")
+        capsys.readouterr()
+
+        assert cm.load_connection() is not None
+        assert "WARNING" not in capsys.readouterr().out
+
+
 class TestLoadConnection:
     """Tests for load_connection()."""
 

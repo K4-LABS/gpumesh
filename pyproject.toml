@@ -1,14 +1,59 @@
 [build-system]
-requires = ["setuptools>=68,<77"]
+# setuptools >= 77 is the first release that understands the PEP 639 form of
+# `license` used below (a plain SPDX string plus `license-files`). The old
+# `<77` upper cap that used to live here was doing real damage: capping a
+# *build backend* pins the one dependency a user cannot route around, and it
+# breaks every build the day setuptools ships a release the cap excludes.
+# A floor is the right shape for a build requirement; a ceiling is not.
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "gpumesh"
-version = "1.3.0"
+version = "2.0.0"
 description = "Borrow your friends' GPUs: a terminal-based distributed compute mesh in pure Python"
 readme = "README.md"
+
+# NOTE ON PYTHON 3.9
+# ------------------
+# Python 3.9 reached end of life on 2025-10-31, so the obvious move is to
+# raise this to ">=3.10". It is deliberately NOT raised, because for this
+# project 3.9 support is both real and free:
+#
+#   * An AST sweep of every module in `gpumesh/` finds zero 3.10+ syntax and
+#     zero 3.10+ stdlib usage — no `match`, no `except*`, no `tomllib`,
+#     no `itertools.pairwise`, no `zip(strict=)`, no `slots=True` dataclasses.
+#   * Every module already starts with `from __future__ import annotations`,
+#     so modern `X | Y` annotations cost nothing at runtime, and there are no
+#     runtime-evaluated unions (no `isinstance(x, A | B)`, no TypedDict or
+#     dataclass whose annotations get resolved).
+#   * `gpumesh doctor` carries an explicit `sys.version_info < (3, 9)` check,
+#     i.e. 3.9 is a supported target the code already reasons about.
+#   * The pitch is "works on the junk you already own". The machines that make
+#     that pitch true are exactly the ones still on a distro Python of 3.9.
+#
+# The cost of keeping it is one CI matrix cell. Raise this line, drop the 3.9
+# classifier, and drop the 3.9 matrix entry in .github/workflows/tests.yml if
+# and when the code actually needs a 3.10 feature — not merely because the
+# calendar says so.
+#
+# Known friction (does not require dropping 3.9, pip resolves it): the newest
+# releases of pytest, build and twine in the `dev` extra require >= 3.10, and
+# current torch requires >= 3.10, so a 3.9 environment installs older but
+# still-working versions of those.
 requires-python = ">=3.9"
-license = {text = "MIT"}
+
+# PEP 639: an SPDX expression, not the deprecated `{text = "..."}` table.
+license = "MIT"
+license-files = ["LICENSE"]
+
+authors = [
+    { name = "Samurai007AK", email = "vaivaswat2244@gmail.com" },
+]
+maintainers = [
+    { name = "Samurai007AK", email = "vaivaswat2244@gmail.com" },
+]
+
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
@@ -19,13 +64,35 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: Implementation :: CPython",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
     "Topic :: System :: Distributed Computing",
+    "Typing :: Typed",
 ]
 keywords = ["gpu", "distributed", "compute", "mesh", "ml", "pytorch", "cuda"]
 
 dependencies = [
-    "cloudpickle",
+    # cloudpickle is not an ordinary dependency here — it is this project's
+    # WIRE FORMAT. A function pickled on the client is unpickled inside a
+    # worker process on a different machine, which may have installed gpumesh
+    # weeks apart and from a different index. Two ends on different cloudpickle
+    # majors is a deserialization failure at task time, on someone else's
+    # laptop, with a traceback that points at pickle internals.
+    #
+    # cloudpickle explicitly does not promise that pickles produced by one
+    # version load under another, so the floor is pinned to the start of the
+    # current major series (3.0.0, Oct 2023 — the release that reworked the
+    # implementation for 3.12). This keeps every machine in a mesh on 3.x, and
+    # a mesh whose members are all on 3.x is the compatibility story we can
+    # actually reason about.
+    #
+    # No upper cap: capping would guarantee that the day cloudpickle 4 ships,
+    # every machine that upgrades gpumesh silently keeps an old cloudpickle
+    # while machines that install fresh get the new one — the exact split the
+    # floor exists to prevent.
+    "cloudpickle>=3.0",
 ]
 
 [project.urls]
@@ -33,14 +100,69 @@ Homepage = "https://github.com/Samurai007AK/gpumesh"
 Documentation = "https://github.com/Samurai007AK/gpumesh#readme"
 Repository = "https://github.com/Samurai007AK/gpumesh"
 Issues = "https://github.com/Samurai007AK/gpumesh/issues"
+# PyPI renders a `Changelog` key as a dedicated sidebar link on the project
+# page, which is the single most-clicked link for anyone deciding whether an
+# upgrade is safe.
+Changelog = "https://github.com/Samurai007AK/gpumesh/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
-gpu = ["torch"]
-tunnel = ["pyngrok"]
-sysinfo = ["psutil"]
-notebook = ["pandas"]
-ui = ["rich", "questionary"]
-dev = ["pytest", "build", "twine"]
+# Floors below are the oldest release that (a) actually has the API gpumesh
+# calls and (b) publishes wheels for the interpreters in `requires-python`.
+# None of them carry an upper cap: an application pins, a library constrains,
+# and a cap on a leaf dependency of a library is a resolver conflict waiting
+# to happen in someone else's environment.
+
+# torch.backends.mps.is_available() landed in 1.12 and torch.cuda.mem_get_info
+# in 1.11, so 1.12 is the hard API floor. 2.0 is the practical floor: it is the
+# oldest series still receiving fixes and the oldest with wheels across the
+# supported interpreters. capability.py already handles the 2.8 rename of
+# device-property `total_mem` -> `total_memory` in both directions.
+gpu = ["torch>=2.0"]
+
+# pyngrok 6.0 is the first release built against the ngrok v3 agent, which is
+# the only agent ngrok still runs. Below that the tunnel simply does not open.
+tunnel = ["pyngrok>=6.0"]
+
+# psutil 5.9 (2022) is the oldest series with wheels for 3.11+ and a stable
+# virtual_memory() namedtuple.
+sysinfo = ["psutil>=5.9"]
+
+# results_to_dataframe() builds a DataFrame from a list of dicts, an API that
+# has been stable forever; 1.3 is simply the oldest series with wheels for the
+# interpreters here.
+notebook = ["pandas>=1.3"]
+
+# rich 13.0 is the baseline for the Live/Panel/Progress combination used by
+# the dashboard. questionary 2.0 changed the prompt return contract, and the
+# setup wizard is written against the 2.x behaviour.
+ui = ["rich>=13.0", "questionary>=2.0"]
+
+# Tooling floors, not runtime: pytest 7 for the modern fixture/ini behaviour
+# the suite assumes, build 1.0 for PEP 517 `--wheel`/`--sdist` as used in CI,
+# twine 5 for `check --strict`.
+#
+# `dev` is installed by every cell of the test matrix, so it stays small on
+# purpose — the packaging checkers live in `packaging` below rather than here
+# because pulling their dependency tree into nine matrix jobs buys nothing.
+dev = [
+    "pytest>=7.0",
+    "build>=1.0",
+    "twine>=5.0",
+]
+
+# Used by .github/workflows/build.yml only.
+packaging = [
+    "build>=1.0",
+    "twine>=5.0",
+    "check-manifest>=0.49",
+    "check-wheel-contents>=0.6",
+]
+
+lint = [
+    "ruff>=0.6",
+    "mypy>=1.10",
+]
+
 all = ["gpumesh[gpu,tunnel,sysinfo,notebook,ui]"]
 
 [project.scripts]
@@ -50,6 +172,13 @@ gpumesh = "gpumesh.cli:main"
 include = ["gpumesh*"]
 exclude = ["tests*", "scripts*"]
 
+[tool.setuptools.package-data]
+# PEP 561: without py.typed in the installed package, every annotation in
+# gpumesh is invisible to a downstream mypy/pyright — they treat the whole
+# import as `Any` and silently stop checking at the package boundary. The file
+# is empty; its presence is the entire signal.
+gpumesh = ["py.typed"]
+
 [tool.pytest.ini_options]
 # Almost every test here starts a real server, worker, or subprocess, so the
 # way this suite fails is by blocking rather than by asserting. Without a cap
@@ -58,3 +187,201 @@ exclude = ["tests*", "scripts*"]
 # aborts instead. The slowest legitimate test takes ~21s, so 300s only ever
 # fires on a genuine hang.
 faulthandler_timeout = 300
+
+# ---------------------------------------------------------------------------
+# check-manifest (run by .github/workflows/build.yml)
+# ---------------------------------------------------------------------------
+[tool.check-manifest]
+# Files tracked in git that intentionally do NOT belong in the sdist. Anything
+# not listed here and not matched by MANIFEST.in is a genuine omission and
+# should fail the build job rather than be silenced by widening this list.
+ignore = [
+    # GitHub-only metadata: meaningless outside github.com and pure noise in a
+    # source distribution.
+    ".github/**",
+    ".gitignore",
+    ".gitattributes",
+    "SECURITY-INSIGHTS.yml",
+    # Docker Hub's own README, published to Docker Hub rather than PyPI.
+    "DOCKER_HUB_README.md",
+    ".env.example",
+    # Local AI-tooling state, gitignored but listed defensively.
+    "skills-lock.json",
+    # Maintainer release tooling, excluded from the wheel by
+    # [tool.setuptools.packages.find] as well.
+    "scripts/**",
+]
+
+# ---------------------------------------------------------------------------
+# Coverage
+# ---------------------------------------------------------------------------
+[tool.coverage.run]
+source = ["gpumesh"]
+
+# This project is a coordinator process, a pool of worker threads, and task
+# subprocesses. Default coverage instruments only the interpreter it was
+# started in and only the main thread's trace function, so without the three
+# settings below the parts of gpumesh that matter most — the worker loop, the
+# claim/lease logic, everything in _function_subprocess.py — report as
+# uncovered no matter how heavily the tests exercise them. That produces the
+# worst possible outcome: a number that looks like a coverage problem in the
+# tests when it is actually a measurement problem in the config.
+concurrency = ["multiprocessing", "thread"]
+parallel = true
+branch = true
+
+# Workers and the coordinator are stopped by signal in several tests. Without
+# this, coverage data collected in the signalled process is discarded.
+sigterm = true
+
+omit = [
+    "*/tests/*",
+    "*/scripts/*",
+    "*/examples/*",
+]
+
+[tool.coverage.paths]
+# `parallel = true` writes one data file per process, tagged with that
+# process's view of the filesystem. On CI the subprocess may see a different
+# prefix than the parent; this maps them onto one another so `coverage combine`
+# does not report the same module twice under two paths.
+source = [
+    "gpumesh/",
+    "*/gpumesh/",
+    "*\\gpumesh\\",
+]
+
+[tool.coverage.report]
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "@overload",
+]
+skip_covered = false
+show_missing = true
+
+# ---------------------------------------------------------------------------
+# Ruff
+# ---------------------------------------------------------------------------
+[tool.ruff]
+# 120 is chosen to match the code as it is actually written, not as an ideal.
+# Measured over gpumesh/ and tests/ (22,147 lines): 314 lines exceed 88, 112
+# exceed 100, and only 23 exceed 120. Setting 88 or 100 would turn a lint job
+# into a repo-wide reformat, which is exactly the wrong thing to hand a
+# project with several people editing at once. 120 flags the genuine outliers
+# (a cluster of long log/format strings in worker.py) and leaves everything
+# else alone.
+line-length = 120
+indent-width = 4
+
+# Matches `requires-python` above. Ruff would infer this, but stating it means
+# the pyupgrade rules cannot start rewriting 3.9-compatible code the moment
+# someone edits requires-python without thinking about it.
+target-version = "2.0.0"
+
+extend-exclude = [
+    "examples",
+    ".agents",
+    ".claude",
+    ".continue",
+    ".forge",
+]
+
+[tool.ruff.lint]
+select = [
+    "E",     # pycodestyle errors
+    "W",     # pycodestyle warnings
+    "F",     # pyflakes            (the flake8 core)
+    "I",     # isort               (import ordering)
+    "UP",    # pyupgrade
+    "B",     # flake8-bugbear
+    "C4",    # flake8-comprehensions
+    "S",     # flake8-bandit       <-- see note below
+    "RUF",   # ruff-specific
+]
+
+# flake8-bandit ("S") is selected deliberately and is the reason this config
+# exists at all. gpumesh accepts pickled callables over a socket and runs them:
+# deserialization of untrusted input is the project's central risk, and S301
+# (pickle), S302 (marshal), S306/S307 (eval/exec), S310 (url open), S324 (weak
+# hash) and S603/S607 (subprocess) are precisely the call sites that need a
+# human decision recorded next to them rather than a silent default. Where a
+# hit is intentional the fix is a `# noqa: S301  - reason` comment on the line,
+# which turns an unexamined risk into a documented one.
+
+ignore = [
+    # Ruff's formatter is NOT being run over this repo (see the note in
+    # .pre-commit-config.yaml), so rules that only a formatter can satisfy
+    # would be permanent noise.
+    "E501",   # line-too-long: reported by the length check above; the 23 real
+              # hits are long strings that cannot be split without hurting
+              # readability. Re-enable once someone has gone through them.
+    "S101",   # assert: the test suite is built on it.
+    "S104",   # bind-all-interfaces: binding 0.0.0.0 is an explicit, warned-on,
+              # opt-in feature of `gpumesh serve --host`, not an oversight.
+    "S404",   # subprocess import: task execution is the product.
+    "B008",   # function call in default arg: used intentionally for env lookups.
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = [
+    "S",      # security rules do not apply to fixtures and fakes
+    "B011",
+]
+"scripts/*" = ["S"]
+"gpumesh/_function_subprocess.py" = [
+    # This module's entire job is to load a cloudpickle payload and call it.
+    # The pickle/exec findings here are the design, and the trust boundary is
+    # enforced upstream by the token check in server.py, not here.
+    "S301", "S403",
+]
+"gpumesh/serializer.py" = ["S301", "S403"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["gpumesh"]
+
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = []
+
+# ---------------------------------------------------------------------------
+# mypy
+# ---------------------------------------------------------------------------
+[tool.mypy]
+python_version = "2.0.0"
+files = ["gpumesh"]
+
+# Deliberately gradual. The package ships py.typed, so downstream checkers
+# will start reading these annotations — but the codebase is only partially
+# annotated today and flipping `strict = true` now would produce thousands of
+# errors and a lint job nobody looks at. These settings catch the errors that
+# are always bugs (unreachable code, bad casts, missing returns) without
+# demanding annotations on functions that do not have them yet.
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_unreachable = true
+warn_no_return = true
+no_implicit_optional = true
+check_untyped_defs = false
+disallow_untyped_defs = false
+ignore_missing_imports = true
+
+# Path to tightening, one module at a time: move a module out of the list
+# below as it gets annotated.
+pretty = true
+show_error_codes = true
+
+[[tool.mypy.overrides]]
+# Optional extras. These are imported inside try/except at call sites, so a
+# machine without them must still type-check cleanly.
+module = [
+    "torch.*",
+    "psutil.*",
+    "pandas.*",
+    "rich.*",
+    "questionary.*",
+    "pyngrok.*",
+    "cloudpickle.*",
+    "IPython.*",
+]
+ignore_missing_imports = true

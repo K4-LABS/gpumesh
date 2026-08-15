@@ -1,5 +1,6 @@
 """Shared utility functions for gpumesh."""
 
+import ipaddress
 import os
 import platform
 import socket
@@ -22,14 +23,24 @@ def _is_private_ip(ip: str) -> bool:
     return False
 
 
+# Carrier-grade NAT, which is also the range Tailscale hands out. It is
+# 100.64.0.0/10 and nothing more: the check here used to be a bare
+# ``startswith("100.")``, which swallowed 100.0.0.0-100.63.255.255 as well —
+# ordinary publicly routable space that was then silently dropped from every
+# candidate list, on machines whose only usable address may have been in it.
+_CGNAT_NETWORK = ipaddress.ip_network("100.64.0.0/10")
+
+
 def _is_loopback_or_special(ip: str) -> bool:
-    if ip.startswith("127."):
-        return True
-    if ip.startswith("169.254."):  # link-local
-        return True
-    if ip.startswith("100."):  # Tailscale / CGNAT
-        return True
-    return False
+    """True for addresses another machine should not be pointed at."""
+    try:
+        addr = ipaddress.IPv4Address(ip)
+    except ValueError:  # AddressValueError, which subclasses it
+        # Not an IPv4 literal — an empty string, a hostname, an IPv6 address.
+        # False, exactly as the old string-prefix version answered: callers
+        # rank what they cannot classify rather than discarding it.
+        return False
+    return addr.is_loopback or addr.is_link_local or addr in _CGNAT_NETWORK
 
 
 # Ranges handed out by hypervisors, container runtimes and connection
@@ -96,7 +107,12 @@ def _gather_candidate_ips() -> list:
                 ip = info[4][0]
                 if ":" in ip:  # skip IPv6
                     continue
-                if ip not in extra:
+                # De-duplicate against what we already have, not just against
+                # the other getaddrinfo answers: on the common setup the
+                # hostname resolves to the very address the default route
+                # already reported, and the pair used to reach callers as two
+                # separate candidates.
+                if ip not in extra and ip not in candidates:
                     extra.append(ip)
         except OSError:
             pass
@@ -114,30 +130,81 @@ def lan_ip_candidates() -> list:
     Ranked so a real LAN address always beats a hypervisor/VPN/container
     host-only address, which this machine can reach but no other can.
     ``sorted`` is stable, so within a rank the default-route address (found
-    first) still wins.
+    first) still wins. The result contains no duplicates.
     """
     try:
         found = _gather_candidate_ips()
     except Exception:
         return []
-    return sorted(
+    ranked = sorted(
         (ip for ip in found if not _is_loopback_or_special(ip)),
         key=_rank_ip,
     )
+    # De-duplicate after ranking, keeping the first occurrence — which, the
+    # sort being stable, is the best-ranked and earliest-found one. A duplicate
+    # is never free: show_ip_alternatives printed the same address twice, and
+    # coordinator_url_candidates(limit=4) spent one of its four slots on a
+    # repeat, so a peer was offered fewer *distinct* fallbacks than intended.
+    seen = set()
+    unique = []
+    for ip in ranked:
+        if ip not in seen:
+            seen.add(ip)
+            unique.append(ip)
+    return unique
+
+
+# Set once the invalid-override warning has been printed. The override is read
+# on every claim, and a wrong value would otherwise repeat the same complaint
+# for every worker that ever connects.
+_warned_invalid_host_ip = False
+
+
+def _host_ip_override() -> str:
+    """Return a validated ``GPUMESH_HOST_IP``, or "" when there is none to use.
+
+    The override is copied verbatim into every advertised URL and every claim
+    payload, so a typo does not fail here — it fails minutes later on another
+    machine, as a connection error whose operator never set the variable and
+    has no way to guess what it was. Check it where it is read, say so once,
+    and fall back to detection: a detected address that works beats a pinned
+    one that cannot.
+
+    An IP literal is required, not a hostname. This variable is documented as
+    ``GPUMESH_HOST_IP=<IP>`` everywhere it appears, and accepting free text is
+    precisely what let a typo through — almost any typo is a syntactically
+    valid single-label hostname.
+    """
+    global _warned_invalid_host_ip
+    raw = os.environ.get("GPUMESH_HOST_IP", "").strip()
+    if not raw:
+        return ""
+    try:
+        ipaddress.ip_address(raw)
+    except ValueError:
+        if not _warned_invalid_host_ip:
+            _warned_invalid_host_ip = True
+            safe_print(yellow(
+                f"[!] WARNING: GPUMESH_HOST_IP={raw!r} is not an IP address — "
+                f"ignoring it and auto-detecting instead."
+            ))
+        return ""
+    return raw
 
 
 def get_lan_ip() -> str:
     """Get the address workers should use to reach this machine.
 
-    ``GPUMESH_HOST_IP`` overrides detection entirely. Set it when this
-    machine has several interfaces and auto-detection picks the wrong one —
-    auto-detection cannot always tell a real LAN interface from a VPN or
-    hypervisor one, and a wrong pick makes every worker time out.
+    ``GPUMESH_HOST_IP`` overrides detection entirely, provided it is a valid
+    IP address. Set it when this machine has several interfaces and
+    auto-detection picks the wrong one — auto-detection cannot always tell a
+    real LAN interface from a VPN or hypervisor one, and a wrong pick makes
+    every worker time out.
 
     Returns:
         The local network IP address (string).
     """
-    override = os.environ.get("GPUMESH_HOST_IP", "").strip()
+    override = _host_ip_override()
     if override:
         return override
     try:
@@ -195,7 +262,7 @@ def coordinator_url_candidates(peer_ip: str, port: int, limit: int = 4) -> list:
     routed = local_ip_for_peer(peer_ip)
     if routed and not _is_loopback_or_special(routed):
         ordered.append(routed)
-    override = os.environ.get("GPUMESH_HOST_IP", "").strip()
+    override = _host_ip_override()
     if override:
         if override in ordered:
             ordered.remove(override)
@@ -214,7 +281,10 @@ def show_ip_alternatives(chosen: str, port: int = 8000):
     the advertised address was unroutable from that machine, and one of
     these is the fix — so show them up front instead of after the failure.
     """
-    if os.environ.get("GPUMESH_HOST_IP", "").strip():
+    # A *valid* pin means the user already made this decision. An invalid one
+    # is being ignored, so detection is back in charge and the alternatives are
+    # worth showing again.
+    if _host_ip_override():
         return
     candidates = lan_ip_candidates()
     if _is_virtual_adapter_ip(chosen):

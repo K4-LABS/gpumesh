@@ -41,6 +41,23 @@ def _normalize_url(url: str) -> str:
     )
 
 
+def _warn_permissions(what_failed: str):
+    """Tell the user the token file did not get locked down, and why.
+
+    Named the file explicitly every time. A warning that says "permissions
+    could not be tightened" without saying *which* file is a warning the
+    reader cannot act on, and the whole point of surfacing this is that the
+    reader can go fix it by hand.
+    """
+    safe_print(yellow(
+        f"[gpumesh] WARNING: {_CONFIG_PATH} holds your mesh token in "
+        f"plaintext and {what_failed}. Other users on this machine may be "
+        f"able to read it, and that token grants code execution across the "
+        f"mesh. Restrict the file by hand, or run 'gpumesh disconnect' and "
+        f"rotate the token if this machine is shared."
+    ))
+
+
 def save_connection(url: str, token: str):
     """Save coordinator URL and token for future commands.
 
@@ -69,20 +86,86 @@ def save_connection(url: str, token: str):
             pass
         raise
     safe_print(green(f"[gpumesh] config saved to {_CONFIG_PATH}"))
-    # Restrict file permissions
+    # Restrict file permissions.
+    #
+    # A failure here is a warning, never an error. The file is already on
+    # disk and refusing the whole save would leave the user with no saved
+    # connection at all — a worse outcome than a readable one. But it must
+    # not be *silent*: this file holds the mesh token in plaintext, the
+    # token is the only thing standing between a stranger on the LAN and
+    # arbitrary code execution on every node in the mesh, and the user's
+    # mental model after seeing "config saved" is that gpumesh locked it
+    # down. Swallowing the failure meant the one case where that model is
+    # wrong was also the one case nobody was told about.
     try:
         os.chmod(_CONFIG_PATH, 0o600)
-    except OSError:
-        pass
+    except OSError as exc:
+        _warn_permissions(f"could not set owner-only permissions (0600): {exc}")
     if os.name == "nt":
-        try:
-            import subprocess
-            subprocess.run(
-                ["icacls", _CONFIG_PATH, "/inheritance:r", "/grant", f"{os.environ['USERNAME']}:(R,W)"],
-                capture_output=True, timeout=5,
+        # chmod on Windows only flips the read-only bit; it does nothing
+        # about the inherited ACL that typically grants Users read access.
+        # icacls is what actually restricts the file, so its failure is the
+        # one that matters most on the primary platform.
+        user = os.environ.get("USERNAME", "")
+        if not user:
+            _warn_permissions(
+                "USERNAME is not set, so the Windows ACL could not be "
+                "restricted with icacls"
             )
-        except Exception:
-            pass
+        else:
+            try:
+                import subprocess
+                proc = subprocess.run(
+                    ["icacls", _CONFIG_PATH, "/inheritance:r", "/grant", f"{user}:(R,W)"],
+                    capture_output=True, timeout=5,
+                )
+                if proc.returncode != 0:
+                    detail = (proc.stderr or proc.stdout or b"")
+                    if isinstance(detail, bytes):
+                        detail = detail.decode("utf-8", errors="replace")
+                    detail = " ".join(detail.split()) or f"exit code {proc.returncode}"
+                    _warn_permissions(f"icacls could not restrict the ACL: {detail}")
+            except Exception as exc:
+                _warn_permissions(f"icacls could not be run: {exc}")
+
+
+_warned_world_readable = False
+
+
+def _warn_if_world_readable():
+    """Warn once per process if the saved token file is group/other readable.
+
+    save_connection tightens permissions, but it is not the only way this
+    file comes into existence: it survives upgrades from versions that never
+    chmod'd it, it can be restored from a backup or copied between machines
+    with a permissive umask, and the tightening itself can fail (see
+    _warn_permissions). Checking on read is what catches all of those, since
+    every command that resolves a connection goes through here.
+
+    Only meaningful on POSIX. On Windows st_mode carries no real ACL
+    information — a file with a wide-open ACL still reports 0o666 — so
+    inspecting it there would produce a warning that is simultaneously
+    always-on and evidence-free. Windows protection comes from the icacls
+    call in save_connection instead.
+
+    Warns once, not once per call: several CLI commands resolve the
+    connection more than once in a single run, and a security warning
+    repeated three times in a row reads as a glitch and gets tuned out.
+    """
+    global _warned_world_readable
+    if _warned_world_readable or os.name == "nt":
+        return
+    try:
+        mode = os.stat(_CONFIG_PATH).st_mode
+    except OSError:
+        return
+    if mode & 0o077:
+        _warned_world_readable = True
+        safe_print(yellow(
+            f"[gpumesh] WARNING: {_CONFIG_PATH} is readable by other users "
+            f"(mode {oct(mode & 0o777)}) and it holds your mesh token in "
+            f"plaintext. Run 'chmod 600 {_CONFIG_PATH}' to fix it."
+        ))
 
 
 def load_connection() -> dict | None:
@@ -96,6 +179,7 @@ def load_connection() -> dict | None:
             config = json.load(f)
         if config.get("url") and config.get("token"):
             config.setdefault("saved_at", None)
+            _warn_if_world_readable()
             return config
     except (FileNotFoundError, json.JSONDecodeError, KeyError):
         pass

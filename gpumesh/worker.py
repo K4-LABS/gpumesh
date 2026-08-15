@@ -25,6 +25,7 @@ import signal
 import socket
 import subprocess
 import sys
+import textwrap
 import threading
 import time
 import traceback
@@ -32,6 +33,11 @@ import urllib.error
 import urllib.request
 
 from . import capability, sandbox
+from . import (
+    __version__,
+    MIN_PROTOCOL_VERSION, PROTOCOL_VERSION, UNVERSIONED_PROTOCOL,
+    ProtocolVersionMismatch, is_supported_protocol,
+)
 from gpumesh.ansi import safe_print, green, yellow, red, cyan, bold, dim, device_icon
 
 HEARTBEAT_INTERVAL = 10.0
@@ -47,6 +53,45 @@ BUSY_POLL_WINDOW = 10.0  # seconds of fast polling after the last task
 POLL_BACKOFF = 1.5
 REBENCHMARK_INTERVAL = 600.0  # re-benchmark every 10 minutes
 GRACEFUL_SHUTDOWN_TIMEOUT = 30.0  # seconds to wait for current task on SIGTERM
+
+# --- result delivery ---------------------------------------------------
+#
+# A finished task's result is the only thing this loop produces that cannot be
+# recreated for free: the compute is already spent. Everything else the worker
+# sends (a heartbeat, a lease request) is cheap to repeat and worthless if
+# late. So the result POST gets the retry the rest of the loop does not need.
+#
+# It used to be posted exactly once, with every failure caught by a warning
+# arm — and because HTTPError subclasses URLError, that arm swallowed the 503
+# from a shutting-down coordinator too. The worker printed a line, counted the
+# task as done, and dropped the payload; the coordinator left the row 'running'
+# and re-ran the whole task once LEASE_SECONDS expired.
+#
+# The budget is what stops the cure being worse: a worker that retried forever
+# would sit on one task while the queue behind it went unserved, and would
+# still be holding an answer nobody wants by the time the lease expired and
+# somebody else redid the work. Two minutes is comfortably inside the 300s
+# lease — long enough to ride out a coordinator restart, short enough that the
+# worker is back in the poll loop well before its task is re-queued.
+RESULT_POST_TIMEOUT = 30.0
+RESULT_RETRY_BASE = 1.0
+RESULT_RETRY_FACTOR = 2.0
+RESULT_RETRY_MAX = 15.0
+RESULT_RETRY_BUDGET = 120.0
+# Once a shutdown has been requested the trade flips: the operator is watching
+# a Ctrl+C that has not taken effect yet, and _stop_coordinator only waits
+# GRACEFUL_SHUTDOWN_TIMEOUT + 10s for this thread. A few seconds still covers
+# the case that actually happens on shutdown — a coordinator closing its socket
+# a moment before we post — without turning "stop" into "stop in two minutes".
+RESULT_RETRY_SHUTDOWN_BUDGET = 5.0
+
+# Outcomes of a delivery attempt. Plain strings so a log line, a return value
+# and a test assertion all read the same.
+DELIVERED = "delivered"
+OBSOLETE = "obsolete"            # the coordinator no longer wants it
+AUTH_FAILED = "auth"             # wrong token; the worker has to stop
+UNDELIVERABLE = "undeliverable"  # a refusal that retrying cannot fix
+GAVE_UP = "gave_up"              # the retry budget ran out
 # NOTE: there are deliberately NO "give up and exit" thresholds here.
 # After a worker registers it never exits on its own: coordinator outages,
 # laptop sleep and WiFi drops are survived by retrying with capped
@@ -135,7 +180,23 @@ def _run_function_task(payload: dict, device: str, timeout: float,
     """
     from . import serializer
 
-    func = serializer.deserialize_function(payload["_func"])
+    try:
+        func = serializer.deserialize_function(payload["_func"])
+    except ValueError as e:
+        # These ValueErrors are deliberate refusals (cross-version payload with
+        # no usable source, a method or callable object the source fallback
+        # cannot rebuild). A bare ValueError misses the TaskError handler in
+        # the task loop and gets reported as "Unexpected error", labelling an
+        # expected refusal as a surprise.
+        #
+        # Marked user_error so the coordinator fails it once. It used to be
+        # left retryable on the theory that a retry might land on a worker
+        # whose Python version matches — but BUSY_POLL_INTERVAL is 0.1s, so
+        # this same incompatible worker re-leases the task long before any
+        # other worker polls. All three attempts burned here, turning one
+        # refusal into three near-instant failures and three diagnostics
+        # blocks, and the user still had to read the same message to fix it.
+        raise sandbox.TaskError(str(e), user_error=True)
     params = {k: v for k, v in payload.get("_params", {}).items()
               if not k.startswith("_")}
     task_index = payload.get("_task_index", 0)
@@ -196,7 +257,16 @@ def _run_function_task(payload: dict, device: str, timeout: float,
             sandbox._kill_tree(proc)
 
     def _wait_for_stop_and_kill():
-        stop_event.wait()
+        # Poll instead of blocking on an untimed stop_event.wait(). The event
+        # only fires on shutdown, so a watcher started for a task that ends
+        # normally was never woken and never returned: one blocked daemon
+        # thread leaked per function task, forever. A worker that ran 10,000
+        # tasks held 10,000 of them. Waking twice a second lets the watcher
+        # notice its subprocess is gone and exit, while still arming the kill
+        # timer promptly when the stop event does fire mid-task.
+        while not stop_event.wait(0.5):
+            if proc.poll() is not None:
+                return
         if proc.poll() is None:
             _shutdown_timer[0] = threading.Timer(GRACEFUL_SHUTDOWN_TIMEOUT, _force_kill)
             _shutdown_timer[0].daemon = True
@@ -285,6 +355,94 @@ class _AuthError(Exception):
     """Raised when the coordinator rejects this worker's token (HTTP 401)."""
 
 
+# HTTP 426 Upgrade Required — the coordinator refusing us on version grounds.
+# Kept as a literal here rather than imported from server.py so a worker never
+# pulls the coordinator module (and its Database import) into memory.
+_PROTOCOL_MISMATCH_STATUS = 426
+
+
+def _refusal_message(exc: "urllib.error.HTTPError") -> str:
+    """Pull the coordinator's refusal prose out of a 426 body.
+
+    The coordinator writes the message because only it knows its own version
+    numbers and its own window. Relaying its text verbatim — instead of
+    inventing a local one — is what keeps the two sides from disagreeing about
+    why the join failed. A body we cannot read still has to produce something
+    actionable, hence the fallback.
+    """
+    try:
+        payload = json.loads(exc.read().decode("utf-8", errors="replace"))
+        message = payload.get("error")
+        if message:
+            return str(message)
+    except (OSError, ValueError, AttributeError):
+        pass
+    return (
+        f"The coordinator refused this worker on protocol-version grounds "
+        f"(HTTP {_PROTOCOL_MISMATCH_STATUS}) but sent no explanation. This "
+        f"worker is gpumesh protocol {PROTOCOL_VERSION} (accepting "
+        f"{MIN_PROTOCOL_VERSION}-{PROTOCOL_VERSION}). Run 'pip install -U "
+        f"gpumesh' on both machines so they agree."
+    )
+
+
+def _check_coordinator_protocol(resp: dict) -> None:
+    """Refuse a coordinator this worker cannot talk to.
+
+    The coordinator's own gate only catches half the skew. A worker NEWER than
+    the coordinator meets a coordinator with no gate at all — every gpumesh up
+    to 1.3.0 accepts any registration and then behaves however the difference
+    happens to make it behave. So the check has to exist on both ends, and this
+    is the worker's end.
+
+    An absent ``protocol_version`` in the response is not a failure: it means
+    the coordinator predates the handshake, which is UNVERSIONED_PROTOCOL and
+    is inside today's window. It stops being inside the window when
+    PROTOCOL_VERSION reaches 3, and on that day this raises with a message
+    naming both sides — which is the entire point.
+    """
+    raw = resp.get("protocol_version") if isinstance(resp, dict) else None
+    if raw is None:
+        coord_proto = UNVERSIONED_PROTOCOL
+    else:
+        try:
+            coord_proto = int(raw)
+        except (ValueError, TypeError):
+            raise ProtocolVersionMismatch(
+                f"The coordinator reported a protocol version this worker "
+                f"cannot parse ({raw!r}). This worker is gpumesh protocol "
+                f"{PROTOCOL_VERSION}. Check that the URL really points at a "
+                f"gpumesh coordinator and not at another service.",
+                local=PROTOCOL_VERSION,
+            )
+    if is_supported_protocol(coord_proto):
+        return
+    if coord_proto < MIN_PROTOCOL_VERSION:
+        direction = (
+            f"The coordinator speaks gpumesh wire protocol {coord_proto}, "
+            f"which is older than the oldest version this worker supports "
+            f"({MIN_PROTOCOL_VERSION})."
+        )
+        fix = ("Upgrade the COORDINATOR: run 'pip install -U gpumesh' on the "
+               "coordinator machine and restart it.")
+    else:
+        direction = (
+            f"The coordinator speaks gpumesh wire protocol {coord_proto}, "
+            f"which is newer than this worker's ({PROTOCOL_VERSION})."
+        )
+        fix = ("Upgrade the WORKER: run 'pip install -U gpumesh' on this "
+               "machine and rejoin.")
+    raise ProtocolVersionMismatch(
+        f"Refusing to join this mesh: incompatible gpumesh protocol version. "
+        f"{direction} This worker is gpumesh {__version__}, speaking protocol "
+        f"{PROTOCOL_VERSION} and accepting {MIN_PROTOCOL_VERSION}-"
+        f"{PROTOCOL_VERSION}. {fix} Refusing now beats joining and then "
+        f"failing on the first task in whatever way the difference produces.",
+        local=PROTOCOL_VERSION,
+        remote=coord_proto,
+    )
+
+
 def _try_register(mesh: "MeshClient", info: dict, retries: int = 3,
                    verbose: bool = True):
     """Register with the coordinator, retrying transient connection errors.
@@ -299,7 +457,10 @@ def _try_register(mesh: "MeshClient", info: dict, retries: int = 3,
     Returns the worker_id on success, or raises the last underlying exception
     (urllib.error.URLError / OSError / json.JSONDecodeError) if every
     attempt failed. A rejected token (HTTP 401) raises ``_AuthError``
-    immediately instead of retrying.
+    immediately instead of retrying, and an incompatible protocol version
+    (HTTP 426, or a coordinator reporting a version outside our window) raises
+    ``ProtocolVersionMismatch`` — likewise without retrying, because neither
+    machine's version changes while we sleep for two seconds.
     """
     def _print(msg):
         if verbose:
@@ -327,9 +488,27 @@ def _try_register(mesh: "MeshClient", info: dict, retries: int = 3,
                     time.sleep(2)
                     continue
                 raise
-            resp = mesh.call("POST", "/api/register", info)
+            # The version rides in the registration body itself. Older
+            # coordinators ignore unknown keys, so sending it is safe against
+            # every gpumesh ever released — which is what makes this handshake
+            # deployable at all without a flag day.
+            body = dict(info)
+            body["protocol_version"] = PROTOCOL_VERSION
+            try:
+                resp = mesh.call("POST", "/api/register", body)
+            except urllib.error.HTTPError as reg_exc:
+                if reg_exc.code == _PROTOCOL_MISMATCH_STATUS:
+                    raise ProtocolVersionMismatch(
+                        _refusal_message(reg_exc), local=PROTOCOL_VERSION,
+                    ) from reg_exc
+                raise
+            _check_coordinator_protocol(resp)
             return resp["worker_id"]
-        except _AuthError:
+        except (_AuthError, ProtocolVersionMismatch):
+            # Both are permanent refusals with a specific cause. Letting them
+            # fall through to the retry/except-URLError arm below would spend
+            # three attempts on a fact that cannot change, and then report the
+            # result as a connection failure.
             raise
         except (urllib.error.URLError, OSError, json.JSONDecodeError) as exc:
             last_exc = exc
@@ -397,6 +576,129 @@ def _diagnostics_report(task_id: str, error: Exception,
     return report
 
 
+def _classify_result_status(code: int):
+    """What an HTTP status means for a result we are already holding.
+
+    Returns ``None`` for "try again"; anything else is a final outcome.
+
+    * **401** — the coordinator does not accept this token. A token does not
+      change while we sleep, and the main loop needs to hear about it rather
+      than watch a retry counter tick, so this is final and distinct.
+    * **409** — ``complete_task`` matched no row: the lease expired and the
+      task was re-leased and completed by somebody else, or the job was
+      cancelled. Our copy really is obsolete. This is the one case where
+      dropping a computed result is correct, and it is worth being precise
+      about — retrying it would be holding an answer nobody is waiting for
+      while the queue behind us goes unserved.
+    * **408 / 429** — the two 4xx that explicitly mean "later". Retried.
+    * **other 4xx** — the coordinator refuses these bytes, and the next
+      attempt would send the same bytes. Retrying is a slower way to fail.
+      Reported loudly instead, because a worker silently unable to deliver
+      anything is the failure mode that hides worst.
+    * **5xx**, including the 503 a shutting-down coordinator sends — a
+      statement about the coordinator's moment, not about our request. It is
+      expected back; that is precisely what the budget is for.
+    """
+    if code == 401:
+        return AUTH_FAILED
+    if code == 409:
+        return OBSOLETE
+    if code in (408, 429):
+        return None
+    if 400 <= code < 500:
+        return UNDELIVERABLE
+    return None
+
+
+def _deliver_result(mesh: "MeshClient", payload: dict,
+                    stop: "threading.Event | None" = None) -> str:
+    """POST a task outcome, holding on to it until it lands or cannot.
+
+    The worker is the right place for this. It is the side that owns the only
+    copy, and it is already built to outlive coordinator outages — it
+    re-registers and reconnects indefinitely and, by its own contract, never
+    exits on its own. Giving up after a single POST was the one place that
+    contract did not hold, and it was the place where giving up cost the most.
+
+    *stop* stays responsive throughout: the wait between attempts is the event
+    itself, so a shutdown wakes it immediately rather than at the end of a
+    fifteen-second backoff.
+    """
+    if stop is None:
+        stop = threading.Event()
+    task_id = payload.get("task_id", "?")
+    started = time.monotonic()
+    delay = RESULT_RETRY_BASE
+    attempts = 0
+    warned = False
+    while True:
+        attempts += 1
+        try:
+            mesh.call("POST", "/api/result", payload,
+                      timeout=RESULT_POST_TIMEOUT)
+            if warned:
+                safe_print(f"{bold(cyan('[worker]'))} result for "
+                           f"{bold(str(task_id))} {green('delivered')} on "
+                           f"attempt {yellow(str(attempts))}")
+            return DELIVERED
+        except urllib.error.HTTPError as exc:
+            final = _classify_result_status(exc.code)
+            if final == OBSOLETE:
+                safe_print(f"{bold(cyan('[worker]'))} result for "
+                           f"{bold(str(task_id))} {yellow('no longer wanted')} "
+                           f"(HTTP 409) — the task was re-leased or cancelled; "
+                           f"discarding it")
+                return OBSOLETE
+            if final == AUTH_FAILED:
+                return AUTH_FAILED
+            if final is not None:
+                safe_print(f"{bold(cyan('[worker]'))} {red('WARNING')}: the "
+                           f"coordinator refused the result for "
+                           f"{bold(str(task_id))} with HTTP {exc.code} — "
+                           f"retrying cannot change that, so the result is "
+                           f"lost and the task will be re-run when its lease "
+                           f"expires")
+                return UNDELIVERABLE
+            reason = f"HTTP {exc.code}"
+        except (urllib.error.URLError, OSError) as exc:
+            reason = str(getattr(exc, "reason", exc))
+        except Exception as exc:
+            # A coordinator that answered with something unparseable is still
+            # a coordinator having a bad moment, and the result is still worth
+            # more than our certainty about why the call failed.
+            reason = f"{type(exc).__name__}: {exc}"
+
+        # Re-read the event every pass: a shutdown can arrive mid-retry, and
+        # from that moment the budget is the operator's patience, not the
+        # coordinator's.
+        shutting_down = stop.is_set()
+        budget = (RESULT_RETRY_SHUTDOWN_BUDGET if shutting_down
+                  else RESULT_RETRY_BUDGET)
+        remaining = budget - (time.monotonic() - started)
+        if remaining <= 0:
+            safe_print(f"{bold(cyan('[worker]'))} {red('WARNING')}: gave up "
+                       f"delivering the result for {bold(str(task_id))} after "
+                       f"{yellow(str(attempts))} attempt(s) ({reason}) — the "
+                       f"task will be re-run when its lease expires")
+            return GAVE_UP
+        if not warned:
+            warned = True
+            safe_print(f"{bold(cyan('[worker]'))} {yellow('could not submit')} "
+                       f"the result for {bold(str(task_id))}: {reason} — "
+                       f"{dim('holding it and retrying')}")
+        wait = min(delay, remaining)
+        if shutting_down:
+            # stop.wait() returns instantly once the event is set, so it can no
+            # longer pace this loop — and a hot loop would burn the whole
+            # shutdown budget in milliseconds. The sleep is capped at a second
+            # so the total stays bounded by the shutdown budget above, which is
+            # itself short enough that nobody notices it.
+            time.sleep(min(wait, 1.0))
+        else:
+            stop.wait(wait)
+        delay = min(delay * RESULT_RETRY_FACTOR, RESULT_RETRY_MAX)
+
+
 def run_worker(url: str, token: str, task_timeout: float = 240.0,
                safe_mode: bool = False, persist_connection: bool = True,
                stop_event: "threading.Event | None" = None):
@@ -436,6 +738,28 @@ def run_worker(url: str, token: str, task_timeout: float = 240.0,
         safe_print(f"  Check your saved token: {cyan('gpumesh show-connection')}")
         safe_print(f"  Then rejoin with: {cyan(f'gpumesh join {url} --token <CORRECT_TOKEN>')}")
         return
+    except ProtocolVersionMismatch as exc:
+        # Deliberately ahead of the URLError branch below and of the generic
+        # "failed to register" one. A version skew is not a network problem,
+        # and the troubleshooting block those branches print — firewalls,
+        # 10061 vs 10060, "is the coordinator running?" — is advice that sends
+        # the operator to inspect a network that is working perfectly. The
+        # saved connection is left alone for the same reason: the URL and the
+        # token are both fine, so clearing them would turn one clear problem
+        # into two.
+        safe_print(f"{bold(cyan('[worker]'))} {red('protocol version mismatch')} — "
+                   f"not joining {yellow(url)}")
+        for line in textwrap.wrap(str(exc), width=76):
+            safe_print(f"  {line}")
+        safe_print(f"  This worker: gpumesh {bold(__version__)}, protocol "
+                   f"{bold(str(PROTOCOL_VERSION))} "
+                   f"(accepts {MIN_PROTOCOL_VERSION}-{PROTOCOL_VERSION})")
+        # Built outside the f-string: an escaped quote inside an f-string
+        # expression is a SyntaxError before Python 3.12, and this package
+        # still supports 3.9.
+        probe = "curl -H 'X-Auth-Token: <token>' " + url + "/api/health"
+        safe_print(f"  Ask the coordinator for its numbers with: {dim(probe)}")
+        return
     except (urllib.error.URLError, OSError) as exc:
         # Decode the specific underlying error for better guidance.
         #
@@ -458,11 +782,20 @@ def run_worker(url: str, token: str, task_timeout: float = 240.0,
             or "timed out" in text.lower()
         )
         safe_print(f"{bold(cyan('[worker]'))} {red('failed to register')} with coordinator after retries: {exc}")
-        # Best-effort: clear any possibly-stale saved connection so a bad
-        # URL/token doesn't persist and silently break future runs.
+        # Clear the saved connection only when the address that just failed is
+        # the saved one. The point is to stop a dead URL persisting and
+        # silently breaking later commands — but this used to clear
+        # unconditionally, so a single mistyped `gpumesh join` destroyed a
+        # perfectly good saved connection to an entirely different
+        # coordinator, and the next `gpumesh submit` (which reads that config)
+        # failed for a reason the user had no way to connect to what they did.
+        # Failing to reach one address says nothing about another.
         try:
             from . import connection_manager
-            connection_manager.clear_connection()
+            saved = connection_manager.load_connection() or {}
+            saved_url = (saved.get("url") or "").rstrip("/").lower()
+            if saved_url and saved_url == (url or "").rstrip("/").lower():
+                connection_manager.clear_connection()
         except Exception:
             pass
         safe_print()
@@ -573,6 +906,22 @@ def run_worker(url: str, token: str, task_timeout: float = 240.0,
 
     threading.Thread(target=heartbeat, daemon=True).start()
 
+    def submit(payload: dict) -> str:
+        """Deliver one task outcome, and act on the one outcome that ends us.
+
+        A 401 here means the same thing it means everywhere else in this file:
+        the coordinator was restarted with a different token. The heartbeat
+        thread and the lease loop both stop on it, and a worker that kept
+        computing results it can never deliver would be worse than useless.
+        """
+        outcome = _deliver_result(mesh, payload, stop)
+        if outcome == AUTH_FAILED:
+            safe_print(f"{bold(cyan('[worker]'))} {red('authentication failed')} "
+                       f"— the coordinator restarted with a different token. "
+                       f"Exiting.")
+            stop.set()
+        return outcome
+
     done = failed = 0
     backoff = POLL_INTERVAL
     # Fast right after a task, slow when idle — see BUSY_POLL_INTERVAL above.
@@ -600,13 +949,37 @@ def run_worker(url: str, token: str, task_timeout: float = 240.0,
                     safe_print("  The coordinator was restarted with a different token. Exiting.")
                     stop.set()
                     break
+                except ProtocolVersionMismatch as exc:
+                    # The coordinator was restarted on a different gpumesh
+                    # version while we were away — the one upgrade path an
+                    # operator actually takes. Without this arm the mismatch
+                    # would land in the generic `except Exception` below and
+                    # the worker would retry every two seconds forever,
+                    # silently, which is exactly the failure mode this whole
+                    # handshake exists to delete.
+                    safe_print(f"{bold(cyan('[worker]'))} {red('protocol version mismatch')} "
+                               f"after reconnection — the coordinator was restarted "
+                               f"on an incompatible gpumesh version")
+                    for line in textwrap.wrap(str(exc), width=76):
+                        safe_print(f"  {line}")
+                    stop.set()
+                    break
                 except Exception:
-                    # Coordinator still unreachable — wait and retry, never exit.
-                    time.sleep(2)
+                    # Coordinator still unreachable — wait and retry, never
+                    # exit. stop.wait rather than time.sleep: a plain sleep
+                    # here cannot see the stop event, so a worker asked to
+                    # shut down kept sleeping out the full interval first.
+                    stop.wait(2)
                     continue
 
+            # Captured, not re-read at result time. complete_task matches the
+            # worker_id recorded on the row when it was leased, so a worker
+            # that re-registered in between must still report under the
+            # identity that holds the lease — otherwise the write matches
+            # nothing and a finished task looks abandoned.
+            lease_worker_id = _state["worker_id"]
             try:
-                task = mesh.call("POST", "/api/lease", {"worker_id": _state["worker_id"]})
+                task = mesh.call("POST", "/api/lease", {"worker_id": lease_worker_id})
             except urllib.error.HTTPError as exc:
                 if exc.code == 401:
                     safe_print(f"{bold(cyan('[worker]'))} {red('authentication failed')} — the coordinator restarted with a different token. Exiting.")
@@ -614,7 +987,7 @@ def run_worker(url: str, token: str, task_timeout: float = 240.0,
                 # Coordinator answered but doesn't know us → re-register soon.
                 with _state_lock:
                     _state["need_reregister"] = True
-                time.sleep(POLL_INTERVAL)
+                stop.wait(POLL_INTERVAL)
                 continue
             except Exception as exc:
                 # Coordinator unreachable. NEVER exit: retry with capped backoff
@@ -625,7 +998,13 @@ def run_worker(url: str, token: str, task_timeout: float = 240.0,
                     safe_print(f"{bold(cyan('[worker]'))} {yellow('coordinator unreachable')}: {exc}")
                     safe_print(f"{bold(cyan('[worker]'))} {dim('will keep retrying and auto-reconnect when it returns — no action needed')}")
                     unreachable_notice_shown = True
-                time.sleep(backoff)
+                # The worst of the three: backoff climbs to 60s, so a plain
+                # sleep meant a worker told to stop during an outage kept
+                # running for up to a minute — long enough for a test's
+                # teardown to give up on it and leave the thread alive for the
+                # rest of the process, and long enough for Ctrl+C to feel
+                # broken.
+                stop.wait(backoff)
                 backoff = min(backoff * 2, 60.0)
                 continue
 
@@ -665,14 +1044,10 @@ def run_worker(url: str, token: str, task_timeout: float = 240.0,
                         timeout=task_timeout, device=info["device"],
                     )
                 elapsed = round(time.time() - started, 2)
-                try:
-                    mesh.call("POST", "/api/result", {
-                        "task_id": task["task_id"], "worker_id": _state["worker_id"],
-                        "ok": True, "result": result, "elapsed": elapsed,
-                    })
-                except (urllib.error.URLError, OSError) as e:
-                    safe_print(f"{bold(cyan('[worker]'))} {yellow('WARNING')}: failed to submit result for "
-                          f"{bold(task['task_id'])}: {e}")
+                submit({
+                    "task_id": task["task_id"], "worker_id": lease_worker_id,
+                    "ok": True, "result": result, "elapsed": elapsed,
+                })
                 done += 1
                 safe_print(f"{bold(cyan('[worker]'))} task {bold(task['task_id'])} {green('done')} in {dim(str(elapsed))}s "
                       f"(total done={yellow(str(done))})")
@@ -685,32 +1060,36 @@ def run_worker(url: str, token: str, task_timeout: float = 240.0,
                 if diag.get("gpu_delta_mb") is not None:
                     gpu_delta_val = diag['gpu_delta_mb']
                     safe_print(f"{bold(cyan('[worker]'))} GPU memory delta: {yellow(f'{gpu_delta_val:+.1f}')} MB")
-                try:
-                    mesh.call("POST", "/api/result", {
-                        "task_id": task["task_id"], "worker_id": _state["worker_id"],
-                        "ok": False, "error": str(e),
-                        # Deterministic failures (the task raised) are marked so
-                        # the coordinator fails them at once instead of retrying.
-                        "user_error": getattr(e, "user_error", False),
-                        "diagnostics": diag,
-                    })
-                except (urllib.error.URLError, OSError) as submit_err:
-                    safe_print(f"{bold(cyan('[worker]'))} {yellow('WARNING')}: failed to submit error for "
-                          f"{bold(task['task_id'])}: {submit_err}")
+                # Retried on the same terms as a success. A failure report is
+                # not free either: lose it and the coordinator sees a silent
+                # lease expiry, re-runs a task that is going to fail the same
+                # way, and burns an attempt telling nobody anything.
+                submit({
+                    "task_id": task["task_id"], "worker_id": lease_worker_id,
+                    "ok": False, "error": str(e),
+                    # Deterministic failures (the task raised) are marked so
+                    # the coordinator fails them at once instead of retrying.
+                    "user_error": getattr(e, "user_error", False),
+                    "diagnostics": diag,
+                })
                 failed += 1
             except Exception as e:
                 diag = _diagnostics_report(task["task_id"], e, started, start_resources)
                 safe_print(f"{bold(cyan('[worker]'))} {red('ERROR')}: unexpected error executing task: "
                       f"{type(e).__name__}: {e}")
                 try:
-                    mesh.call("POST", "/api/result", {
+                    submit({
                         "task_id": task["task_id"],
-                        "worker_id": _state["worker_id"],
+                        "worker_id": lease_worker_id,
                         "ok": False,
                         "error": f"Unexpected error: {type(e).__name__}: {e}",
                         "diagnostics": diag,
                     })
                 except Exception:
+                    # _deliver_result already contains every failure it can
+                    # name; this arm only exists so an unexpected error in the
+                    # reporting of an unexpected error cannot take the worker
+                    # down with it.
                     pass
                 failed += 1
             finally:
@@ -729,14 +1108,16 @@ def run_worker(url: str, token: str, task_timeout: float = 240.0,
         safe_print(f"\n{bold(cyan('[worker]'))} leaving mesh (done={green(str(done))}, failed={red(str(failed))})")
     finally:
         stop.set()
-        # Best-effort status report to coordinator on exit
+        # Best-effort status report to coordinator on exit. Kept on a short
+        # timeout: this runs while the user is waiting for Ctrl+C to take
+        # effect, and the coordinator is often the thing that just went away.
         try:
             mesh.call("POST", "/api/heartbeat", {
                 "worker_id": _state["worker_id"],
                 "status": "shutting_down",
                 "done": done,
                 "failed": failed,
-            })
+            }, timeout=5.0)
         except Exception:
             pass
         # GPU cleanup: release any cached CUDA memory
@@ -818,12 +1199,32 @@ def run_worker_broadcast(token: str, claim_port: int = 0,
         if self.path != "/api/claim":
             return _orig_do_POST(self)
 
+        # Answer these here rather than delegating to _orig_do_POST. The
+        # delegation used to matter and then stopped: the original handler
+        # calls _read_json() again, and the body it wants was already pulled
+        # off the socket by the call above, so the second read blocked until
+        # the connection died — one malformed claim body permanently cost this
+        # worker its ability to be claimed. claimer._read_json is now
+        # re-entry-safe and answers these cases itself, and claimer._send is
+        # first-response-wins, which made the delegation a silent no-op. A
+        # no-op that reads like a fallback is worse than no fallback, so it is
+        # gone. What is left mirrors claimer.ClaimHandler.do_POST exactly:
+        # the _send calls below are the ones _read_json already made, kept so
+        # the two handlers stay legible as the same handler, and swallowed by
+        # the first-response-wins guard.
         try:
             body = self._read_json()
-        except (UnicodeDecodeError, json.JSONDecodeError):
-            return _orig_do_POST(self)
-        if body is None or not isinstance(body, dict):
-            return _orig_do_POST(self)
+        except UnicodeDecodeError:
+            self._send(400, {"error": "request body must be UTF-8"})
+            return
+        except json.JSONDecodeError:
+            self._send(400, {"error": "invalid JSON"})
+            return
+        if body is None:
+            # _read_json has already answered — rate limit, framing, size, or
+            # shape (a non-dict JSON body is refused there, which is why there
+            # is no isinstance check here).
+            return
 
         # Validate token OUTSIDE the lock (read-only check, no lock needed)
         token_val = body.get("token", "")

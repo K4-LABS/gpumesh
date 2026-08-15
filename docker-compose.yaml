@@ -1,6 +1,12 @@
 # Coordinator + N workers.
 #
-#     GPUMESH_TOKEN=mysecret docker compose up -d
+#     export GPUMESH_TOKEN=$(python -c "import secrets; print(secrets.token_urlsafe(32))")
+#     docker compose up -d
+#
+# Generate the token, do not invent one. It is the only thing standing between
+# anyone who can reach these ports and arbitrary code execution as the
+# container's user, and a short memorable token is exactly what a scanner
+# tries first.
 #
 # Both services read GPUMESH_TOKEN from the environment. `:?` fails the run
 # with a readable message when it is unset, instead of starting a coordinator
@@ -8,38 +14,130 @@
 #
 # This uses the published image so the file works on its own. To test local
 # changes instead, replace `image:` with `build: .` in both services.
+#
+# -----------------------------------------------------------------------------
+# NETWORK EXPOSURE — read this before changing the `ports:` block
+# -----------------------------------------------------------------------------
+# There are two different "hosts" in play and they are not the same decision:
+#
+#   1. What the coordinator BINDS to inside its container. It must be
+#      0.0.0.0, because the `worker` service connects to it across the compose
+#      network and a loopback bind inside the container answers nothing from
+#      outside that container. `gpumesh serve` now defaults to 127.0.0.1, so
+#      this is passed explicitly below via GPUMESH_HOST.
+#
+#   2. What Docker PUBLISHES on the machine running compose. This is the one
+#      that matters for safety. `"8732:8732"` — the old value here — binds
+#      0.0.0.0 on the host, which means the coordinator is reachable from
+#      every network the machine is attached to: the office LAN, the coffee
+#      shop wifi, and on many home routers the public internet via UPnP. A
+#      coordinator accepts serialized callables and runs them. Publishing it
+#      to a whole LAN by default, in a file people copy-paste, is not a
+#      reasonable default no matter how good the token is.
+#
+#      So the host side is pinned to 127.0.0.1 and the opt-in is explicit:
+#
+#          # local only (default)
+#          docker compose up -d
+#
+#          # deliberately reachable from other machines on your LAN
+#          GPUMESH_BIND=0.0.0.0 docker compose up -d
+#
+#      Set GPUMESH_BIND to a specific interface address rather than 0.0.0.0
+#      when you can — e.g. GPUMESH_BIND=192.168.1.50 exposes it on the LAN
+#      without also exposing it on a VPN or a hotspot interface.
+# -----------------------------------------------------------------------------
+
 services:
   coordinator:
-    image: samurai007ak/gpumesh:latest
+    # Pinned to a version, not `latest`. `latest` means two machines that ran
+    # `docker compose pull` a month apart are running different code while
+    # this file claims they are running the same thing — and in a system whose
+    # wire format is pickled Python, a version skew between coordinator and
+    # worker is a real failure, not a cosmetic one. Bump this line with the
+    # release.
+    image: samurai007ak/gpumesh:2.0.0
     ports:
-      - "${GPUMESH_PORT:-8732}:8732"
-      - "48900:48900/udp"
+      # host-side bind : container port. See the note above.
+      - "${GPUMESH_BIND:-127.0.0.1}:${GPUMESH_PORT:-8732}:8732"
+      # UDP discovery broadcast. Also loopback-bound by default; discovery is
+      # a convenience for finding a coordinator on a LAN and is not needed at
+      # all for this compose file, where the worker is given an explicit URL.
+      - "${GPUMESH_BIND:-127.0.0.1}:48900:48900/udp"
     environment:
-      - GPUMESH_TOKEN=${GPUMESH_TOKEN:?set GPUMESH_TOKEN, e.g. GPUMESH_TOKEN=mysecret docker compose up -d}
+      - GPUMESH_TOKEN=${GPUMESH_TOKEN:?not set. Generate a strong one - see the header of this file for the command. Do not invent a short memorable token.}
+      # Container stdout is a pipe, never a terminal, so gpumesh's isatty()
+      # probe would strip colour from `docker compose logs` output. This says
+      # "yes, colour it anyway". Both this and the --color flag below now do
+      # the same thing — the flag used to be accepted and ignored, so this
+      # variable was the only one of the pair that worked. Keeping both is
+      # deliberate: drop the variable and the flag alone still covers the
+      # process, drop the flag and the variable alone still covers it, and
+      # the variable additionally reaches the task subprocesses the worker
+      # spawns.
       - GPUMESH_COLOR=1
-    command: serve --port 8732 --color
+      # Bind inside the container only. Docker's own port publishing above is
+      # what controls reachability from outside; this is case (1) in the note.
+      - GPUMESH_HOST=0.0.0.0
+    # --host is passed explicitly as well as via GPUMESH_HOST so the command
+    # is self-describing when someone reads `docker compose ps`.
+    #
+    # Swap --color for --no-color if you ship these logs somewhere that shows
+    # escape sequences literally (some log aggregators do).
+    command: serve --host 0.0.0.0 --port 8732 --color
     volumes:
-      - gpumesh_data:/root/.gpumesh
+      # The image sets WORKDIR=/data and HOME=/data. The coordinator's
+      # database is created at the relative path ./gpumesh.db, and
+      # ~/.gpumesh/config.json holds the saved connection and token — so both
+      # live under /data and one mount covers them.
+      #
+      # This previously mounted /root/.gpumesh, which was wrong twice over:
+      # the container no longer runs as root, and the database was never in
+      # that directory to begin with. It was written to /gpumesh.db and lost
+      # on every `docker compose down`.
+      - gpumesh_data:/data
     healthcheck:
       test: ["CMD", "nc", "-z", "localhost", "8732"]
       interval: 10s
       timeout: 3s
       retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    # Defence in depth for a service that runs code it was sent. The image
+    # already drops to UID 10001; these stop a compromised task from
+    # re-acquiring privilege inside the container.
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
 
   worker:
-    image: samurai007ak/gpumesh:latest
+    image: samurai007ak/gpumesh:2.0.0
     depends_on:
       coordinator:
         condition: service_healthy
     environment:
-      - GPUMESH_TOKEN=${GPUMESH_TOKEN:?set GPUMESH_TOKEN, e.g. GPUMESH_TOKEN=mysecret docker compose up -d}
+      - GPUMESH_TOKEN=${GPUMESH_TOKEN:?not set. Generate a strong one - see the header of this file for the command. Do not invent a short memorable token.}
+      # See the note on the coordinator's GPUMESH_COLOR above.
       - GPUMESH_COLOR=1
     # The coordinator URL is a required positional argument — `join` on its
     # own exits with "the following arguments are required: url".
+    #
+    # `coordinator` resolves over the compose network to the container's own
+    # address, which is why the coordinator has to bind 0.0.0.0 rather than
+    # loopback. Nothing here is published to the host.
+    #
+    # --color goes after the URL. It takes no value, so the order does not
+    # actually matter, but keeping flags after the positional is the form
+    # every example uses.
     command: join http://coordinator:8732 --color
     deploy:
       replicas: ${WORKER_REPLICAS:-2}
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
 
 volumes:
   gpumesh_data:

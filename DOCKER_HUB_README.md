@@ -25,13 +25,37 @@
          │   └────┬─────┘     └────┬─────┘           │
          │        │                │                 │
          │   ┌────▼────────────────▼────┐            │
-         │   │       T4 (12.0)        │              │
-         │   │     running tasks      │              │
+         │   │        T4 (12.0)         │            │
+         │   │      running tasks       │            │
          │   └──────────────────────────┘            │
          │                                           │
          │   >>> results collected automatically     │
          └─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─┘
 ```
+
+---
+
+> [!CAUTION]
+> **gpumesh runs code you send it, on machines that trust you. There is no sandbox.**
+>
+> A worker executes arbitrary Python as the OS user that started it — same
+> files, same GPUs, same network, same credentials. A valid token is not a
+> password guarding data; it is a licence to execute code on every machine in
+> the mesh.
+>
+> It runs **both ways**: a worker's results are deserialized by whoever
+> submitted the task, so a hostile worker executes code on the submitter.
+>
+> gpumesh provides **no sandbox** and does not try to. Two consequences for
+> anyone running this image:
+>
+> - Publish the port to `127.0.0.1` unless you deliberately want other
+>   machines to join — `-p 127.0.0.1:8732:8732`, not `-p 8732:8732`.
+> - Generate a real token:
+>   `python -c "import secrets; print(secrets.token_urlsafe(32))"`.
+>
+> Read [SECURITY.md](https://github.com/Samurai007AK/gpumesh/blob/main/SECURITY.md)
+> and [THREAT_MODEL.md](https://github.com/Samurai007AK/gpumesh/blob/main/THREAT_MODEL.md).
 
 ---
 
@@ -52,34 +76,60 @@
 
 ## ⚡ Quick Start (30 seconds)
 
+### 0️⃣ Generate a Token
+
+```bash
+export GPUMESH_TOKEN=$(python -c "import secrets; print(secrets.token_urlsafe(32))")
+```
+
+The token is the only thing between anyone who can reach the port and code
+execution as the container's user. Do not use a memorable one.
+
 ### 1️⃣ Start a Coordinator
 
 ```bash
 docker run -d \
   --name gpumesh-coordinator \
-  -p 8732:8732 \
-  -e GPUMESH_TOKEN=mysecret \
-  samurai007ak/gpumesh:latest \
-  serve --port 8732 --token mysecret
+  -p 127.0.0.1:8732:8732 \
+  -e GPUMESH_TOKEN \
+  samurai007ak/gpumesh:2.0.0 \
+  serve --host 0.0.0.0 --port 8732
 ```
+
+Two different "hosts" are in play here, and they are separate decisions:
+
+| | What it controls | Value above |
+|---|---|---|
+| `serve --host` | What the coordinator binds to **inside** the container. Must be `0.0.0.0` — a loopback bind inside a container answers nothing, including the published port | `0.0.0.0` |
+| `-p <host-side>:8732` | What Docker publishes on the **machine running Docker**. This is the one that decides who can reach you | `127.0.0.1` — this machine only |
+
+Drop the `127.0.0.1:` prefix, or better name a specific interface
+(`-p 192.0.2.10:8732:8732`), only when you deliberately want other machines to
+join. Plain `-p 8732:8732` binds every interface the host has — office wifi,
+coffee-shop wifi, and on many home routers the public internet via UPnP.
 
 ### 2️⃣ Join a Worker
 
 ```bash
 docker run -d \
   --name gpumesh-worker \
-  -e GPUMESH_URL=http://coordinator-ip:8732 \
-  -e GPUMESH_TOKEN=mysecret \
-  samurai007ak/gpumesh:latest \
-  join http://coordinator-ip:8732 --token mysecret
+  -e GPUMESH_TOKEN \
+  samurai007ak/gpumesh:2.0.0 \
+  join http://coordinator-ip:8732
 ```
+
+> `join` takes the coordinator URL as a positional argument — there is no
+> `GPUMESH_URL` to set here. Both `serve` and `join` read `GPUMESH_TOKEN` from
+> the environment, so `-e GPUMESH_TOKEN` is enough and the token stays out of
+> `docker ps` output.
 
 ### 3️⃣ Use Your Mesh
 
 ```python
+import os
 from gpumesh import GPUMesh, accelerate
 
-mesh = GPUMesh("http://coordinator:8732", token="mysecret")
+mesh = GPUMesh("http://coordinator:8732", token=os.environ["GPUMESH_TOKEN"])
 
 @accelerate(mesh)
 def train(lr, epochs):
@@ -96,7 +146,7 @@ results = train.map([{"lr": 0.01}, {"lr": 0.05}, {"lr": 0.1}])
 | Tag | Description |
 |-----|-------------|
 | `latest` | Latest stable release |
-| `1.3.0` | Version 1.3.0 (reachability release) |
+| `2.0.0` | Version 2.0.0 (loopback-default release) |
 
 ### Pull Commands
 
@@ -105,61 +155,100 @@ results = train.map([{"lr": 0.01}, {"lr": 0.05}, {"lr": 0.1}])
 docker pull samurai007ak/gpumesh:latest
 
 # Specific version
-docker pull samurai007ak/gpumesh:1.3.0
+docker pull samurai007ak/gpumesh:2.0.0
 ```
 
 ---
 
 ## 🎯 Docker Compose (Recommended)
 
-Create a `docker-compose.yml`:
+Create a `docker-compose.yml`. This mirrors the
+[file in the repository](https://github.com/Samurai007AK/gpumesh/blob/main/docker-compose.yaml),
+which carries the full reasoning in comments:
 
 ```yaml
 services:
   coordinator:
-    image: samurai007ak/gpumesh:latest
+    # Pinned, not `latest`. The wire format is pickled Python, so a version
+    # skew between coordinator and worker is a real failure, not a cosmetic one.
+    image: samurai007ak/gpumesh:2.0.0
     ports:
-      - "8732:8732"
-      - "48900:48900/udp"
+      # host-side bind : container port.
+      # GPUMESH_BIND defaults to 127.0.0.1 — this machine only. Set it to
+      # 0.0.0.0 (or better, one interface address) to accept other machines.
+      - "${GPUMESH_BIND:-127.0.0.1}:${GPUMESH_PORT:-8732}:8732"
+      - "${GPUMESH_BIND:-127.0.0.1}:48900:48900/udp"
     environment:
-      - GPUMESH_TOKEN=mysecret
+      - GPUMESH_TOKEN=${GPUMESH_TOKEN:?set GPUMESH_TOKEN, e.g. GPUMESH_TOKEN=$(python -c "import secrets; print(secrets.token_urlsafe(32))") docker compose up -d}
       - GPUMESH_COLOR=1
-    command: serve --port 8732 --color
+      # Bind inside the container. Must be 0.0.0.0 — the worker service
+      # reaches it across the compose network.
+      - GPUMESH_HOST=0.0.0.0
+    command: serve --host 0.0.0.0 --port 8732
     volumes:
-      - gpumesh_data:/root/.gpumesh
+      # The image sets WORKDIR=/data and HOME=/data, so the SQLite database
+      # and ~/.gpumesh/config.json both live here. One mount covers both.
+      - gpumesh_data:/data
     healthcheck:
       test: ["CMD", "nc", "-z", "localhost", "8732"]
       interval: 10s
       timeout: 3s
       retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    # Defence in depth for a service that runs code it was sent. The image
+    # already drops to UID 10001; these stop a compromised task from
+    # re-acquiring privilege inside the container.
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
 
   worker:
-    image: samurai007ak/gpumesh:latest
+    image: samurai007ak/gpumesh:2.0.0
     depends_on:
       coordinator:
         condition: service_healthy
     environment:
-      - GPUMESH_TOKEN=mysecret
+      - GPUMESH_TOKEN=${GPUMESH_TOKEN:?set GPUMESH_TOKEN}
       - GPUMESH_COLOR=1
     # The coordinator URL is a required positional argument — `join` on its
     # own exits with "the following arguments are required: url".
-    command: join http://coordinator:8732 --color
+    command: join http://coordinator:8732
     deploy:
-      replicas: 2
+      replicas: ${WORKER_REPLICAS:-2}
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
 
 volumes:
   gpumesh_data:
 ```
 
+`GPUMESH_TOKEN` is required — `:?` stops the run with a readable message when
+it is unset, rather than starting a coordinator with a random token that no
+worker could authenticate against.
+
+Nothing in this file is published beyond `127.0.0.1` by default. The workers
+reach the coordinator over the compose network, which needs no host
+publishing at all.
+
 Then run:
 
 ```bash
-# Start coordinator + 2 workers
+# Generate a token once
+export GPUMESH_TOKEN=$(python -c "import secrets; print(secrets.token_urlsafe(32))")
+
+# Start coordinator + 2 workers, reachable from this machine only
 docker compose up -d
 
 # Scale to 4 workers
-docker compose up -d --scale worker=4
+WORKER_REPLICAS=4 docker compose up -d
+
+# Deliberately reachable from other machines on your LAN
+GPUMESH_BIND=0.0.0.0 docker compose up -d
 
 # View logs
 docker compose logs -f
@@ -193,7 +282,8 @@ results = preprocess.map([
 
 | Scenario | What Happens |
 |----------|--------------|
-| `func(x)` | Runs on best LOCAL device |
+| `func(x)`, workers alive | Runs as a single task on one mesh worker |
+| `func(x)`, no workers | Runs on the best LOCAL device (CPU/GPU) |
 | `func.map()` | Spreads across ALL mesh devices |
 | Mesh unreachable | Falls back to LOCAL execution |
 | `GPUMESH_LOCAL=1` | Forces local-only |
@@ -228,16 +318,24 @@ def heavy_computation(data):
 
 ## 📈 Benchmark Scoring
 
-Each worker runs a benchmark on join and gets a **0-100 score**:
+Each worker runs a benchmark on join and gets a score of
+`gflops * 0.7 + bandwidth_gbps * 0.3` — a **relative, unbounded** number with no
+normalisation and no ceiling. It only means something next to the other workers
+in your pool, and the scheduler uses it purely to rank them.
+
+Rough magnitudes, so the numbers `gpumesh workers` prints make sense:
 
 ```
-  Score      Typical GPU        Use Case
-  ─────      ───────────        ────────
-  80-100     RTX 4090, A100     Heavy training, large models
-  50-80      RTX 3080, 3090     Medium training, inference
-  20-50      RTX 3060, T4       Light tasks, preprocessing
-  0-20       CPU only           Very light tasks
+  Score       Typical GPU        Use Case
+  ─────       ───────────        ────────
+  ~100+       RTX 4090, A100     Heavy training, large models
+  ~50-100     RTX 3080, 3090     Medium training, inference
+  ~10-50      RTX 3060, T4       Light tasks, preprocessing
+  under 1     CPU only           Very light tasks
 ```
+
+Illustrative, not a scale — a laptop CPU commonly lands around `0.24`, and
+faster hardware than anything listed simply scores higher.
 
 ---
 
@@ -245,11 +343,15 @@ Each worker runs a benchmark on join and gets a **0-100 score**:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `GPUMESH_TOKEN` | (required) | Authentication token |
-| `GPUMESH_URL` | (worker only) | Coordinator URL |
-| `GPUMESH_PORT` | `8732` | Coordinator port |
-| `GPUMESH_COLOR` | `1` | Enable colored output |
-| `GPUMESH_VERBOSE` | `0` | Verbose logging |
+| `GPUMESH_TOKEN` | (required) | Authentication token. Read by both `serve` and `join` |
+| `GPUMESH_HOST` | `127.0.0.1` | **Bind address inside the container.** Must be `0.0.0.0` for anything outside the container to connect — including the port Docker published. Same as `serve --host` |
+| `GPUMESH_HOST_IP` | (auto) | Advertised address only — which address is *printed* for workers to dial. Does **not** change the bind. Must be an IP literal; a hostname is discarded with a warning and auto-detection used instead |
+| `GPUMESH_BIND` | `127.0.0.1` | Compose only: the **host-side** publish address. This is what decides who can reach the coordinator |
+| `GPUMESH_URL` | (unset) | Coordinator URL for job/monitoring commands (`submit`, `status`, `workers`, ...). `join` takes the URL as a positional argument and ignores this |
+| `GPUMESH_PORT` | `8732` | Host port published by `docker-compose.yaml`; the container always listens on 8732 |
+| `GPUMESH_COLOR` | `auto` | `1` forces colored output, `0` disables it, `auto` checks whether stdout is a TTY. `serve` and `join` also accept `--color` / `--no-color`, which set this variable for the container process and for the function-task subprocesses it spawns |
+| `GPUMESH_CLAIM_HOST` | `0.0.0.0` | Bind address for `gpumesh worker`'s claim port. Unlike `GPUMESH_HOST` it defaults to all interfaces on purpose — a claim server exists to be reached from another machine. Inside a container the boundary is the Docker port publish, so leave it alone unless you are on host networking |
+| `GPUMESH_VERBOSE` | `0` | `1` makes `@mesh` / `@accelerate` print which device handled each task |
 | `GPUMESH_LOCAL` | `0` | Force local-only mode |
 | `WORKER_REPLICAS` | `2` | Number of workers (compose) |
 
@@ -259,14 +361,39 @@ Each worker runs a benchmark on join and gets a **0-100 score**:
 
 | Feature | Status |
 |---------|--------|
-| Token authentication | ✅ All API requests |
+| Loopback by default | ✅ `serve` binds `127.0.0.1`; the compose file publishes to `127.0.0.1` |
+| Non-root container | ✅ Runs as UID 10001, `cap_drop: ALL`, `no-new-privileges` |
+| Token authentication | ✅ All API requests, including reads |
 | Timing-safe comparison | ✅ HMAC compare_digest |
-| Rate limiting | ✅ 5 failures → blocked |
+| Rate limiting | ✅ 5 failures → blocked (loopback exempt) |
 | Process isolation | ✅ Tasks in subprocesses |
 | File permissions | ✅ 0o600 on token files |
 | Token hashing | ✅ SHA-256, in memory only — never written to the database |
 
-> ⚠️ Workers execute code from the coordinator. Only share your URL and token with people you trust.
+Read that as "what raises the cost of an attack", not "what makes this safe".
+None of it is a sandbox.
+
+> ⚠️ **A token is a licence to execute code, not a password guarding data.**
+> Anyone holding your URL and token runs arbitrary Python on every machine in
+> the mesh, as each worker's user. And it runs both ways: results are
+> deserialized by whoever submitted the task, so a hostile worker executes
+> code on the submitter.
+>
+> Generate a real token —
+> `python -c "import secrets; print(secrets.token_urlsafe(32))"`. The hash is
+> a single SHA-256 round with no KDF, so the token's entropy is the whole
+> defence.
+>
+> `serve --safe-mode` refuses function distribution and accepts submitted
+> scripts only. That closes the pickle path; it does not stop a script from
+> doing anything a script can do.
+>
+> Traffic is **not encrypted**. Use `--tailscale` or `--public` when the mesh
+> crosses a network you do not control.
+>
+> Full detail:
+> [SECURITY.md](https://github.com/Samurai007AK/gpumesh/blob/main/SECURITY.md)
+> · [THREAT_MODEL.md](https://github.com/Samurai007AK/gpumesh/blob/main/THREAT_MODEL.md)
 
 ---
 
@@ -302,6 +429,10 @@ Each worker runs a benchmark on join and gets a **0-100 score**:
 - **GitHub:** [github.com/Samurai007AK/gpumesh](https://github.com/Samurai007AK/gpumesh)
 - **PyPI:** [pypi.org/project/gpumesh](https://pypi.org/project/gpumesh/)
 - **Issues:** [github.com/Samurai007AK/gpumesh/issues](https://github.com/Samurai007AK/gpumesh/issues)
+- **HTTP API and wire format:** [docs/protocol.md](https://github.com/Samurai007AK/gpumesh/blob/main/docs/protocol.md)
+- **Public API, versioning and the protocol compatibility window:** [docs/stability.md](https://github.com/Samurai007AK/gpumesh/blob/main/docs/stability.md)
+- **Why not Ray or Dask?** [docs/why-not-ray-or-dask.md](https://github.com/Samurai007AK/gpumesh/blob/main/docs/why-not-ray-or-dask.md)
+- **Runnable examples:** [examples/](https://github.com/Samurai007AK/gpumesh/tree/main/examples)
 
 ---
 
