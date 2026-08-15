@@ -1,0 +1,514 @@
+name: compat
+
+# Version skew, tested for real.
+#
+# The coordinator and the workers are installed separately, on different
+# machines, by different people, and they drift. Nothing in `tests` can catch
+# that: every test there imports one tree and talks to itself, so a change
+# that breaks a 1.3.0 worker passes the whole suite. This workflow installs
+# the current tree and a released gpumesh side by side in two virtualenvs and
+# makes them run a real task over a real socket, in both role assignments.
+#
+# Read the git log for why this exists: dd9f0dd (NameError on @mesh tasks when
+# laptops run different Python versions), 5b7dbcd (a torch rename crashing
+# workers), 96eee91 (cross-version payloads refused when no source fallback
+# exists). All three were cross-version failures found by users.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      released_version:
+        description: "Released gpumesh to test against (blank = latest on PyPI)"
+        required: false
+        default: ""
+  # Same reasoning as the weekly run in tests.yml, for a different dependency:
+  # the "released gpumesh" side of this matrix changes without anything in this
+  # repository changing. A scheduled run is what notices that the newest
+  # release on PyPI stopped interoperating with main.
+  schedule:
+    # 06:41 UTC on Mondays — off the hour, and after the tests workflow's 06:17
+    # so the two do not contend for runners.
+    - cron: "41 6 * * 1"
+
+# Deny by default; each job re-grants only what it needs. See the long note in
+# tests.yml — GITHUB_TOKEN otherwise inherits the repository-wide default,
+# which on older repositories is read/write on every scope.
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+env:
+  # A throwaway token for a coordinator bound to loopback on an ephemeral
+  # runner. It is in the file rather than in secrets on purpose: it guards
+  # nothing, and a secret here would only make the workflow harder to run from
+  # a fork, where secrets are not available.
+  GPUMESH_COMPAT_TOKEN: compat-ci-token
+  GPUMESH_COMPAT_PORT: "8765"
+
+jobs:
+  # ── current tree = coordinator, released gpumesh = worker ──────────────
+  #
+  # This is the upgrade order people actually take: the coordinator is the one
+  # machine you administer, so it gets upgraded first and the borrowed laptops
+  # follow whenever their owners get round to it. A released worker sends no
+  # protocol_version at all, so this job is also the test of the absent-version
+  # mapping — if "absent" is ever treated as a mismatch, this job goes red
+  # before anyone's laptop does.
+  released-worker:
+    name: released worker -> current coordinator
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install both versions side by side
+        # Two virtualenvs, not two installs into one environment: pip would
+        # simply resolve the second over the first and the whole point would
+        # be lost. Both run on the SAME interpreter, so any failure here is a
+        # gpumesh version difference and never a Python version difference —
+        # that axis is already covered by the tests workflow's matrix.
+        run: |
+          set -euo pipefail
+          python -m venv .venv-current
+          .venv-current/bin/python -m pip install --upgrade pip
+          .venv-current/bin/pip install -e .
+          python -m venv .venv-released
+          .venv-released/bin/python -m pip install --upgrade pip
+          SPEC="gpumesh"
+          if [ -n "${{ github.event.inputs.released_version }}" ]; then
+            SPEC="gpumesh==${{ github.event.inputs.released_version }}"
+          fi
+          .venv-released/bin/pip install "$SPEC"
+          echo "current  : $(.venv-current/bin/python -c 'import gpumesh; print(gpumesh.__version__)')"
+          echo "released : $(.venv-released/bin/python -c 'import gpumesh; print(gpumesh.__version__)')"
+
+      - name: Write the probe client
+        # Deliberately stdlib-only, and deliberately a SCRIPT job rather than a
+        # function job. A function job would also drag in the cloudpickle
+        # envelope and its own cross-Python rules, and a failure there would
+        # not tell us whether the handshake or the serializer broke. The four
+        # calls this uses (register/lease/result via the worker, jobs/status
+        # via here) are the whole worker contract.
+        run: |
+          cat > compat_probe.py <<'PROBE'
+          import json, sys, time, urllib.error, urllib.request
+
+          URL, TOKEN = sys.argv[1], sys.argv[2]
+
+          SCRIPT = "\n".join([
+              "import json, sys",
+              "payload = json.load(sys.stdin)",
+              "print(json.dumps({'doubled': payload['x'] * 2}))",
+          ])
+
+
+          def call(method, path, body=None, timeout=15):
+              data = json.dumps(body).encode() if body is not None else None
+              req = urllib.request.Request(
+                  URL + path, data=data, method=method,
+                  headers={"Content-Type": "application/json",
+                           "X-Auth-Token": TOKEN})
+              with urllib.request.urlopen(req, timeout=timeout) as resp:
+                  raw = resp.read()
+                  return json.loads(raw) if raw else None
+
+
+          def wait(fn, what, seconds):
+              # Every wait is bounded and every failure names what it was
+              # waiting for. A CI job that hangs teaches nobody anything.
+              deadline = time.time() + seconds
+              last = None
+              while time.time() < deadline:
+                  try:
+                      value = fn()
+                      if value:
+                          return value
+                  except Exception as exc:
+                      last = exc
+                  time.sleep(1)
+              raise SystemExit(f"TIMEOUT after {seconds}s waiting for {what} "
+                               f"(last error: {last})")
+
+
+          health = wait(lambda: call("GET", "/api/health"),
+                        "the coordinator to answer", 90)
+          print("coordinator health:", json.dumps(health, sort_keys=True))
+          print("coordinator protocol_version:",
+                health.get("protocol_version",
+                           "<absent - a release from before the handshake>"))
+
+          workers = wait(
+              lambda: [w for w in call("GET", "/api/workers")["workers"]
+                       if w.get("alive")],
+              "the worker to register", 180)
+          print("registered workers:", json.dumps(workers))
+          # The coordinator is started with --no-self-worker precisely so this
+          # holds. Without it the coordinator's own in-process worker — same
+          # version as the coordinator — could take the task and the job would
+          # pass while proving nothing about cross-version execution.
+          if len(workers) != 1:
+              raise SystemExit(
+                  f"expected exactly 1 worker (the other version), got "
+                  f"{len(workers)}: {workers}")
+
+          job = call("POST", "/api/jobs", {"name": "compat", "script": SCRIPT,
+                                           "payloads": [{"x": 21, "cost": 1}]})
+          status = wait(
+              lambda: (lambda s: s if s.get("finished") else None)(
+                  call("GET", "/api/jobs/%s" % job["job_id"])),
+              "the job to finish", 180)
+          task = status["tasks"][0]
+          print("task:", json.dumps(task))
+          if task["status"] != "done":
+              raise SystemExit(f"task did not succeed: {task}")
+          if task["result"]["doubled"] != 42:
+              raise SystemExit(f"wrong result: {task['result']}")
+          if task["worker_id"] != workers[0]["id"]:
+              raise SystemExit("the task did not run on the other version")
+          print("OK: a real task crossed the version boundary")
+          PROBE
+
+      - name: Start the coordinator (current tree)
+        run: |
+          set -euo pipefail
+          nohup .venv-current/bin/gpumesh serve \
+            --port "$GPUMESH_COMPAT_PORT" \
+            --token "$GPUMESH_COMPAT_TOKEN" \
+            --db compat.db \
+            --no-discovery \
+            --no-self-worker \
+            > coordinator.log 2>&1 &
+          echo $! > coordinator.pid
+
+      - name: Start the worker (released gpumesh)
+        run: |
+          set -euo pipefail
+          nohup .venv-released/bin/gpumesh join \
+            "http://127.0.0.1:$GPUMESH_COMPAT_PORT" \
+            --token "$GPUMESH_COMPAT_TOKEN" \
+            > worker.log 2>&1 &
+          echo $! > worker.pid
+
+      - name: Run a real task across the version boundary
+        run: |
+          python compat_probe.py "http://127.0.0.1:$GPUMESH_COMPAT_PORT" \
+            "$GPUMESH_COMPAT_TOKEN"
+
+      - name: Logs
+        if: always()
+        run: |
+          echo "───── coordinator.log ─────"; cat coordinator.log || true
+          echo "───── worker.log ─────";      cat worker.log || true
+          kill "$(cat worker.pid)" 2>/dev/null || true
+          kill "$(cat coordinator.pid)" 2>/dev/null || true
+
+  # ── released gpumesh = coordinator, current tree = worker ──────────────
+  #
+  # The other half of the skew, and the half no coordinator can police: a
+  # released coordinator has no version gate at all, accepts anything, and
+  # then behaves however the difference makes it behave. The check that has to
+  # catch this lives in the worker, on the registration response — and a
+  # released coordinator answers without a protocol_version field, which is
+  # the absent case again, seen from the opposite end.
+  released-coordinator:
+    name: current worker -> released coordinator
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install both versions side by side
+        run: |
+          set -euo pipefail
+          python -m venv .venv-current
+          .venv-current/bin/python -m pip install --upgrade pip
+          .venv-current/bin/pip install -e .
+          python -m venv .venv-released
+          .venv-released/bin/python -m pip install --upgrade pip
+          SPEC="gpumesh"
+          if [ -n "${{ github.event.inputs.released_version }}" ]; then
+            SPEC="gpumesh==${{ github.event.inputs.released_version }}"
+          fi
+          .venv-released/bin/pip install "$SPEC"
+          echo "current  : $(.venv-current/bin/python -c 'import gpumesh; print(gpumesh.__version__)')"
+          echo "released : $(.venv-released/bin/python -c 'import gpumesh; print(gpumesh.__version__)')"
+
+      - name: Write the probe client
+        run: |
+          cat > compat_probe.py <<'PROBE'
+          import json, sys, time, urllib.error, urllib.request
+
+          URL, TOKEN = sys.argv[1], sys.argv[2]
+
+          SCRIPT = "\n".join([
+              "import json, sys",
+              "payload = json.load(sys.stdin)",
+              "print(json.dumps({'doubled': payload['x'] * 2}))",
+          ])
+
+
+          def call(method, path, body=None, timeout=15):
+              data = json.dumps(body).encode() if body is not None else None
+              req = urllib.request.Request(
+                  URL + path, data=data, method=method,
+                  headers={"Content-Type": "application/json",
+                           "X-Auth-Token": TOKEN})
+              with urllib.request.urlopen(req, timeout=timeout) as resp:
+                  raw = resp.read()
+                  return json.loads(raw) if raw else None
+
+
+          def wait(fn, what, seconds):
+              deadline = time.time() + seconds
+              last = None
+              while time.time() < deadline:
+                  try:
+                      value = fn()
+                      if value:
+                          return value
+                  except Exception as exc:
+                      last = exc
+                  time.sleep(1)
+              raise SystemExit(f"TIMEOUT after {seconds}s waiting for {what} "
+                               f"(last error: {last})")
+
+
+          health = wait(lambda: call("GET", "/api/health"),
+                        "the coordinator to answer", 90)
+          print("coordinator health:", json.dumps(health, sort_keys=True))
+          print("coordinator protocol_version:",
+                health.get("protocol_version",
+                           "<absent - a release from before the handshake>"))
+
+          workers = wait(
+              lambda: [w for w in call("GET", "/api/workers")["workers"]
+                       if w.get("alive")],
+              "the worker to register", 180)
+          print("registered workers:", json.dumps(workers))
+          if len(workers) != 1:
+              raise SystemExit(
+                  f"expected exactly 1 worker (the other version), got "
+                  f"{len(workers)}: {workers}")
+
+          job = call("POST", "/api/jobs", {"name": "compat", "script": SCRIPT,
+                                           "payloads": [{"x": 21, "cost": 1}]})
+          status = wait(
+              lambda: (lambda s: s if s.get("finished") else None)(
+                  call("GET", "/api/jobs/%s" % job["job_id"])),
+              "the job to finish", 180)
+          task = status["tasks"][0]
+          print("task:", json.dumps(task))
+          if task["status"] != "done":
+              raise SystemExit(f"task did not succeed: {task}")
+          if task["result"]["doubled"] != 42:
+              raise SystemExit(f"wrong result: {task['result']}")
+          if task["worker_id"] != workers[0]["id"]:
+              raise SystemExit("the task did not run on the other version")
+          print("OK: a real task crossed the version boundary")
+          PROBE
+
+      - name: Start the coordinator (released gpumesh)
+        run: |
+          set -euo pipefail
+          nohup .venv-released/bin/gpumesh serve \
+            --port "$GPUMESH_COMPAT_PORT" \
+            --token "$GPUMESH_COMPAT_TOKEN" \
+            --db compat.db \
+            --no-discovery \
+            --no-self-worker \
+            > coordinator.log 2>&1 &
+          echo $! > coordinator.pid
+
+      - name: Start the worker (current tree)
+        run: |
+          set -euo pipefail
+          nohup .venv-current/bin/gpumesh join \
+            "http://127.0.0.1:$GPUMESH_COMPAT_PORT" \
+            --token "$GPUMESH_COMPAT_TOKEN" \
+            > worker.log 2>&1 &
+          echo $! > worker.pid
+
+      - name: Run a real task across the version boundary
+        run: |
+          python compat_probe.py "http://127.0.0.1:$GPUMESH_COMPAT_PORT" \
+            "$GPUMESH_COMPAT_TOKEN"
+
+      - name: The worker must not have complained about the protocol
+        # The failure this guards against is subtle: a worker that treats an
+        # unversioned coordinator as a mismatch would print the refusal and
+        # return, the job above would then time out waiting for a worker, and
+        # the log line naming the real cause would scroll past unread. Assert
+        # on it directly.
+        run: |
+          if grep -q "protocol version mismatch" worker.log; then
+            echo "the current worker refused a released coordinator:"
+            cat worker.log
+            exit 1
+          fi
+          echo "OK: no protocol complaint against an unversioned coordinator"
+
+      - name: Logs
+        if: always()
+        run: |
+          echo "───── coordinator.log ─────"; cat coordinator.log || true
+          echo "───── worker.log ─────";      cat worker.log || true
+          kill "$(cat worker.pid)" 2>/dev/null || true
+          kill "$(cat coordinator.pid)" 2>/dev/null || true
+
+  # ── the skew that cannot be installed ──────────────────────────────────
+  #
+  # There is no release on PyPI that speaks a protocol outside the current
+  # window, so the refusal path has nothing real to test against — and it will
+  # stay that way until PROTOCOL_VERSION reaches 3, by which point the refusal
+  # will be running on users' machines for the first time. Rather than skip it,
+  # the skew is synthesised on the wire: a hand-written registration claiming a
+  # version the coordinator cannot support. This asserts the refusal is clean
+  # and well-messaged against a REAL coordinator process, which is more than
+  # the in-process pytest suite can say.
+  refusal:
+    name: an unsupported version is refused cleanly
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install the current tree
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          pip install -e .
+
+      - name: Start the coordinator
+        run: |
+          set -euo pipefail
+          nohup gpumesh serve \
+            --port "$GPUMESH_COMPAT_PORT" \
+            --token "$GPUMESH_COMPAT_TOKEN" \
+            --db refusal.db \
+            --no-discovery \
+            --no-self-worker \
+            > coordinator.log 2>&1 &
+          echo $! > coordinator.pid
+
+      - name: Assert the refusal names both versions and the fix
+        run: |
+          cat > refusal_probe.py <<'PROBE'
+          import json, sys, time, urllib.error, urllib.request
+
+          from gpumesh import MIN_PROTOCOL_VERSION, PROTOCOL_VERSION
+
+          URL, TOKEN = sys.argv[1], sys.argv[2]
+          INFO = {"hostname": "compat-ci", "device": "cpu",
+                  "device_name": "synthetic", "score": 1.0}
+
+
+          def register(version=None):
+              body = dict(INFO)
+              if version is not None:
+                  body["protocol_version"] = version
+              req = urllib.request.Request(
+                  URL + "/api/register", data=json.dumps(body).encode(),
+                  method="POST",
+                  headers={"Content-Type": "application/json",
+                           "X-Auth-Token": TOKEN})
+              try:
+                  with urllib.request.urlopen(req, timeout=15) as resp:
+                      return resp.status, json.loads(resp.read())
+              except urllib.error.HTTPError as exc:
+                  return exc.code, json.loads(exc.read())
+
+
+          # Readiness is probed with /api/health, not with a registration —
+          # the worker count is asserted at the end and a probe that joined the
+          # mesh would be counted alongside the workers under test. It also
+          # doubles as the check that the window is visible to an operator who
+          # has no worker at all.
+          deadline = time.time() + 90
+          while time.time() < deadline:
+              try:
+                  req = urllib.request.Request(
+                      URL + "/api/health", headers={"X-Auth-Token": TOKEN})
+                  with urllib.request.urlopen(req, timeout=10) as resp:
+                      health = json.loads(resp.read())
+                  break
+              except Exception:
+                  time.sleep(1)
+          else:
+              raise SystemExit("TIMEOUT: coordinator never came up")
+          print("health:", json.dumps(health, sort_keys=True))
+          if health.get("protocol_version") != PROTOCOL_VERSION:
+              raise SystemExit("/api/health does not report the protocol version")
+
+          # An unversioned worker — every gpumesh released so far — still joins.
+          code, body = register(None)
+          print("absent version ->", code, json.dumps(body))
+          if code != 200:
+              raise SystemExit("a pre-handshake worker was refused; every "
+                               "released gpumesh would stop working")
+
+          for version, expect_word in ((MIN_PROTOCOL_VERSION - 1, "WORKER"),
+                                       (PROTOCOL_VERSION + 5, "COORDINATOR")):
+              code, body = register(version)
+              print("version", version, "->", code, json.dumps(body))
+              if code != 426:
+                  raise SystemExit(f"expected HTTP 426, got {code}")
+              message = body["error"]
+              for needle in (str(version), str(PROTOCOL_VERSION),
+                             str(MIN_PROTOCOL_VERSION),
+                             "pip install -U gpumesh", expect_word):
+                  if needle not in message:
+                      raise SystemExit(
+                          f"refusal message is missing {needle!r}: {message}")
+              if body["worker_protocol_version"] != version:
+                  raise SystemExit("structured fields disagree with the prose")
+
+          # A refused worker must leave nothing behind.
+          req = urllib.request.Request(
+              URL + "/api/workers", headers={"X-Auth-Token": TOKEN})
+          with urllib.request.urlopen(req, timeout=15) as resp:
+              workers = json.loads(resp.read())["workers"]
+          if len(workers) != 1:
+              raise SystemExit(
+                  f"refused workers left rows behind: {workers}")
+          print("OK: refusals are clean, messaged, and leave no ghost workers")
+          PROBE
+          python refusal_probe.py "http://127.0.0.1:$GPUMESH_COMPAT_PORT" \
+            "$GPUMESH_COMPAT_TOKEN"
+
+      - name: Logs
+        if: always()
+        run: |
+          echo "───── coordinator.log ─────"; cat coordinator.log || true
+          kill "$(cat coordinator.pid)" 2>/dev/null || true

@@ -1,0 +1,46 @@
+# Citation File Format — https://citation-file-format.github.io/
+#
+# GitHub reads this file and renders a "Cite this repository" button on the
+# repository sidebar, in both APA and BibTeX.
+#
+# MAINTAINER TODO before launch:
+#   1. Replace the given-names / family-names placeholders below with your real
+#      name. GitHub renders whatever is here verbatim into people's papers.
+#   2. Optionally uncomment and fill the `orcid:` line.
+#   3. Bump `version` and `date-released` on every release, alongside
+#      pyproject.toml, gpumesh/__init__.py and CHANGELOG.md.
+
+cff-version: 1.2.0
+message: "If you use gpumesh in work that you publish, please cite it as below."
+title: gpumesh
+abstract: >-
+  gpumesh is a pure-Python distributed compute mesh that pools GPUs across
+  ordinary machines. A coordinator hands tasks to volunteer workers over HTTP,
+  and the @mesh and @accelerate decorators run an existing Python function on
+  whichever machine in the mesh has capacity, returning exactly what a local
+  call would have returned.
+type: software
+
+authors:
+  # TODO: replace with the maintainer's real name before the first release.
+  - given-names: FIRST-NAME-PLACEHOLDER
+    family-names: LAST-NAME-PLACEHOLDER
+    alias: Samurai007AK
+    # orcid: "https://orcid.org/0000-0000-0000-0000"
+
+version: 2.0.0
+date-released: "2026-08-15"
+license: MIT
+
+repository-code: "https://github.com/Samurai007AK/gpumesh"
+url: "https://github.com/Samurai007AK/gpumesh"
+repository-artifact: "https://pypi.org/project/gpumesh/"
+
+keywords:
+  - gpu
+  - distributed-computing
+  - machine-learning
+  - pytorch
+  - cuda
+  - python
+  - task-scheduling

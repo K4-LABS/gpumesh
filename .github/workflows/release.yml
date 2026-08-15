@@ -1,0 +1,218 @@
+name: release
+
+# Publishes gpumesh to PyPI via Trusted Publishing (OIDC). No API token is
+# stored in this repository, and none should be.
+#
+# =============================================================================
+# MANUAL STEPS — these cannot be done from a file in this repo, and this
+# workflow will fail until they are done on pypi.org.
+# =============================================================================
+#
+#  1. Register the Trusted Publisher on PyPI.
+#     https://pypi.org/manage/project/gpumesh/settings/publishing/
+#     Add a "GitHub" publisher with EXACTLY these values — a mismatch in any
+#     one of them makes the OIDC exchange fail with a 403 that does not say
+#     which field was wrong:
+#         Owner:              Samurai007AK
+#         Repository:         gpumesh
+#         Workflow name:      release.yml
+#         Environment name:   pypi
+#
+#  2. Create the `pypi` environment in this repository.
+#     https://github.com/Samurai007AK/gpumesh/settings/environments
+#     Name it `pypi` and add a required reviewer (yourself). The environment
+#     is the actual security control here: it is what stops a compromised
+#     workflow file on a branch from minting a publish token, because the run
+#     pauses for a human before the `publish` job's OIDC token is ever issued.
+#     Restrict the deployment branches to `main` and to tags.
+#
+#  3. DELETE every existing PyPI API token for this project.
+#     https://pypi.org/manage/account/token/
+#     Trusted Publishing removes the need for a long-lived token, but it does
+#     not remove a token that already exists. A leftover token is a standing
+#     credential that bypasses everything above — the environment gate, the
+#     reviewer, the attestations. Leaving one in place means the hardening in
+#     this file is decorative. Also delete `PYPI_API_TOKEN` (or similar) from
+#     https://github.com/Samurai007AK/gpumesh/settings/secrets/actions
+#
+#  4. Optional but recommended: enable 2FA enforcement and require a
+#     hardware key on the PyPI account, and turn on GitHub's
+#     "Require approval for all outside collaborators" for Actions.
+#
+# =============================================================================
+
+on:
+  release:
+    types: [published]
+  # Lets the whole pipeline be rehearsed against TestPyPI, or run to produce
+  # artifacts without publishing, before a real release is cut.
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Publish to PyPI (leave unchecked for a dry run)"
+        type: boolean
+        default: false
+
+permissions: {}
+
+concurrency:
+  # Never cancel a release mid-flight; a half-published release is worse than
+  # a queued one.
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: build distributions
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      wheel-sha256: ${{ steps.hashes.outputs.wheel }}
+      sdist-sha256: ${{ steps.hashes.outputs.sdist }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Install build tooling
+        run: |
+          python -m pip install --upgrade pip
+          pip install build twine
+
+      - name: Derive SOURCE_DATE_EPOCH from the commit
+        # Same reasoning as build.yml: the published wheel should be a
+        # function of the commit, not of the minute it happened to be built.
+        run: echo "SOURCE_DATE_EPOCH=$(git log -1 --pretty=%ct)" >> "$GITHUB_ENV"
+
+      - name: Build
+        run: python -m build
+
+      - name: twine check --strict
+        run: twine check --strict dist/*
+
+      - name: Verify the built version matches the release tag
+        # A tag that does not match the version in pyproject.toml produces a
+        # release whose artifacts are named after a different version than the
+        # one people will `pip install`. PyPI will happily accept it. Catch it
+        # here, before the version number is spent.
+        if: github.event_name == 'release'
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME#v}"
+          built="$(python -c 'import tomllib,pathlib; print(tomllib.loads(pathlib.Path("pyproject.toml").read_text())["project"]["version"])')"
+          echo "release tag: $tag / pyproject version: $built"
+          if [ "$tag" != "$built" ]; then
+            echo "::error::Release tag '$GITHUB_REF_NAME' does not match pyproject.toml version '$built'."
+            exit 1
+          fi
+
+      - name: Record artifact hashes
+        id: hashes
+        run: |
+          set -euo pipefail
+          echo "wheel=$(sha256sum dist/*.whl | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          echo "sdist=$(sha256sum dist/*.tar.gz | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Release artifacts"
+            echo
+            echo '```'
+            sha256sum dist/*
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload distributions
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  sbom:
+    name: generate SBOMs
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # only to attach the SBOM to the GitHub release
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: dist
+          path: dist
+
+      # An SBOM for a package whose entire premise is "run this code on a
+      # friend's machine" is not paperwork. It is what lets someone downstream
+      # answer "does the thing I am about to give a GPU to depend on the
+      # library that was just backdoored" without reading our pyproject.toml.
+      - name: SBOM (SPDX)
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          path: dist
+          format: spdx-json
+          artifact-name: gpumesh.spdx.json
+          output-file: gpumesh.spdx.json
+
+      - name: SBOM (CycloneDX)
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          path: dist
+          format: cyclonedx-json
+          artifact-name: gpumesh.cdx.json
+          output-file: gpumesh.cdx.json
+
+      - name: Attach SBOMs to the GitHub release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: gh release upload "$TAG" gpumesh.spdx.json gpumesh.cdx.json --repo "$GITHUB_REPOSITORY" --clobber
+
+  publish:
+    name: publish to PyPI
+    needs: [build, sbom]
+    if: github.event_name == 'release' || inputs.publish
+    runs-on: ubuntu-latest
+
+    # The environment is what makes this safe. It gates the job behind the
+    # protection rules configured on github.com (see manual step 2), and PyPI
+    # is told to expect this exact environment name — an OIDC token minted by
+    # a run that did not pass through it will not be accepted.
+    environment:
+      name: pypi
+      url: https://pypi.org/p/gpumesh
+
+    permissions:
+      # id-token: write is the entire credential story. It lets this job
+      # request a short-lived OIDC token that PyPI exchanges for a
+      # publish-scoped API token valid for about fifteen minutes and for this
+      # project only. `contents` is not needed and stays denied by the
+      # top-level `permissions: {}`.
+      id-token: write
+
+    steps:
+      - name: Download distributions
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: dist
+          path: dist
+
+      - name: Publish
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+        # Deliberately NO `password:` / `with: password: ${{ secrets... }}`.
+        # Supplying a token here silently disables the OIDC path and puts a
+        # long-lived credential back in the blast radius.
+        #
+        # PEP 740 digital attestations are generated and uploaded by default
+        # in this action since v1.11.0, so `attestations` is not set — the
+        # default is the desired behaviour and pinning it here would only
+        # create something else to keep in sync. The attestation is what lets
+        # anyone verify that the file on PyPI was produced by this workflow,
+        # in this repository, at this commit.
+        with:
+          print-hash: true

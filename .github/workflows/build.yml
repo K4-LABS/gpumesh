@@ -1,0 +1,222 @@
+name: build
+
+# Packaging verification.
+#
+# tests.yml installs with `pip install -e .`, which never builds a wheel and
+# never reads MANIFEST.in. That means an entire class of defect — a module
+# missing from the wheel, a data file missing from the sdist, a broken console
+# entry point, unrenderable README markup that PyPI will reject at upload —
+# is completely invisible to it. Those defects surface for the first time
+# during a release, which is the worst possible moment to find them.
+#
+# This workflow builds the real artifacts and then tries to use them the way a
+# stranger would.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: "31 6 * * 1"
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: build and verify distributions
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # check-manifest compares the sdist against what git actually
+          # tracks, so it needs a real working tree rather than a shallow
+          # export with no history to diff against.
+          fetch-depth: 0
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install packaging tooling
+        # Version floors come from the `packaging` extra in pyproject.toml, so
+        # there is one place to update rather than two that drift apart.
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[packaging]"
+
+      # -- Reproducibility ---------------------------------------------------
+      #
+      # gpumesh builds a pure-Python `py3-none-any` wheel, so there is no
+      # compiler output to vary and the only thing that makes two builds of
+      # the same commit differ is embedded timestamps. A wheel is a zip, and
+      # zip entries carry an mtime; without SOURCE_DATE_EPOCH that mtime is
+      # "now", so the wheel's hash changes every single build and there is no
+      # way for anyone downstream to check that the artifact on PyPI was built
+      # from the commit it claims.
+      #
+      # Setting SOURCE_DATE_EPOCH to the commit's own timestamp makes the
+      # wheel a pure function of the commit. The two builds below prove it
+      # rather than assuming it.
+      #
+      # CAVEAT, and it is a real one: this normalises the WHEEL. It is not
+      # sufficient for the SDIST. Sdists are tarballs whose reproducibility
+      # also depends on file ordering, uid/gid, and umask-derived permission
+      # bits, none of which SOURCE_DATE_EPOCH touches, and setuptools does not
+      # currently normalise all of them. Expect the wheel hashes to match and
+      # do not read a matching sdist hash as guaranteed. Achieving that would
+      # need a backend with explicit reproducible-sdist support (hatchling,
+      # flit) or a post-processing pass over the tarball.
+      - name: Derive SOURCE_DATE_EPOCH from the commit
+        run: |
+          echo "SOURCE_DATE_EPOCH=$(git log -1 --pretty=%ct)" >> "$GITHUB_ENV"
+
+      - name: Build (pass 1)
+        run: python -m build --outdir dist
+
+      - name: Build (pass 2, into a separate directory)
+        run: python -m build --outdir dist-repro
+
+      - name: Compare wheel hashes across the two builds
+        run: |
+          set -euo pipefail
+          echo "SOURCE_DATE_EPOCH=$SOURCE_DATE_EPOCH"
+          a="$(sha256sum dist/*.whl | cut -d' ' -f1)"
+          b="$(sha256sum dist-repro/*.whl | cut -d' ' -f1)"
+          echo "pass 1 wheel sha256: $a"
+          echo "pass 2 wheel sha256: $b"
+          if [ "$a" != "$b" ]; then
+            echo "::error::Wheel is not reproducible: two builds of the same commit produced different hashes."
+            exit 1
+          fi
+          echo "Wheel is a reproducible function of the commit."
+          # Informational only, for the reason spelled out above.
+          echo "sdist sha256 (informational, not asserted):"
+          sha256sum dist/*.tar.gz dist-repro/*.tar.gz
+
+      # -- Static checks on the artifacts ------------------------------------
+
+      - name: twine check --strict
+        # --strict turns README rendering warnings into failures. PyPI rejects
+        # a description it cannot render, and it does so at upload time, after
+        # the version number has already been burned.
+        run: twine check --strict dist/*
+
+      - name: check-wheel-contents
+        # Catches the wheel-shaped mistakes that twine cannot see: a top-level
+        # module that should have been inside the package, tests or a stray
+        # `build/` directory shipped to users, duplicate files, an empty
+        # package directory, a missing __init__.py.
+        run: check-wheel-contents dist/*.whl
+
+      - name: check-manifest
+        # Compares the sdist against what git tracks. This is the check that
+        # catches "it works on my machine because the file is on disk but was
+        # never added to MANIFEST.in" — the classic way py.typed, a data file,
+        # or a whole subpackage goes missing from a release.
+        run: check-manifest --verbose
+
+      - name: Assert py.typed is present in both artifacts
+        # PEP 561: an empty marker file whose absence silently downgrades
+        # every downstream type checker to treating gpumesh as untyped. It is
+        # exactly the kind of zero-byte file that quietly stops being packaged
+        # and that nobody notices for a year.
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import glob, sys, tarfile, zipfile
+
+          wheel = glob.glob("dist/*.whl")[0]
+          names = zipfile.ZipFile(wheel).namelist()
+          assert "gpumesh/py.typed" in names, f"py.typed missing from wheel: {wheel}"
+
+          sdist = glob.glob("dist/*.tar.gz")[0]
+          with tarfile.open(sdist) as tf:
+              members = tf.getnames()
+          assert any(n.endswith("gpumesh/py.typed") for n in members), \
+              f"py.typed missing from sdist: {sdist}"
+
+          print("py.typed present in wheel and sdist")
+          PY
+
+  install-smoke-test:
+    # -- The check most projects skip -------------------------------------
+    #
+    # Installing the sdist and then running `import gpumesh` from the repo
+    # root proves nothing at all: the repository directory is on sys.path, so
+    # the import resolves against ./gpumesh/ in the source tree and succeeds
+    # even if the built package is completely empty. Every step below that
+    # touches the installed package therefore runs from a scratch directory
+    # with no source tree anywhere near it.
+    name: install from sdist (${{ matrix.os }} / py${{ matrix.python-version }})
+    needs: build
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        # Oldest and newest supported interpreters, plus one Windows run.
+        # Packaging bugs are usually platform-independent, but console entry
+        # points are not: `gpumesh` on Windows is a generated .exe shim rather
+        # than a shebang script, and that is a distinct failure mode.
+        include:
+          - os: ubuntu-latest
+            python-version: "3.9"
+          - os: ubuntu-latest
+            python-version: "3.13"
+          - os: windows-latest
+            python-version: "3.12"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Build sdist
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build --sdist --outdir dist
+
+      - name: Install from the sdist
+        # --no-binary forces pip to actually build the sdist rather than
+        # quietly preferring a wheel, which is the whole point here.
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --no-binary gpumesh dist/*.tar.gz
+
+      - name: Import and run the CLI from a directory that is not the repo
+        shell: bash
+        working-directory: ${{ runner.temp }}
+        run: |
+          set -euo pipefail
+          echo "cwd: $(pwd)"
+          # Belt and braces: even outside the repo, an empty first sys.path
+          # entry can resolve surprises. -P (3.11+) and PYTHONSAFEPATH are not
+          # available on 3.9, so assert the resolved file instead.
+          python -c "
+          import gpumesh, pathlib, sys
+          p = pathlib.Path(gpumesh.__file__).resolve()
+          print('gpumesh imported from:', p)
+          print('version:', gpumesh.__version__)
+          assert 'site-packages' in p.parts, f'resolved to a source tree, not the install: {p}'
+          "
+          # The console script is a separate artifact from the package: it is
+          # generated by the installer from [project.scripts] and can be
+          # broken (wrong entry point, missing dependency at import time)
+          # while the import above passes.
+          gpumesh --version
+          gpumesh --help > /dev/null
+          echo "sdist install is usable from outside the repository"
