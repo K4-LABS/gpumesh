@@ -5,16 +5,49 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  # A weekly run against whatever the ecosystem looks like that day. This is
+  # not busywork: the fix in 5b7dbcd landed because torch >= 2.8 renamed a
+  # device property from `total_mem` to `total_memory`, and nothing in this
+  # repo changed on the day that broke. Push- and PR-triggered runs can only
+  # catch regressions we cause; a scheduled run is the only thing that catches
+  # regressions our dependencies cause, and it catches them before a user
+  # reports the crash instead of after.
+  schedule:
+    # 06:17 UTC on Mondays. Off the hour on purpose — GitHub queues the top of
+    # every hour heavily and cron jobs scheduled at :00 are the ones that get
+    # delayed or dropped.
+    - cron: "17 6 * * 1"
+
+# Deny by default. Without this block GITHUB_TOKEN inherits whatever the
+# repository-wide default is, which for older repositories is read/write on
+# every scope — contents, packages, issues, deployments. A test workflow needs
+# to read the source and nothing else. Each job re-grants the minimum it
+# needs; anything not listed there stays denied.
+permissions: {}
+
+# Superseded runs waste minutes and, on a matrix this wide, delay the run that
+# actually matters. Keying on the PR number means a force-push to a PR cancels
+# that PR's earlier run and nothing else. Non-PR events fall back to run_id,
+# which is unique per run, so a scheduled run and a push to main never cancel
+# one another.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
 
 jobs:
   test:
     name: ${{ matrix.os }} / Python ${{ matrix.python-version }}
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest]
-        python-version: ["3.9", "3.11", "3.12"]
+        # 3.9 is kept deliberately — see the long note on `requires-python` in
+        # pyproject.toml. Nothing in gpumesh uses a 3.10+ feature, and the
+        # machines this project exists to make useful are the old ones.
+        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13", "3.14"]
         include:
           # gpumesh does a lot of Windows-specific work (firewall rules,
           # taskkill process trees, cp1252 console handling), so Windows is
@@ -22,13 +55,35 @@ jobs:
           # platform regressions without tripling the matrix.
           - os: windows-latest
             python-version: "3.11"
+          # A second Windows interpreter earns its place: shipping a function
+          # from one Python minor version to a worker on another is a core
+          # behaviour here, and 3.13 is where the source-fallback path is
+          # actually exercised in the field.
+          - os: windows-latest
+            python-version: "3.13"
           - os: macos-latest
             python-version: "3.12"
 
     steps:
-      - uses: actions/checkout@v4
+      # Pinned to a full commit SHA rather than a tag. Git tags are mutable
+      # references: the March 2025 tj-actions/changed-files compromise
+      # (CVE-2025-30066) worked by retroactively repointing every version tag
+      # of that action at a commit that dumped runner memory — including
+      # CI/CD secrets — into the build log, and it reached roughly 23,000
+      # repositories without a single one of them changing a workflow file. A
+      # SHA cannot be repointed. The trailing comment is what lets Dependabot
+      # still open a version-bump PR against the pin.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # By default checkout writes an `http.extraheader` line containing
+          # GITHUB_TOKEN into .git/config on the runner, where it stays for
+          # the life of the job. Every subsequent step — including anything a
+          # dependency's build script runs — can read it back out. Nothing in
+          # this workflow pushes, so there is no reason for the credential to
+          # exist on disk at all.
+          persist-credentials: false
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
@@ -48,3 +103,54 @@ jobs:
         # against a hung server thread, not a performance target.
         timeout-minutes: 25
         run: pytest -q --durations=10
+
+  lint:
+    name: lint (ruff + mypy)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install lint tooling
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[lint]"
+
+      # Ruff is being introduced to an existing codebase, so the job is split
+      # in two on purpose.
+      #
+      # This step is the hard gate: undefined names, syntax errors, and the
+      # handful of checks that are never a style opinion and always a bug at
+      # runtime. It reports zero today and must stay at zero.
+      - name: Ruff (errors that are always bugs)
+        run: ruff check --select E9,F63,F7,F82 --output-format=github .
+
+      # This step is advisory. The full ruleset in pyproject.toml currently
+      # reports a backlog inherited from before the config existed, and a
+      # required check that is red on day one is a check people learn to
+      # ignore. `continue-on-error` keeps the annotations visible inline in
+      # the PR diff — which is where they are actually useful — without
+      # blocking merges. Flip this to a hard failure once the backlog is
+      # burned down; the intended end state is no `continue-on-error` here.
+      - name: Ruff (full ruleset, advisory)
+        continue-on-error: true
+        run: ruff check --output-format=github .
+
+      - name: Ruff (security rules summary)
+        continue-on-error: true
+        # Called out separately because this project deserializes callables
+        # received over a socket. These findings deserve a human decision
+        # recorded as a `# noqa: S### - reason` comment, not a silent pass.
+        run: ruff check --select S --statistics .
+
+      - name: mypy (advisory)
+        continue-on-error: true
+        run: mypy

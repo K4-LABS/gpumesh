@@ -7,6 +7,12 @@ scheduling strategy.
 If you are unsure whether something is worth doing, open an issue and ask
 before writing code. A short conversation is cheaper than a rewritten PR.
 
+If you have a *question* rather than a change — "how do I", "is this supposed
+to work like this" — [SUPPORT.md](SUPPORT.md) says where it goes and what to
+include. Participation here is covered by the
+[Code of Conduct](CODE_OF_CONDUCT.md), and [GOVERNANCE.md](GOVERNANCE.md)
+describes who decides what.
+
 ## Expect rough edges
 
 gpumesh is early-stage — `Development Status :: 4 - Beta`. It works, it is
@@ -17,8 +23,9 @@ tested, and it is used, but it is not settled:
 - The hardest problems are in networking, and they are hard to reproduce.
   Most remaining bugs surface only across two real machines with a VPN,
   hypervisor adapter or firewall in the way — not on loopback.
-- CI runs the full suite on Linux, Windows and macOS for every push and pull
-  request — but **please run `pytest` locally before opening a PR** anyway.
+- CI runs the full suite on Linux, Windows and macOS for every pull request
+  and every push to `main` — but **please run `pytest` locally before opening
+  a PR** anyway.
   The suite is real servers and sockets, and a red local run will be a red
   CI run.
 - Some errors still tell you the wrong thing. Fixing a misleading message is a
@@ -43,9 +50,11 @@ pip install -e ".[dev]"
 pytest
 ```
 
-You should see **649 passed** on Linux (Windows shows 3 skips and 1 xpass,
-all intentional). If you do not, that is a bug — please open an issue with
-your OS and Python version before doing anything else.
+You should see several hundred tests pass (Windows shows a few skips and one
+xpass, all intentional). The count grows steadily, so do not compare it against
+any number written down here — a *failure* is what matters. If anything fails,
+please open an issue with your OS and Python version before doing anything
+else.
 
 Python 3.9 or newer. The only required runtime dependency is `cloudpickle`;
 everything else (`torch`, `psutil`, `rich`, `questionary`, `pyngrok`, `pandas`)
@@ -84,8 +93,9 @@ Useful environment variables while developing:
 |---|---|
 | `GPUMESH_LOCAL=1` | Force `@mesh` / `@accelerate` to run locally, bypassing the mesh |
 | `GPUMESH_VERBOSE=1` | Log routing decisions and mesh submissions |
-| `GPUMESH_HOST_IP=<ip>` | Pin the address the coordinator advertises to workers |
-| `GPUMESH_COLOR=0` | Disable ANSI colour |
+| `GPUMESH_HOST_IP=<ip>` | Pin the address the coordinator advertises to workers. An IP literal, not a hostname — anything else is discarded with a warning |
+| `GPUMESH_CLAIM_HOST=<ip>` | Bind address for the claim port opened by `gpumesh worker` (and by `gpumesh setup` in worker mode). Defaults to all interfaces (a loopback claim server cannot be claimed, which is its entire job), so this is how you narrow it to one. Separate from `GPUMESH_HOST` on purpose — a loopback coordinator is sensible, a loopback claim port is broken |
+| `GPUMESH_COLOR=0` | Disable ANSI colour. `serve` and `join` also take `--color` / `--no-color` |
 
 ---
 
@@ -170,17 +180,54 @@ Every behavioural change needs a test. A few conventions:
 
 ## Code style
 
-**There is no linter or formatter configured on this project.** No black, no
-ruff, no flake8, no mypy, no pre-commit hooks. That is deliberate for now, and
-it means one thing for you:
+The project runs **ruff** and **mypy**, both configured in `pyproject.toml`.
+They are not in the `dev` extra, so install them explicitly:
 
-> Match the style of the file you are editing. That is the whole rule.
+```bash
+pip install -e ".[dev,lint]"
+ruff check .
+mypy
+```
 
-Please do not add a formatter, reformat files you are not otherwise changing,
-or bulk-fix whitespace. A diff that mixes a real change with a reformat is
-hard to review and hard to revert. If you think the project should adopt a
-formatter, open an issue and make the case — do not open a PR that applies
-one.
+**There is still no formatter.** `ruff format` and black are deliberately not
+run over this repo, and `E501` (line-too-long) is in ruff's ignore list for that
+reason. So the old rule survives intact:
+
+> Match the style of the file you are editing.
+
+Please do not add a formatter, reformat files you are not otherwise changing, or
+bulk-fix whitespace. A diff that mixes a real change with a reformat is hard to
+review and hard to revert. The line-length setting is 120 because that is what
+the code already is — it was measured, not chosen as an ideal — so it flags the
+genuine outliers and leaves everything else alone.
+
+### What the linters are actually for
+
+`ruff check` selects pycodestyle, pyflakes, isort, pyupgrade, bugbear,
+comprehensions, **flake8-bandit (`S`)** and ruff's own rules. The `S` rules are
+the reason the config exists at all. gpumesh accepts pickled callables over a
+socket and runs them, so pickle, `eval`/`exec`, `subprocess` and URL-open call
+sites are the project's central risk. The rule is not "make the warning go
+away":
+
+- Where a hit is intentional, silence it **on the line, with a reason**:
+  `# noqa: S301  - payload is authenticated upstream by the token check`.
+  That turns an unexamined risk into a documented one, which is the entire
+  point.
+- Where a hit is a surprise, it is probably a real finding. Say so in the PR.
+- Blanket `# noqa`, file-level disables, or widening `ignore` in
+  `pyproject.toml` will get a review comment. Per-file ignores already exist for
+  `serializer.py` and `_function_subprocess.py`, where pickling *is* the design.
+
+`mypy` is deliberately gradual, not strict: `check_untyped_defs` and
+`disallow_untyped_defs` are both off, because the codebase is only partly
+annotated and flipping strict on today would produce a lint job nobody reads.
+What is on catches the things that are always bugs — unreachable code, missing
+returns, bad casts, implicit `Optional`. The package ships `py.typed`, so the
+annotations you write are read by downstream users' type checkers; that makes
+annotations on the public surface worth more than annotations anywhere else.
+
+A module being annotated well enough to tighten is a good PR on its own.
 
 What the existing code does, so you can match it:
 
@@ -202,9 +249,31 @@ What the existing code does, so you can match it:
 
 1. Branch from `main`: `git checkout -b fix/short-description`
 2. Make the change, with tests
-3. Run the full suite — `pytest` must be green
+3. Run the full suite — `pytest` must be green — plus `ruff check .` and `mypy`
 4. Update `CHANGELOG.md` under `## [Unreleased]`
-5. Open the PR
+5. **If you changed the wire, bump `PROTOCOL_VERSION`** — see below
+6. Sign off your commits — `git commit -s` (see [below](#sign-your-commits-dco))
+7. Open the PR
+
+**Changing the wire means bumping `gpumesh.PROTOCOL_VERSION`.** The coordinator
+and the workers are installed on different machines by different people, so
+they drift by default; the integer in `gpumesh/__init__.py` is what turns that
+drift into a clear refusal at registration instead of a mystery failure three
+calls later. A new *required* field, a changed meaning or type for an existing
+one, a removed endpoint, or a changed status code for an existing condition all
+bump it. A new *optional* field either side may ignore, and a new endpoint old
+peers never call, do not. The support window is exactly N and N−1, so each bump
+drops a version out of it — which is the deprecation, and
+[`docs/stability.md`](docs/stability.md) §3 and §5 are the rules for doing it
+deliberately. `.github/workflows/compat.yml` runs a real task between your tree
+and a released gpumesh in both role assignments; if you bump the integer, look
+at what that workflow now has to cover.
+
+`docs/stability.md` is also the answer to "is this a breaking change?" for the
+Python API and the CLI. If your change renames or removes anything in
+`gpumesh.__all__`, or changes a CLI flag's default, read §5 before writing the
+code — the deprecation path is two releases long and starts *before* the
+removal.
 
 **Branch naming:** `fix/`, `feat/`, `docs/`, `test/` or `chore/` followed by a
 short hyphenated description — `fix/worker-timeout-message`,
@@ -229,6 +298,70 @@ reformat is hard to review and hard to revert.
 
 **Comments:** explain reasoning that is not evident from the code. Skip
 comments that restate the line below them.
+
+### Sign your commits (DCO)
+
+Every commit needs a `Signed-off-by:` line. Adding one is a single flag:
+
+```bash
+git commit -s -m "fix: report the address that was actually tried"
+```
+
+which appends
+
+```
+Signed-off-by: Your Name <your.email@example.com>
+```
+
+using your configured `user.name` and `user.email`. Set those once with
+`git config --global user.name` / `user.email` and you can forget about it.
+
+**Forgot on a few commits?** Fix them in place — no need to redo the work:
+
+```bash
+git rebase --signoff HEAD~3      # last 3 commits; use the count you need
+git push --force-with-lease
+```
+
+`--force-with-lease` rather than `--force`, so you cannot clobber something
+pushed to your branch in the meantime.
+
+**What you are certifying.** The sign-off is the
+[Developer Certificate of Origin](https://developercertificate.org/) — a short,
+public statement that you wrote the change, or that you have the right to submit
+it under this project's licence. It is not a copyright assignment and it is not
+a CLA. You keep your copyright, you sign nothing, and there is no account to
+create. It costs you one flag and it means that a future question about where a
+line of code came from has a recorded answer.
+
+### AI-assisted contributions
+
+AI-assisted contributions are welcome. Two conditions:
+
+- **Say so in the PR description.** One line is enough — which tool, and roughly
+  what it did ("Claude wrote the first draft of the retry test"). If you prefer a
+  trailer, `Assisted-by: <tool>` in the commit message works.
+- **Confirm you have read and run the code yourself.** You are the author for
+  every purpose that matters here: you sign it off, you answer review comments on
+  it, and you are the one who understands why it works.
+
+**PRs that appear to be unreviewed model output will be closed** without a
+line-by-line review. That is not a judgement about the tool — it is that this
+codebase's hard parts are the ones a model gets confidently wrong: the
+`_function_subprocess.py` / `serializer.py` duplication, the retry
+classification, and the coordinator's refusal to guess reachability all look
+like redundancy or missing error handling if you have not read the reasoning
+behind them. A patch that "cleans those up" costs more to review than to write.
+
+### What to expect after you open it
+
+**You can expect a response within 7 days.** If a week goes by with nothing,
+ping the thread — that is the intended behaviour, not a nuisance. One person
+maintains this in their own time, so an honest slow answer is the one being
+promised here rather than a fast one that is not kept.
+
+Reviews are usually a conversation rather than a verdict. A request for changes
+almost always means "this is worth landing, here is what is in the way".
 
 ---
 
@@ -277,3 +410,8 @@ worker execute code from an unauthenticated source, certainly is.
 
 By contributing you agree that your contributions are licensed under the
 [MIT License](LICENSE) that covers this project.
+
+The `Signed-off-by:` line on each commit ([DCO](#sign-your-commits-dco)) is the
+record of that agreement. There is no CLA and no copyright assignment — you keep
+the copyright in what you write, and it is licensed out under the same MIT terms
+as everything else here.

@@ -1,0 +1,221 @@
+# OpenSSF Security Insights — https://security-insights.openssf.org/
+#
+# A machine-readable statement of the same boundary drawn in prose in
+# SECURITY.md and traced through the code in THREAT_MODEL.md. When those
+# change, change this too — the in-scope / out-of-scope lists below are the
+# structured form of SECURITY.md's "Definitely a vulnerability" and "Not a
+# vulnerability" sections, and they must not drift apart.
+
+header:
+  schema-version: 2.2.0
+  last-updated: '2026-08-15'
+  last-reviewed: '2026-08-15'
+  url: https://raw.githubusercontent.com/Samurai007AK/gpumesh/main/SECURITY-INSIGHTS.yml
+  comment: |
+    Single-repository file: gpumesh is one repo shipping one PyPI package and
+    one container image.
+
+project:
+  name: gpumesh
+  homepage: https://github.com/Samurai007AK/gpumesh
+  administrators:
+    - name: Samurai007AK
+      primary: true
+      social: https://github.com/Samurai007AK
+  documentation:
+    quickstart-guide: https://github.com/Samurai007AK/gpumesh#readme
+    detailed-guide: https://github.com/Samurai007AK/gpumesh#readme
+  repositories:
+    - name: gpumesh
+      url: https://github.com/Samurai007AK/gpumesh
+      comment: |
+        The only repository. Contains the coordinator, the worker, the CLI,
+        the Python API, and the Dockerfile behind the published image.
+  vulnerability-reporting:
+    reports-accepted: true
+    bug-bounty-available: false
+    policy: https://github.com/Samurai007AK/gpumesh/blob/main/SECURITY.md
+    contact:
+      name: |
+        Report privately via the repository's Security tab ("Report a
+        vulnerability"). Do not open a public issue.
+      email: vaivaswat2244@gmail.com
+      primary: true
+    in-scope:
+      - >-
+        Code execution, task submission, or result retrieval without a valid
+        token — anything reachable before the coordinator's authentication
+        check runs.
+      - >-
+        Token bypass, forgery, timing side channel, or feasible brute force
+        against the shared token. Includes any change that makes a
+        rate-limited rejection reveal whether the presented token was
+        correct: the lockout branch deliberately returns before the token is
+        verified, so that a locked-out brute-forcer gets no correctness
+        oracle.
+      - >-
+        Token disclosure into logs, tracebacks, HTTP error bodies, the SQLite
+        database, or a world-readable file written silently — beyond the
+        already-documented exposures, which are --token in argv and
+        "gpumesh serve" printing the token to stdout. Note that
+        ~/.gpumesh/config.json holds the token in plaintext at 0600 and now
+        warns both when it cannot be restricted and when it is found
+        group/other-readable on load.
+      - >-
+        gpumesh binding a network interface beyond the documented default and
+        the user's flags. The documented defaults are 127.0.0.1 for
+        "gpumesh serve" and GPUMesh.start_coordinator, and 0.0.0.0 for the
+        worker claim server and for "gpumesh setup" in LAN mode. A
+        coordinator that binds wider than --host or GPUMESH_HOST asked for,
+        or that ignores either, is in scope: the bind address is a security
+        control, not a cosmetic default. The claim port now has the same
+        story: it resolves its bind through an explicit argument, then
+        GPUMESH_CLAIM_HOST, then its 0.0.0.0 default, and a claim server that
+        binds wider than GPUMESH_CLAIM_HOST asked for, or that ignores it, is
+        in scope on the same reasoning — narrowing that bind is the only
+        control on that port that reduces attack surface rather than cost per
+        attempt. GPUMESH_CLAIM_HOST is deliberately a separate variable from
+        GPUMESH_HOST; the claim port not reading GPUMESH_HOST is by design and
+        is not a bug. (--host-ip only changes the address printed for workers
+        to dial and never affects the bind; it being ignored is a bug, not a
+        security issue.)
+      - >-
+        Path traversal or arbitrary file read/write through any endpoint —
+        job names, task IDs and payload keys must never reach a filesystem
+        path.
+      - >-
+        Deserialization or structured parsing of an attacker-supplied payload
+        before authentication is verified, on any coordinator route. The
+        worker claim port is the documented exception: the claim protocol
+        carries the token in the request body, so a bounded parse must
+        precede the token check. That parse is rate-limited first, capped at
+        16 KB refused on the declared length, and never unpickles — widening
+        any of those is in scope.
+      - >-
+        Server-side request forgery from a worker or coordinator to an
+        attacker-chosen URL without a valid token.
+      - >-
+        Vulnerabilities in the gpumesh PyPI package or the
+        samurai007ak/gpumesh container image as published.
+    out-of-scope:
+      - >-
+        A token holder executing arbitrary code on a worker. This is the
+        granted capability, not a flaw: a valid token is a license to run code
+        as the worker's OS user. See SECURITY.md, "Personas and granted
+        capabilities".
+      - >-
+        A token holder reading files, environment variables, SSH keys or cloud
+        credentials on a worker. There is no filesystem boundary and none is
+        claimed.
+      - >-
+        Resource exhaustion — GPU, memory, disk, process count — by an
+        authenticated task submitter. gpumesh has no quotas by design.
+      - >-
+        Tasks not being isolated from each other or from $HOME. The subprocess
+        boundary exists for crash containment, not confinement, and the
+        trimmed environment given to script tasks is a convenience, not a
+        control.
+      - >-
+        Cleartext HTTP traffic on a network the operator chose. Use --tailscale
+        or --public when the network is not one you control.
+      - >-
+        A worker returning a malicious result to a client that trusts it. The
+        client deserializes worker-produced bytes with cloudpickle, and
+        --safe-mode does not cover that path. This is documented in
+        SECURITY.md and THREAT_MODEL.md section 5.4: a mesh is a single trust
+        domain and every member is as trusted as the least trustworthy member.
+      - >-
+        Exposure that follows from an operator deliberately opening the
+        coordinator's port. "gpumesh serve" binds 127.0.0.1 unless --host or
+        GPUMESH_HOST says otherwise, and a non-loopback bind prints a
+        full-width banner naming the OS user and device that submitted code
+        will run as. A consequence of an exposure that was chosen and warned
+        about is not a vulnerability. The same applies to --public.
+      - >-
+        The worker claim port listening on 0.0.0.0 by default. "gpumesh
+        worker" exists to be claimed by a coordinator on another machine, so
+        a loopback default would not be a safer listener, it would be a broken
+        one. It is token-gated with hmac.compare_digest, per-IP rate limited
+        on the same policy as the coordinator, capped at 16 KB, and given a
+        15 s socket timeout; an operator who wants a narrower listener sets
+        GPUMESH_CLAIM_HOST, and any non-loopback bind prints a banner naming
+        the OS user that claims will run as. A bypass of any of those, or a
+        bind that ignores GPUMESH_CLAIM_HOST, is in scope; the listener's
+        existence, and the fact that its default is wide, is not.
+      - >-
+        "gpumesh setup" binding 0.0.0.0 in its LAN auto-discovery mode. That
+        flow needs a socket other machines can reach — UDP radar, the claim
+        POST, and the worker dialling back all depend on it — so it overrides
+        the loopback default on purpose, honours GPUMESH_HOST, and prints the
+        same exposure banner. Choosing that menu item is the opt-in.
+      - >-
+        Vulnerabilities in third-party dependencies (cloudpickle, torch,
+        pyngrok, psutil, ...). Report those upstream. In scope only if
+        exploitable specifically because of how gpumesh uses the dependency,
+        with the path shown.
+      - >-
+        Scanner output, severity scores, "dangerous function" hits on pickle
+        or exec, or generated vulnerability-class descriptions with no proof of
+        concept against a default install.
+    comment: |
+      There is no bug bounty and no payment. gpumesh is an unfunded project
+      maintained by one person, so the filter is a working proof of concept
+      against a default install.
+
+      Response targets: acknowledgement within 3 business days, initial
+      assessment within 14 days, fix or documented mitigation plan within 60
+      days for medium severity and above.
+
+      Safe harbour: we will not pursue or support legal action against
+      researchers acting in good faith under this policy — testing against
+      your own installs, not accessing or exfiltrating other people's data,
+      not degrading other people's service, and reporting privately.
+
+repository:
+  url: https://github.com/Samurai007AK/gpumesh
+  status: active
+  bug-fixes-only: false
+  accepts-change-request: true
+  accepts-automated-change-request: true
+  no-third-party-packages: false
+  core-team:
+    - name: Samurai007AK
+      primary: true
+      social: https://github.com/Samurai007AK
+  documentation:
+    contributing-guide: https://github.com/Samurai007AK/gpumesh/blob/main/CONTRIBUTING.md
+    security-policy: https://github.com/Samurai007AK/gpumesh/blob/main/SECURITY.md
+  license:
+    url: https://github.com/Samurai007AK/gpumesh/blob/main/LICENSE
+    expression: MIT
+  release:
+    changelog: https://github.com/Samurai007AK/gpumesh/blob/main/CHANGELOG.md
+    automated-pipeline: false
+    distribution-points:
+      - uri: pkg:pypi/gpumesh
+        comment: PyPI package — https://pypi.org/project/gpumesh/
+      - uri: pkg:docker/samurai007ak/gpumesh
+        comment: Container image — https://hub.docker.com/r/samurai007ak/gpumesh
+      - uri: https://github.com/Samurai007AK/gpumesh/releases
+        comment: GitHub releases
+  security:
+    assessments:
+      self:
+        name: gpumesh threat model
+        date: '2026-08-15'
+        evidence: https://github.com/Samurai007AK/gpumesh/blob/main/THREAT_MODEL.md
+        comment: |
+          Maintainer-authored threat model written against commit 96eee91
+          plus the working tree of that date, and reconciled against the code
+          on 2026-08-15. Covers the system context and data flow, trust
+          domains, assets, actors, entry points and trust boundaries
+          (including the deserialization boundary in both directions), a
+          STRIDE table, accepted residual risk, and out-of-scope items. Every
+          claim carries a file:line citation.
+
+          The STRIDE table distinguishes two deployments, because the
+          coordinator now binds 127.0.0.1 by default: threats requiring a
+          remote socket to the coordinator do not exist until an operator
+          opts into exposure with --host or GPUMESH_HOST.
+
+          No third-party security assessment has been performed.
