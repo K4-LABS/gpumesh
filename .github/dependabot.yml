@@ -36,8 +36,11 @@ updates:
       # newer is negligible, and the cost of being seven days behind a
       # backdoor is total. Security advisories are exempt from cooldown by
       # design, so genuine urgent fixes still arrive immediately.
+      #
+      # Note: `cooldown` only supports `default-days` for the
+      # github-actions and docker ecosystems — `semver-major-days` is
+      # rejected at parse time (the pip ecosystem below does support it).
       default-days: 7
-      semver-major-days: 14
 
   # ---------------------------------------------------------------------------
   # Python
@@ -106,4 +109,3 @@ updates:
       # Hub library image is different from that of a single-maintainer
       # package on PyPI.
       default-days: 3
-      semver-major-days: 14
