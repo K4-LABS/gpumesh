@@ -42,3 +42,10 @@ htmlcov/
 
 # Jupyter
 .ipynb_checkpoints/
+
+# Local operator notes and scratch scripts. These describe one particular
+# two-laptop setup and carry its coordinator token, so they must never be
+# published — keep them out of the repo rather than trusting them to be
+# scrubbed before every commit.
+HANDOFF.md
+worker_fix.bat

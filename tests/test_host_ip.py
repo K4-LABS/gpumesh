@@ -31,7 +31,7 @@ class TestVirtualAdapterDetection:
 
     @pytest.mark.parametrize("ip", [
         "192.168.1.10",
-        "10.126.13.54",
+        "10.20.30.40",
         "172.16.0.2",       # private but NOT a known virtual range
     ])
     def test_real_lan_addresses_not_flagged(self, ip):
@@ -67,9 +67,9 @@ class TestRanking:
         monkeypatch.delenv("GPUMESH_HOST_IP", raising=False)
         monkeypatch.setattr(
             utils, "_gather_candidate_ips",
-            lambda: ["10.126.13.54", "192.168.1.10"],
+            lambda: ["10.20.30.40", "192.168.1.10"],
         )
-        assert utils.get_lan_ip() == "10.126.13.54"
+        assert utils.get_lan_ip() == "10.20.30.40"
 
     def test_loopback_and_link_local_excluded(self, monkeypatch):
         monkeypatch.delenv("GPUMESH_HOST_IP", raising=False)

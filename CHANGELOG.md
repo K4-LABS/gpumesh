@@ -1,8 +1,440 @@
 # Changelog
 
-All notable changes to gpumesh are documented here.
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+### Fixed
+- **Two coordinators could silently bind the same port on Windows.** A second
+  `gpumesh serve` on an occupied port used to start anyway: `HTTPServer`
+  inherits `allow_reuse_address = 1`, which on Windows lets a new process bind
+  a port another process is actively listening on, with no error. The second
+  coordinator then told its own worker "authentication failed" — connections
+  reached the first coordinator, which held a different token — and any
+  process on the machine, even one running as a different user, could bind
+  over a live coordinator and receive its traffic. Both the coordinator and
+  the claim server now set `allow_reuse_address = os.name != "nt"`, so on
+  Windows a second bind is refused with a clear "port in use" error instead
+  of silently succeeding.
+
+## [2.0.0] — 2026-08-15
+
+The theme of this release is **the defaults stop assuming you meant to be
+reachable**. A coordinator's port is a remote-code-execution surface whose
+only guard is the token, and it used to be handed to every machine on the
+LAN — hotel and conference wifi included — by anyone who ran `gpumesh serve`
+without thinking about the network.
+
+The second theme is **failures say what is wrong**. A worker one release out
+of step used to fail as a `NameError` three calls after joining; a mesh nobody
+could reach used to fail as a firewall mystery; a task nobody could run used to
+fail as a timeout naming neither the task nor the reason. This release adds a
+wire-protocol handshake, a `gpumesh doctor` command, and a set of refusals that
+name the machine, the version and the fix.
+
+### Changed
+- **BREAKING: `gpumesh serve` now binds `127.0.0.1` instead of `0.0.0.0`.**
+  A mesh that worked before will stop accepting remote workers until the
+  coordinator is restarted with `--host 0.0.0.0` (or `GPUMESH_HOST=0.0.0.0`).
+  The reasoning is that a worker executes whatever Python the coordinator
+  sends it, as the OS user that started the worker, with that user's files,
+  GPUs, network and credentials — so "reachable from the LAN" means "arbitrary
+  code execution as that user for anyone on the LAN holding the token". That
+  is the same shape as TorchServe's CVE-2023-43654 and Dask's CVE-2021-42343.
+  Exposure is now something you ask for and are told about: a wider bind
+  prints a banner naming the user and device that tasks will run as.
+
+  The migration is designed to be readable at the moment it bites. On a
+  loopback bind the coordinator does **not** print a LAN join URL, because
+  that URL cannot connect and printing it anyway is what sends someone off to
+  debug a firewall for an hour. It says the coordinator is unreachable from
+  other machines, why that is the default, and the exact command to change it.
+
+  `GPUMesh.start_coordinator()` takes the same new `host` parameter, also
+  defaulting to loopback.
+- `docker-compose.yaml` passes `--host 0.0.0.0` (the container must bind
+  wildcard for the compose network to reach it) while publishing to
+  `127.0.0.1` on the host by default. `GPUMESH_BIND=0.0.0.0` is the explicit
+  opt-in to LAN reachability, and the previous `"8732:8732"` — which bound
+  every host interface — is gone.
+- **A script task that fails deterministically now fails once instead of three
+  times.** A non-zero *positive* exit status, no output at all, or a last
+  stdout line that is not JSON are all the script's own verdict on itself: an
+  uncaught exception exits 1, and re-running it produces the identical failure.
+  Those are now marked `user_error` and failed immediately, which function
+  tasks have done since they got a subprocess and script tasks were simply left
+  behind. The sign matters and is not an oversight: a *negative* status is
+  POSIX for "killed by a signal", which is the OOM killer's verdict on the
+  machine rather than the code's on itself, so those keep the full retry
+  budget — as do timeouts and lease expiry. Retries exist for flaky
+  infrastructure, not for bugs.
+- **BREAKING: `@accelerate(...).map()` no longer falls back to local execution
+  once the coordinator has accepted the job.** It used to fall back on *any*
+  exception from `distribute()`, so code could rely on "a mesh call always
+  returns something". Two cases now raise instead:
+
+  - A **`TimeoutError`** propagates. A job no worker could take quietly
+    becoming a local run after 300 seconds is worse than an error — the caller
+    waited out the whole timeout precisely because they wanted mesh execution.
+  - A **`gpumesh.PlacementUnsupportedError`** (new, and in `__all__`) is raised
+    when the mesh object's `distribute()` cannot carry the `gpu=`/`cores=`/
+    `memory=` keywords at all. Against an older mesh object that raised
+    `TypeError: distribute() got an unexpected keyword argument 'gpu'`, the
+    blanket handler read it as "mesh trouble" and ran the batch locally behind
+    a warning — so `@accelerate(mesh, gpu="A100").map(...)` *guaranteed* the
+    work never touched an A100. A placement constraint is a correctness
+    statement, not a preference.
+
+  The line is **acceptance**, and it is not arbitrary: everything that fails
+  before `POST /api/jobs` succeeds — unreachable coordinator, refused
+  connection, no alive workers, an unserializable function — still falls back
+  to local with a warning, because that is what makes a mesh optional. After
+  acceptance the coordinator owns a job that may still run to completion, and
+  running the same batch locally on top of it executes the work twice. For
+  anything with a side effect that is worse than any exception.
+
+  Migration: catch `TimeoutError` and `gpumesh.PlacementUnsupportedError` where
+  you previously relied on a value always coming back, or set `GPUMESH_LOCAL=1`
+  to opt out of the mesh entirely. The full split — which failure does which,
+  for both `.map()` and a single call — is now written down in
+  `docs/stability.md` §1 rather than left to be inferred from the code.
+
+### Added
+- `gpumesh serve --host <ADDR>` and the `GPUMESH_HOST` environment variable
+  set the bind address. This is distinct from the existing `--host-ip`, which
+  only changes the address *printed* for workers to dial; the two are now
+  documented side by side because confusing them costs an hour of firewall
+  debugging.
+- **Tasks nobody can run are now failed instead of queued forever.** A task
+  carrying a `gpu`, `gpu_memory_mb` or `cpu_cores` hint that no live worker
+  satisfies used to sit pending until the client's own 300s timeout fired and
+  reported "mesh task did not complete", which names neither the task nor the
+  reason. `fail_unsatisfiable_tasks()` runs in the reaper, waits 60s (long
+  enough for a GPU box that boots just after submission), and fails the task
+  with a message naming the requirement that could not be met.
+- `docs/protocol.md`: the HTTP API, every endpoint with its request and
+  response shape, the task payload keys, the function and result envelopes,
+  and the exact cross-Python-version function-shipping rules.
+- **A versioned wire protocol, so a version skew fails as a version skew.**
+  `gpumesh.PROTOCOL_VERSION` is an integer, deliberately not `__version__`.
+  The coordinator and the workers are installed on different machines, by
+  different people, at different times, and they drift — that is the normal
+  state of a mesh of borrowed laptops, not a misconfiguration, so tying the
+  handshake to the package version would mean every patch release refused every
+  worker that had not been upgraded that afternoon. It moves only when the
+  *wire* changes.
+
+  A worker sends `protocol_version` on `POST /api/register`; the coordinator
+  answers with its own `protocol_version` and `min_protocol_version`, and
+  reports both on `GET /api/health` so an operator can read the window without
+  first owning a worker that can join it. An out-of-window worker is refused at
+  registration with **HTTP 426 Upgrade Required** and a message naming both
+  versions, which side is behind, and the command that fixes it — before any
+  row is written, so a refused worker leaves no ghost in `/api/workers`. The
+  reverse case is checked by the worker itself, because a coordinator older
+  than the worker has no gate at all. Both surface as
+  `gpumesh.ProtocolVersionMismatch`, not through the worker's generic "failed
+  to register" branch, whose firewall advice is entirely wrong here.
+
+  It starts at **2**, not 1. Every gpumesh released up to and including 1.3.0
+  sends no version at all, and that unversioned protocol is named 1
+  retroactively — so the N−1 branch is exercised by every worker in the field
+  on the day it ships, rather than being dead code. An absent
+  `protocol_version` maps to the fixed constant 1, never to "whatever the
+  current minimum happens to be": a peer that sent nothing is telling you it
+  predates versioning. That is the same lesson the serializer learned the hard
+  way with `python_version` in 1.2.1 — a missing field means *unknown*, and
+  treating unknown as a mismatch broke real users.
+- **`gpumesh doctor`** — read-only environment diagnostics, formatted for
+  pasting into a bug report. Nearly every support thread on this project turns
+  out to be one machine's environment disagreeing with another's: two Python
+  minors, so a pickled function will not load on the far side; a CPU-only torch
+  wheel on a box with a 4090 in it; a coordinator advertising an address no
+  worker can route to; a firewall quietly dropping the port. Each of those cost
+  a long round of "run this, paste the output" before anyone could name the
+  problem. `doctor` is that whole conversation in one command.
+
+  Two rules hold it together. It **changes nothing** — no firewall rule is
+  added, no connection saved, nothing installed, because a diagnostic that
+  changes the system destroys the evidence it was run to collect. And it
+  **never prints the token**, because the token grants code execution on every
+  machine in the mesh and the entire point is that this output gets pasted in
+  public. It exits `1` only for a fault on *this* machine; no coordinator
+  configured, or an unreachable one, is a warning and still exits `0`, so it
+  works as a pre-flight check in a script. `--json` emits the same report as a
+  parseable document, with collection-time warnings diverted to stderr so they
+  can never land mid-document.
+- **`--no-color`** on `serve` and `join`, as a mutually exclusive partner to
+  `--color`. Those two commands are the ones that keep printing for hours into
+  a Docker log, a systemd journal or a CI pane — exactly where `isatty()` says
+  "no terminal" and the operator still wants, or emphatically does not want,
+  colour. `GPUMESH_COLOR=0` remains the environment form.
+- **`GPUMESH_CLAIM_HOST`** narrows the bind of `gpumesh worker`'s claim port.
+  The default is still every interface, and deliberately so: unlike the
+  coordinator — where running a coordinator and a worker on one machine is a
+  real and common case — a claim server exists solely to be reached by a
+  coordinator on *another* machine, so a loopback claim server is not a safer
+  one, it is a broken one that fails as an unreachable-worker mystery. What was
+  missing was never a smaller default, it was the ability to say something more
+  precise than "everything" — a tailnet address, say. A non-loopback bind now
+  prints a banner naming the OS user that claims will run as.
+
+  It is a separate variable from `GPUMESH_HOST` on purpose. The two answer
+  different questions and are routinely set on the same machine, and
+  `GPUMESH_HOST=127.0.0.1` — an entirely sensible coordinator setting — would
+  otherwise have quietly rendered every worker on that box unclaimable.
+- `docs/stability.md`: what gpumesh's public API actually is (`__all__`, and
+  nothing else), what a MAJOR/MINOR bump promises for the Python API and the
+  CLI, `@accelerate`'s fallback contract — which failures fall back to local
+  execution and which propagate, and why the line is drawn at job acceptance —
+  the protocol compatibility window, the Python version support policy,
+  and the two-release deprecation path. SemVer requires a project to declare a
+  public API; until this page existed, every internal rename was arguably a
+  breaking change and none was definitely one.
+- `docs/why-not-ray-or-dask.md`: an honest comparison, including the cases
+  where Ray or Dask is the right answer.
+- `examples/README.md` and four new runnable examples — `hello_mesh.py`,
+  `second_machine.py`, `param_sweep.py`, `numpy_result.py`, `worker_leaves.py`
+  — covering the questions that come up in the first hour.
+
+### Fixed
+- **The scheduler handed the heaviest task to the weakest worker on a
+  two-worker mesh** — the exact inverse of what it promises. Worker rank was
+  computed by counting scores `<= mine`, which made the line 1-based: the
+  weakest of N workers scored `1/N` rather than 0, shifting every worker one
+  slot up the cost-sorted queue. Rank now counts strictly weaker peers, and
+  tied scores take the midpoint of the slots they jointly occupy instead of
+  all piling onto the lightest task.
+- **`@accelerate(cores=...)` was advertised but never enforced.** The
+  requirement was validated against the pool at call time and then dropped;
+  nothing stopped the task from being leased by a worker with fewer cores.
+  Workers now report `cpu_cores` and `gpu_memory_total_mb` at registration,
+  and `_worker_can_run()` is a single source of truth consulted both by
+  `lease_task()` (to pick eligible tasks) and by the unsatisfiable detector
+  (to decide nobody can) — so the two can never disagree. A worker that
+  reported no capacity reads back as 0, which cannot satisfy a positive
+  requirement: a machine that never said how many cores it has is not one we
+  can promise 64 of.
+- **Straggler detection was silently disabled on two-worker meshes.** The
+  median helper indexed the upper middle sample instead of averaging the two,
+  making the slower of two workers its own yardstick, so "slower than twice
+  the median" could never be true. The requesting worker is also now excluded
+  from the median it is measured against, which is what the Petals-style rule
+  actually means.
+- **`NameError: name 'mesh' is not defined` on a task that ran fine locally.**
+  When laptops run different Python minors the function ships as source text
+  and is rebuilt with `exec()` — but the captured source included its own
+  decorator lines, and `@mesh` is not a name in the shipped metadata. Stripping
+  gpumesh's own decorators costs nothing, since the function runs bare inside
+  the worker's subprocess and the decorator would add nothing there. (`dd9f0dd`)
+- **A cross-version function with no source fallback crashed the worker
+  instead of failing.** A function defined in a heredoc or an interactive
+  session has no source file, so `inspect.getsource()` captures nothing and the
+  metadata carries no `source`. On a worker running a different Python,
+  `cloudpickle.loads()` of that foreign bytecode can *succeed* and hand back a
+  function whose bytecode kills the interpreter the moment it is called — a
+  native fault (`0xC0000005` on Windows) inside the task subprocess, with no
+  traceback and nothing to diagnose. Deserialization now refuses up front,
+  naming both Python versions and saying to define the function in a `.py`
+  file. A clean error beats a dead worker. (`96eee91`)
+- **GPU workers on torch >= 2.8 died at startup.** `get_device_properties()`
+  renamed `total_mem` to `total_memory`, so the capability probe raised
+  `AttributeError` before the worker ever registered. Both names are now read,
+  and `AttributeError` joins the other GPU-probe failures as best-effort rather
+  than fatal — a machine whose VRAM cannot be measured is still a usable
+  worker. (`5b7dbcd`)
+- **A multi-line decorator could be truncated into a `SyntaxError`.** When a
+  function ships as source text (cross-version workers), gpumesh strips its
+  own `@mesh` / `@accelerate` decorators and keeps every other one. The span
+  search followed bracket nesting without tracking string state, so a
+  decorator argument containing brackets — a triple-quoted note holding
+  `) ) )` — ended the span early and left the closing quotes glued to the
+  front of the `def`. Quote state is now threaded from line to line.
+- **The source fallback silently produced the wrong callable.** A callable
+  object is serialized under its *class* name, so rebuilding from source
+  produced the class; the worker's `func(**params)` then constructed an
+  instance and returned it as the task's result. Classes, async functions and
+  bound methods are now rejected up front with a message explaining what to do
+  instead, rather than failing confusingly deep inside the subprocess.
+- **Shutting down a coordinator could throw away completed work.** The
+  database was closed before the accept loop stopped, with a 1s sleep standing
+  in for "handlers have drained". A handler still running after that second
+  hit `sqlite3.ProgrammingError: Cannot operate on a closed database` and
+  returned a 500, and every request arriving during that second was answered
+  503 — including `/api/result`, so a task a worker had already finished was
+  rejected at the door. The accept loop is now stopped first, collapsing the
+  window to microseconds.
+- **`shutdown()` left the listening socket bound.** A coordinator that had
+  "shut down" still owned its port: restarting on the same port failed with
+  `EADDRINUSE` on Linux, and on Windows the old socket lingered as a leaked
+  descriptor. `server_close()` now runs on the shutdown path.
+- **`shutdown()` before `serve_forever()` blocked forever.** `BaseServer.shutdown()`
+  waits on an event only the accept loop sets, so calling it on a coordinator
+  whose loop had not started yet hung — but skipping it when the loop *was*
+  running left the coordinator serving after shutdown returned. Both cases are
+  now tracked explicitly instead of guessed.
+- **`--color` was accepted and read by nothing.** The flag had been declared on
+  `serve` and `join` since it was added and never consulted, so the one
+  situation it exists for — forcing colour into a log where `isatty()` is false
+  — was the one situation where it did nothing. It is fiddlier than it looks,
+  which is why it sat there: `ansi._SUPPORTS_COLOR` is evaluated once at import
+  time, long before argparse has seen a command line, and several modules bind
+  their own copy of that bool with `from .ansi import _SUPPORTS_COLOR`. Setting
+  the environment variable alone would have fixed nothing in-process; rebinding
+  only `ansi`'s global would have left the copies stale and the flag
+  half-working, which is worse than not working. The flag now sets
+  `GPUMESH_COLOR` (so the choice reaches the function-task subprocess a worker
+  spawns, and any gpumesh module imported later), re-runs the detection, and
+  rebinds every already-imported module holding a copy.
+- **`cost` in a `.map()` payload broke the local fallback.** `cost` is a
+  scheduler hint that rides at the payload's top level and is never an argument
+  for your function — `GPUMesh.distribute` has stripped it since 1.1.0. But the
+  local fallbacks in `.map()` handed the raw payload straight to the function,
+  so a payload annotated exactly the way `examples/payloads.json` and the docs
+  teach worked on the mesh and raised `unexpected keyword argument 'cost'` the
+  instant the mesh was unavailable. That is precisely backwards: a fallback
+  that only works when the thing it replaces is available is not a fallback.
+  All three of `@accelerate`'s local paths and `@mesh`'s now share one helper,
+  so a mesh call and a local call take identical arguments.
+
+  Two deliberate non-changes. `__call__` does *not* strip `cost`, because there
+  the payload is built from the caller's own arguments — `train(lr=0.1,
+  cost=2.0)` can only mean the function declares a `cost` parameter, and
+  stripping it would break that function on the local path, the mirror image of
+  the bug above. And the placement hints (`gpu`, `gpu_memory_mb`, `cpu_cores`)
+  are *not* stripped from `.map()` payloads: those are written at the top level
+  by `distribute()` from the decorator's own keywords, so a key of that name in
+  a user payload is an ordinary parameter and reaches the function on the mesh
+  path too. Dropping them locally would invent a fresh asymmetry rather than
+  remove one.
+- **Log lines wrote raw escape bytes into redirected files.** The coloured
+  formatter emitted ANSI unconditionally, so `gpumesh serve 2> run.log` filled
+  the log with escape sequences. Colour is now gated on the project's single
+  existing capability probe rather than a second detection scheme. One wrinkle
+  worth knowing: that probe asks `stdout` while the handler writes to `stderr`,
+  so for the uncommon shape where only stderr is redirected, `--no-color` or
+  `GPUMESH_COLOR=0` is the escape hatch. Log handlers also no longer stack on
+  repeated setup calls, and `--json-logs` now carries exception type, message
+  and traceback instead of dropping them.
+- **`GPUMESH_HOST_IP` accepted a typo and failed minutes later on another
+  machine.** The value is copied verbatim into every advertised URL and every
+  claim payload, so a bad one surfaced as a connection error on a machine whose
+  operator never set the variable and had no way to guess what it was. It is
+  now validated where it is read: an IP literal is required — almost any typo
+  is a syntactically valid single-label hostname, which is exactly what let
+  them through — and anything else prints one warning naming the value and
+  falls back to auto-detection. A detected address that works beats a pinned
+  one that cannot.
+- **Address filtering excluded `100.0.0.0/8` when it meant `100.64.0.0/10`.**
+  The check for addresses not worth advertising matched the string prefix
+  `"100."`, which covers the Tailscale/CGNAT range but also eight times more
+  ordinary space besides. Loopback, link-local and CGNAT are now tested as
+  networks rather than as string prefixes. Duplicate candidate URLs are also
+  filtered out.
+- **`setup_torch()` returned `cuda:0` on a multi-GPU machine no matter which
+  card the mesh had picked**, so it and `device()` disagreed about the same
+  inventory row and one of them was always wrong. Both now map the inventory
+  row to a local CUDA index, and validate it against `torch.cuda.device_count()`
+  — a stale inventory row (a card since removed, an inventory predating a
+  reboot) raises a message naming both numbers instead of surfacing much later
+  as an opaque invalid-device error from torch.
+- **`setup_torch(min_memory_mb=...)` could route to the one card with no room.**
+  A GPU reporting 0 MB free was treated as having reported nothing and fell
+  back to its *total*, so a fully occupied 24 GB card sailed through a
+  `min_memory_mb=8000` filter. Absent now means unknown; zero means zero.
+- **`@accelerate(memory=...)` still routed work onto a GPU with no free
+  memory.** The same bug, in the other file, surviving the fix above: the
+  capacity check read `gpu_memory_free_mb` through a truthiness chain, so a
+  *reported* 0 was treated as "said nothing" and fell through to
+  `gpu_memory_total_mb`, and a fully occupied 24 GB card satisfied
+  `memory="8GB"`. The asymmetry that kept the chain alive here — `accelerate`
+  validates a *request* and must not reject a mesh it cannot measure, while
+  `torch` chooses a *device* and must not pick one it cannot verify — is sound
+  for an **absent** key and does not extend to a reported zero. A worker that
+  explicitly answers "0 MB free" has been measured, and it has none.
+
+  Absent still means unknown and still passes validation, so a 1.3.0
+  coordinator that reports no capacity keys at all is unaffected, and so is a
+  NULL `cpu_cores` on a worker row written before the capacity migration.
+  Validation also stays no more permissive than the coordinator's scheduler, so
+  a task still cannot pass validation and then turn out to be un-leasable. One
+  case is genuinely ambiguous and is now named in the error rather than guessed
+  at: a worker reporting 0 free alongside a large total is either a full card
+  or one that registered moments ago and has not sent its first heartbeat, and
+  the message says that retrying in a few seconds tells them apart.
+- **A mesh call that outlived its coordinator blamed the task.** Every failed
+  status poll was swallowed, so a coordinator that shut down or dropped off the
+  network mid-task ended as a bare `mesh task did not complete within 300s` —
+  a message that sends the reader to look at their own function. Swallowing the
+  individual failures is still right (one dropped packet must not fail a
+  five-minute job), but the last one is now kept and reported, so the timeout
+  says the coordinator became unreachable and names the error.
+- **`device(mesh, -1)` quietly returned the last device.** Negative indices
+  fell through into Python's own negative indexing, which is not a selection
+  anybody asked for from an API whose indices name inventory entries and wrap.
+  It now raises `ValueError` naming the index and the rule.
+- **A failed `import torch` hid its own cause.** The `ImportError` gpumesh
+  raised in its place said "install torch" and discarded the original message,
+  which is unhelpful precisely when torch *is* installed and failing to load
+  (a CUDA driver mismatch, a broken wheel). The original is now included and
+  chained.
+- **The token file's permissions could fail silently.** `~/.gpumesh/config.json`
+  holds the token in plaintext at 0600; when the `chmod` failed, or the Windows
+  `icacls` call could not run, gpumesh said nothing. It now names the file, says
+  what failed, and says why it matters. It also warns when the file is found
+  group- or other-readable on load.
+
+### Security
+- **The coordinator's request handling is bounded on all three axes.** A 60 s
+  socket timeout closes a slowloris hole — without one, `rfile` reads block
+  forever and, because this is a `ThreadingHTTPServer`, a peer opening
+  connections that declare a body they never send pinned one thread per
+  connection until the process died. Oversized bodies are refused on the
+  declared `Content-Length` and then drained under both a byte cap and a
+  wall-clock budget, so `Content-Length: 10000000000` buys a closed connection
+  rather than a 10 GB read; chunked and length-less bodies are refused `411`
+  rather than half-understood.
+- **The worker claim port is hardened past what the coordinator needs.** It is
+  the widest-open surface gpumesh ships and, unlike the coordinator, it
+  physically cannot authenticate before parsing — the claim protocol carries
+  the token in the request body. So the parse is made small, bounded and
+  rate-limited instead: the rate limiter is consulted before `Content-Length`
+  is read at all, the body cap is 16 KB (down from a 1 MB limit inherited from
+  the coordinator, which carries serialized task payloads — nothing on this
+  port ever does) and is refused on the declared length before any allocation
+  proportional to it, draining is bounded at 256 KB with a 2 s timeout, and a
+  15 s socket timeout closes the same slowloris hole. Rate-limit accounting is
+  centralised in the one method both the stock and the worker-patched handler
+  funnel through, so neither can drift from the policy. `GPUMESH_CLAIM_HOST`
+  (above) is the one control here that reduces attack *surface* rather than
+  cost per attempt.
+- **Loopback is exempt from the token rate limiter.** Five mistyped tokens used
+  to wedge a healthy mesh for fifteen minutes on the one machine that cannot be
+  told to come from a different IP — and the coordinator's own self-worker and
+  the operator's own CLI both arrive over loopback. The lockout had nothing
+  left to protect there: rate limiting exists to stop someone *guessing* the
+  token over the network, and anyone who can open a socket from `127.0.0.1` is
+  already executing code on the coordinator host, where the token sits in argv,
+  in the environment, and in `~/.gpumesh/config.json`. They read it; they do
+  not guess it. Exempted outright rather than given a higher ceiling, because a
+  higher ceiling still ends in a lockout on the one path where a lockout is
+  never the right answer — it only moves the outage from five typos to fifty.
+- **Loopback detection now covers the whole `127.0.0.0/8` range, `::1`, and
+  IPv4-mapped forms such as `::ffff:127.0.0.1`.** A dual-stack listener on
+  Windows and Linux reports loopback connections in exactly that mapped form,
+  and `ipaddress.IPv6Address.is_loopback` is `False` for it. Anything
+  unparseable — an empty string, a hostname, a spoofed header value — is not
+  loopback: this function decides who skips rate limiting, so it fails closed.
+- `SECURITY.md` and `THREAT_MODEL.md` document the trust boundaries, the
+  personas and their granted capabilities, and a STRIDE table with residual
+  risk; `SECURITY-INSIGHTS.yml` states the same in-scope/out-of-scope split in
+  the OpenSSF machine-readable form. The short version has not changed and is
+  not a bug: **a token is a license to execute arbitrary code as the worker's
+  OS user**, and it runs in both directions, because results are deserialized
+  by whoever submitted the task.
 
 ## [1.3.0] — 2026-08-14
 
@@ -185,11 +617,11 @@ Previously the same function could return a different value — or fail outright
   difference is explained, and serialization and environment constraints are
   documented under Limitations and Troubleshooting.
 
-### Tests
-- 590 tests passing, up from 565 (25 new: result-envelope round trips
+### Added
+- 25 new tests (590 passing, up from 565): result-envelope round trips
   including numpy, non-dict and container returns over a live mesh, retry
   classification, config-persistence safety, and package-level Jupyter hook
-  registration).
+  registration.
 
 ## [1.1.0] — 2026-08-08
 
@@ -216,8 +648,8 @@ Previously the same function could return a different value — or fail outright
   against the actual CLI/API.
 - Dockerfile image label bumped to 1.1.0.
 
-### Tests
-- 565 tests passing (3 new regression tests for the fixes above).
+### Added
+- 3 regression tests for the fixes above (565 passing).
 
 ## [1.0.0] — 2026-08-03
 
@@ -380,3 +812,32 @@ Previously the same function could return a different value — or fail outright
 
 ### Changed
 - Initial stable release.
+
+<!--
+Version links.
+
+Only v0.5.0, v1.2.0 and v1.3.0 exist as git tags. v0.7.0 through v1.1.0 were
+published to PyPI but never tagged, so `compare/` links for those versions
+cannot resolve — they point at the PyPI release page instead of being
+invented. MAINTAINER: tagging the historical release commits would let every
+version get a real diff link:
+
+    git tag v1.1.0 <sha> && git push origin v1.1.0     (and so on)
+
+then replace the PyPI links below with compare/ links.
+-->
+
+[Unreleased]: https://github.com/Samurai007AK/gpumesh/compare/v2.0.0...HEAD
+[2.0.0]: https://github.com/Samurai007AK/gpumesh/compare/v1.3.0...v2.0.0
+[1.3.0]: https://github.com/Samurai007AK/gpumesh/compare/v1.2.0...v1.3.0
+[1.2.0]: https://github.com/Samurai007AK/gpumesh/releases/tag/v1.2.0
+[1.1.0]: https://pypi.org/project/gpumesh/1.1.0/
+[1.0.0]: https://pypi.org/project/gpumesh/1.0.0/
+[0.9.0]: https://pypi.org/project/gpumesh/0.9.0/
+[0.8.1]: https://pypi.org/project/gpumesh/0.8.1/
+[0.8.0]: https://pypi.org/project/gpumesh/0.8.0/
+[0.7.4]: https://pypi.org/project/gpumesh/0.7.4/
+[0.7.3]: https://pypi.org/project/gpumesh/0.7.3/
+[0.7.2]: https://pypi.org/project/gpumesh/0.7.2/
+[0.7.1]: https://pypi.org/project/gpumesh/0.7.1/
+[0.7.0]: https://pypi.org/project/gpumesh/0.7.0/

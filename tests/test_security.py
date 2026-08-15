@@ -1,11 +1,16 @@
 """Tests for gpumesh.security module."""
 
+import hashlib
+import inspect
 import time
 import pytest
+
+import gpumesh.security
 
 from gpumesh.security import (
     hash_token,
     verify_token,
+    is_loopback,
     RateLimiter,
     IPAllowlist,
     SecurityManager,
@@ -118,6 +123,91 @@ class TestRateLimiter:
         assert remaining <= 60
 
 
+class TestLoopbackDetection:
+    """Tests for is_loopback()."""
+
+    @pytest.mark.parametrize("ip", [
+        "127.0.0.1",
+        "127.0.0.53",   # systemd-resolved's address, still 127.0.0.0/8
+        "127.1.2.3",
+        "127.255.255.254",
+        "::1",
+        "::ffff:127.0.0.1",   # dual-stack listener's view of an IPv4 loopback
+        " 127.0.0.1 ",        # surrounding whitespace
+    ])
+    def test_loopback_addresses_detected(self, ip):
+        """Every loopback form must be recognised, not just 127.0.0.1."""
+        assert is_loopback(ip) is True
+
+    @pytest.mark.parametrize("ip", [
+        "192.168.1.1",
+        "10.0.0.1",
+        "8.8.8.8",
+        "128.0.0.1",          # one octet away from the loopback range
+        "::ffff:8.8.8.8",
+        "2001:db8::1",
+        "localhost",          # a name, not an address
+        "127.0.0.1.evil.com",
+        "",
+        None,
+    ])
+    def test_non_loopback_addresses_rejected(self, ip):
+        """Fail closed: anything not provably loopback is not exempt."""
+        assert is_loopback(ip) is False
+
+
+class TestLoopbackRateLimitExemption:
+    """The operator's own machine must never be locked out of its own mesh."""
+
+    def test_loopback_never_locked_out(self):
+        """Regression: 5 bad probes from 127.0.0.1 used to wedge the mesh."""
+        limiter = RateLimiter(max_attempts=3, window_seconds=60, lockout_seconds=900)
+        for _ in range(20):
+            assert limiter.record_failure("127.0.0.1") is False
+            assert limiter.is_allowed("127.0.0.1") is True
+
+    @pytest.mark.parametrize("ip", ["127.0.0.1", "127.0.0.9", "::1", "::ffff:127.0.0.1"])
+    def test_every_loopback_form_is_exempt(self, ip):
+        """The exemption covers 127.0.0.0/8 and IPv6, not one literal string."""
+        limiter = RateLimiter(max_attempts=2, window_seconds=60, lockout_seconds=900)
+        for _ in range(5):
+            limiter.record_failure(ip)
+        assert limiter.is_allowed(ip) is True
+        assert limiter.get_lockout_remaining(ip) == 0
+
+    def test_loopback_remaining_attempts_stays_full(self):
+        """An exempt IP never burns through its budget."""
+        limiter = RateLimiter(max_attempts=5, window_seconds=60)
+        for _ in range(10):
+            limiter.record_failure("127.0.0.1")
+        assert limiter.get_remaining_attempts("127.0.0.1") == 5
+
+    def test_loopback_failures_are_not_recorded_at_all(self):
+        """Exempt means untracked, so history cannot bite if the flag flips."""
+        limiter = RateLimiter(max_attempts=2, window_seconds=60)
+        for _ in range(10):
+            limiter.record_failure("127.0.0.1")
+        limiter.exempt_loopback = False
+        assert limiter.get_remaining_attempts("127.0.0.1") == 2
+        assert limiter.is_allowed("127.0.0.1") is True
+
+    def test_exemption_can_be_disabled(self):
+        """exempt_loopback=False restores the old behaviour for anyone who wants it."""
+        limiter = RateLimiter(max_attempts=2, window_seconds=60, lockout_seconds=60,
+                              exempt_loopback=False)
+        limiter.record_failure("127.0.0.1")
+        limiter.record_failure("127.0.0.1")
+        assert limiter.is_allowed("127.0.0.1") is False
+
+    def test_non_loopback_still_locked_out(self):
+        """The exemption must not disarm rate limiting for the network."""
+        limiter = RateLimiter(max_attempts=2, window_seconds=60, lockout_seconds=60)
+        limiter.record_failure("192.168.1.7")
+        limiter.record_failure("192.168.1.7")
+        assert limiter.is_allowed("192.168.1.7") is False
+        assert limiter.get_lockout_remaining("192.168.1.7") > 0
+
+
 class TestIPAllowlist:
     """Tests for IP allowlist functionality."""
     
@@ -214,3 +304,149 @@ class TestSecurityManager:
         # Should have fresh attempts now
         allowed, msg = mgr.verify_request("wrong", "192.168.1.1")
         assert "2 attempts remaining" in msg  # Not rate limited yet
+
+
+class TestOperatorLockout:
+    """Regression tests for the loopback lockout that wedged a live mesh."""
+
+    def test_loopback_survives_repeated_bad_tokens(self):
+        """Five bad probes from the coordinator's own host, then the real token.
+
+        This is the exact sequence that produced
+        "Too many attempts. Try again in 404s" and locked the operator out of
+        their own coordinator. The correct token must still be accepted.
+        """
+        mgr = SecurityManager("secret123", max_attempts=5)
+        for _ in range(5):
+            allowed, msg = mgr.verify_request("typo", "127.0.0.1")
+            assert allowed is False
+            assert "Too many attempts" not in msg
+
+        allowed, msg = mgr.verify_request("secret123", "127.0.0.1")
+        assert allowed is True
+        assert msg == ""
+
+    @pytest.mark.parametrize("ip", ["127.0.0.1", "127.0.0.2", "::1", "::ffff:127.0.0.1"])
+    def test_self_worker_and_cli_addresses_all_exempt(self, ip):
+        """The self-worker and the operator's CLI both arrive over loopback."""
+        mgr = SecurityManager("secret123", max_attempts=2)
+        for _ in range(6):
+            mgr.verify_request("wrong", ip)
+        allowed, msg = mgr.verify_request("secret123", ip)
+        assert allowed is True
+
+    def test_loopback_bad_token_message_names_the_real_cause(self):
+        """A loopback rejection must read as a token problem, not a lockout."""
+        mgr = SecurityManager("secret123", max_attempts=2)
+        for _ in range(4):
+            allowed, msg = mgr.verify_request("wrong", "127.0.0.1")
+            assert allowed is False
+            assert "Invalid token" in msg
+            assert "never locked out" in msg
+            assert "Too many attempts" not in msg
+
+    def test_remote_ip_is_still_locked_out(self):
+        """Loopback is the exception; the LAN is not."""
+        mgr = SecurityManager("secret123", max_attempts=2)
+        mgr.verify_request("wrong", "192.168.1.50")
+        mgr.verify_request("wrong", "192.168.1.50")
+        allowed, msg = mgr.verify_request("wrong", "192.168.1.50")
+        assert allowed is False
+        assert "Too many attempts" in msg
+
+
+class TestRejectionMessagesAreDistinguishable:
+    """Each 401 reason must tell the reader a different thing to do."""
+
+    def test_lockout_message_denies_being_a_token_verdict(self):
+        """The old message read as "your token is wrong". Say it is not."""
+        mgr = SecurityManager("secret123", max_attempts=2)
+        mgr.verify_request("wrong", "10.0.0.5")
+        mgr.verify_request("wrong", "10.0.0.5")
+        allowed, msg = mgr.verify_request("wrong", "10.0.0.5")
+        assert allowed is False
+        assert "NOT a token rejection" in msg
+        assert "not checked" in msg
+        assert "retry with the same token" in msg
+
+    def test_correct_token_during_lockout_gets_the_same_lockout_message(self):
+        """No correctness oracle: a locked-out IP learns nothing about the token.
+
+        Telling a locked-out caller "your token is right, just wait" would let
+        a brute-forcer guess through the lockout at full speed and be told the
+        moment they hit. The right token and the wrong token must be
+        indistinguishable here.
+        """
+        mgr = SecurityManager("secret123", max_attempts=2)
+        mgr.verify_request("wrong", "10.0.0.6")
+        mgr.verify_request("wrong", "10.0.0.6")
+
+        allowed_right, msg_right = mgr.verify_request("secret123", "10.0.0.6")
+        allowed_wrong, msg_wrong = mgr.verify_request("still-wrong", "10.0.0.6")
+
+        assert allowed_right is False
+        assert allowed_wrong is False
+        assert "correct" not in msg_right.lower()
+        # Only the countdown may differ between the two.
+        assert msg_right.split("for another")[0] == msg_wrong.split("for another")[0]
+
+    def test_invalid_token_message_states_the_lockout_it_is_counting_down_to(self):
+        """"3 attempts remaining" is useless without saying remaining until what."""
+        mgr = SecurityManager("secret123", max_attempts=5)
+        allowed, msg = mgr.verify_request("wrong", "10.0.0.7")
+        assert allowed is False
+        assert "Invalid token" in msg
+        assert "4 attempts remaining" in msg
+        assert "900s" in msg
+
+    def test_final_attempt_says_the_lockout_has_started(self):
+        """The attempt that trips the lockout should say so, not say "0 remaining"."""
+        mgr = SecurityManager("secret123", max_attempts=2)
+        mgr.verify_request("wrong", "10.0.0.8")
+        allowed, msg = mgr.verify_request("wrong", "10.0.0.8")
+        assert allowed is False
+        assert "Invalid token" in msg
+        assert "now rate limited" in msg
+
+    def test_allowlist_rejection_is_distinct_from_both(self):
+        """A blocked address is permanent; it must not look like a wait-and-retry."""
+        mgr = SecurityManager("secret123", allowed_ips=["192.168.1.1"])
+        allowed, msg = mgr.verify_request("secret123", "10.0.0.9")
+        assert allowed is False
+        assert "IP not allowed" in msg
+        assert "10.0.0.9" in msg
+        assert "Too many attempts" not in msg
+        assert "Invalid token" not in msg
+
+    def test_three_reasons_produce_three_different_messages(self):
+        """No two rejection reasons may share a message."""
+        blocked = SecurityManager("secret123", allowed_ips=["192.168.1.1"])
+        _, allowlist_msg = blocked.verify_request("secret123", "10.0.0.10")
+
+        mgr = SecurityManager("secret123", max_attempts=2)
+        _, bad_token_msg = mgr.verify_request("wrong", "10.0.0.11")
+        mgr.verify_request("wrong", "10.0.0.11")
+        _, lockout_msg = mgr.verify_request("wrong", "10.0.0.11")
+
+        assert len({allowlist_msg, bad_token_msg, lockout_msg}) == 3
+
+
+class TestTokenHashingLimits:
+    """The deterministic salt is a documented trade-off, not a secret one."""
+
+    def test_salt_is_a_pure_function_of_the_token(self):
+        """Same token -> same salt -> same hash, across coordinator restarts.
+
+        This is what lets a worker keep its persisted plain token working after
+        the coordinator restarts. It also means the salt adds no precomputation
+        resistance, which SECURITY.md states outright.
+        """
+        assert hash_token("secret123") == hash_token("secret123")
+        salt = hash_token("secret123").split(":", 1)[0]
+        assert salt == hashlib.sha256(b"secret123").hexdigest()[:16]
+
+    def test_verification_is_timing_safe(self):
+        """verify_token must go through hmac.compare_digest, not ==."""
+        source = inspect.getsource(gpumesh.security.verify_token)
+        assert "hmac.compare_digest" in source
+        assert source.count("hmac.compare_digest") == 2  # legacy + salted paths
