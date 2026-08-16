@@ -96,14 +96,14 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/Samurai007AK/gpumesh"
-Documentation = "https://github.com/Samurai007AK/gpumesh#readme"
-Repository = "https://github.com/Samurai007AK/gpumesh"
-Issues = "https://github.com/Samurai007AK/gpumesh/issues"
+Homepage = "https://github.com/K4-LABS/gpumesh"
+Documentation = "https://github.com/K4-LABS/gpumesh#readme"
+Repository = "https://github.com/K4-LABS/gpumesh"
+Issues = "https://github.com/K4-LABS/gpumesh/issues"
 # PyPI renders a `Changelog` key as a dedicated sidebar link on the project
 # page, which is the single most-clicked link for anyone deciding whether an
 # upgrade is safe.
-Changelog = "https://github.com/Samurai007AK/gpumesh/blob/main/CHANGELOG.md"
+Changelog = "https://github.com/K4-LABS/gpumesh/blob/master/CHANGELOG.md"
 
 [project.optional-dependencies]
 # Floors below are the oldest release that (a) actually has the API gpumesh

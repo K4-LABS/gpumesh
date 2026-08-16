@@ -462,7 +462,7 @@ people's service, and reporting privately rather than publicly.
 
 In scope:
 
-- This repository (`github.com/Samurai007AK/gpumesh`)
+- This repository (`github.com/K4-LABS/gpumesh`)
 - The `gpumesh` package on PyPI
 - The `samurai007ak/gpumesh` container image
 

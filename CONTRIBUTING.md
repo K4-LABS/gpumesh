@@ -32,9 +32,9 @@ tested, and it is used, but it is not settled:
   genuinely useful contribution, not a nitpick.
 
 New here? Issues labelled
-[`good first issue`](https://github.com/Samurai007AK/gpumesh/labels/good%20first%20issue)
+[`good first issue`](https://github.com/K4-LABS/gpumesh/labels/good%20first%20issue)
 are scoped so you do not need to understand the whole codebase, and
-[`help wanted`](https://github.com/Samurai007AK/gpumesh/labels/help%20wanted)
+[`help wanted`](https://github.com/K4-LABS/gpumesh/labels/help%20wanted)
 marks the ones where input is most valuable.
 
 ---
@@ -42,7 +42,7 @@ marks the ones where input is most valuable.
 ## Setup
 
 ```bash
-git clone https://github.com/Samurai007AK/gpumesh.git
+git clone https://github.com/K4-LABS/gpumesh.git
 cd gpumesh
 python -m venv .venv
 source .venv/bin/activate      # Windows: .venv\Scripts\activate
