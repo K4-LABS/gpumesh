@@ -1,33 +1,27 @@
-<p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/img/gpumesh-logo.png">
-    <img alt="gpumesh — GPU Mesh Network" src="docs/img/gpumesh-logo-light.png" width="240">
-  </picture>
-</p>
+<div align="center">
 
-<p align="center">
-  <b>Borrow your friends' GPUs.</b> A distributed compute mesh that lets you share GPU power
-  across machines on your network — with one decorator, one CLI command, or a Python API.
-</p>
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/gpumesh-logo.png">
+  <img alt="gpumesh — GPU Mesh Network" src="docs/img/gpumesh-logo-light.png" width="240">
+</picture>
+
+# gpumesh
+
+**Borrow your friends' GPUs.** A distributed compute mesh that lets you share GPU power
+across machines on your network — with one decorator, one CLI command, or a Python API.
+
+[![License](https://img.shields.io/badge/License-AGPL--3.0-blue.svg?style=for-the-badge)](LICENSE)
+[![Contributors](https://img.shields.io/github/contributors/K4-LABS/gpumesh?style=for-the-badge)](https://github.com/K4-LABS/gpumesh/graphs/contributors)
+
+</div>
 
 ---
 
 > [!CAUTION]
-> **gpumesh runs code you send it, on machines that trust you. There is no sandbox.**
->
-> A worker executes arbitrary Python as the OS user that started it — same
-> files, same GPUs, same network, same credentials. A valid token is not a
-> password guarding data; it is a licence to execute code on every machine in
-> the mesh.
->
-> It runs **both ways**: a worker's results are deserialized by whoever
-> submitted the task, so a hostile worker executes code on the submitter.
-> Trust runs in both directions.
->
-> gpumesh provides **no sandbox** and does not try to. Use it on machines and
-> with people you actually trust. Read [SECURITY.md](SECURITY.md) and
-> [THREAT_MODEL.md](THREAT_MODEL.md) before exposing a coordinator to a
-> network.
+> **gpumesh runs code you send it — there is no sandbox.** A worker executes
+> arbitrary Python as the OS user that started it, and results are deserialized
+> by the submitter — trust runs **both ways**. Use it only with machines and
+> people you trust. See [SECURITY.md](SECURITY.md) and [THREAT_MODEL.md](THREAT_MODEL.md).
 
 ---
 
@@ -44,20 +38,18 @@ gpumesh turns multiple machines into a **single, unified compute pool**. Start a
 
 ### Key features
 
-| Feature | What it does |
-|---------|--------------|
-| **`@mesh` / `@accelerate` decorators** | Mark a function and it runs on the pool — no job system, no ceremony |
-| **`.map()`** | Spread one call across *every* connected machine at once |
-| **Smart routing** | Calls go to a mesh worker when one is alive, and to your own machine when none is |
-| **Graceful fallback** | Mesh unreachable? Your code runs locally and returns the same value — it never breaks |
-| **Any return value** | numpy arrays, torch tensors, DataFrames — you get back exactly what your function returned |
-| **Fault tolerance** | Workers survive sleep, WiFi drops, and coordinator restarts; dead workers' tasks are re-queued |
-| **Benchmark scoring** | Every worker gets a relative compute score from a join-time benchmark; the scheduler routes work to the strongest hardware |
-| **Memory-aware scheduling** | VRAM is tracked; a payload's `gpu_memory_mb` hint keeps a task off workers without that much free memory |
-| **Live radar** | `gpumesh radar` discovers nearby devices on your network — no config needed |
-| **Isolated execution** | Every task runs in its own subprocess; a crashing task can't take down a worker |
-| **Token security** | All API calls require a token; rate-limited, timing-safe verification |
-| **Jupyter support** | `%%mesh` cell magic wraps every function in a cell automatically |
+- **`@mesh` / `@accelerate` decorators** — mark a function and it runs on the pool; no job system, no ceremony
+- **`.map()`** — spread one call across *every* connected machine at once
+- **Smart routing** — calls go to a mesh worker when one is alive, to your own machine when none is
+- **Graceful fallback** — mesh unreachable? your code runs locally and returns the same value
+- **Any return value** — numpy arrays, torch tensors, DataFrames — exactly what your function returned
+- **Fault tolerance** — workers survive sleep, WiFi drops, and coordinator restarts; dead workers' tasks are re-queued
+- **Benchmark scoring** — every worker gets a relative compute score; the scheduler routes work to the strongest hardware
+- **Memory-aware scheduling** — VRAM is tracked; a payload's `gpu_memory_mb` hint keeps a task off a busy worker
+- **Live radar** — `gpumesh radar` discovers nearby devices on your network; no config needed
+- **Isolated execution** — every task runs in its own subprocess; a crashing task can't take down a worker
+- **Token security** — all API calls require a token; rate-limited, timing-safe verification
+- **Jupyter support** — `%%mesh` cell magic wraps every function in a cell automatically
 
 ---
 
@@ -353,122 +345,9 @@ Like `%%time`, the cell's own output displays normally. Loading the extension al
 
 ## CLI reference
 
-Two flags are global and go *before* the subcommand: `-v` / `--verbose` for
-debug-level logging, and `--json-logs` to emit logs as JSON lines (for Docker).
-
-### Server & connection
-
-| Command | Description |
-|---------|-------------|
-| `gpumesh setup` | Interactive setup wizard (coordinator or worker) |
-| `gpumesh serve` | Start the coordinator (`--host`, `--port`, `--token`, `--db`, `--host-ip`, `--public`, `--tailscale`, `--no-discovery`, `--safe-mode`, `--no-self-worker`, `--color`/`--no-color`) |
-| `gpumesh join URL` | Join a mesh as a worker (`--token`, `--timeout`, `--safe-mode`, `--color`/`--no-color`) |
-| `gpumesh quickjoin [URL]` | One-click: install, detect GPU, join (`--token`, `--tailscale`, `--port`, `--timeout`, `--safe-mode`) |
-| `gpumesh worker` | Broadcast presence and wait to be claimed (`--token`, `--claim-port`, `--timeout`, `--safe-mode`) |
-| `gpumesh radar` | Scan for nearby devices (live radar; `--mode coordinator` \| `worker`) |
-| `gpumesh doctor` | Check this machine's environment and print a report (`--json`) |
-| `gpumesh show-connection` | Show the saved URL + token |
-| `gpumesh disconnect` | Clear the saved connection |
-
-`serve` and `join` also take `--color` / `--no-color`. They are the two
-commands that keep printing for hours into a Docker log or a systemd journal,
-which is exactly where `isatty()` says "no terminal" and you may still want
-colour — or emphatically not want it.
-
-**`gpumesh doctor`** is read-only: it adds no firewall rules, saves no
-connection, installs nothing, and never prints the token. It reports which
-gpumesh is imported and from where, the Python interpreter, torch/CUDA (and
-whether `nvidia-smi` disagrees with it), the cloudpickle version, the saved
-coordinator and its workers, the addresses this machine would bind and
-advertise, and on Windows whether a firewall rule for the port exists. It
-exits `1` only for a fault on *this* machine — no coordinator configured, or
-an unreachable one, is a warning and still exits `0`, so it works as a
-pre-flight check in a script. `--json` emits the same report as a document
-(warnings are diverted to stderr so the stdout stays parseable).
-
-**`--host` and `--host-ip` are different things**, and mixing them up costs an
-hour of firewall debugging:
-
-| Flag | Controls | Default |
-|------|----------|---------|
-| `--host` | **The bind address** — who can open a connection at all. A security boundary | `127.0.0.1` (this machine only) |
-| `--host-ip` | **The advertised address** — which address is printed for workers to dial. Cosmetic | auto-detected LAN IP |
-
-Setting `--host-ip` alone never opens the port up. Use `--host 0.0.0.0` for
-that, and read the banner it prints. `--host-ip` is for when auto-detection
-picks a VPN or hypervisor adapter and remote workers time out against an
-address only your machine can route to.
-
-### Jobs
-
-| Command | Description |
-|---------|-------------|
-| `gpumesh submit SCRIPT --payloads FILE` | Submit a script job (`--name`, `--wait` blocks until done, `--wait-timeout`) |
-| `gpumesh status JOB_ID` | Show job progress and results |
-| `gpumesh cancel JOB_ID` | Cancel a running job |
-| `gpumesh retry JOB_ID` | Re-queue failed/timed-out tasks |
-| `gpumesh kill [--force]` | Kill all tasks (graceful or immediate) |
-
-Each payload object is handed to your script as JSON on stdin. Four keys are
-read by the scheduler instead of being left to your code:
-
-| Payload key | Effect |
-|-------------|--------|
-| `cost` | Relative task weight (default `1.0`); heavier tasks are routed to stronger workers |
-| `gpu` | Device kind (`cuda`, `cpu`, `mps`) or model substring (`A100`); only matching workers are offered the task |
-| `gpu_memory_mb` | Minimum free VRAM; a worker reporting less free memory than this skips the task |
-| `cpu_cores` | Minimum CPU cores; a worker reporting fewer skips the task. This is the wire name for `@accelerate(cores=...)` |
-
-These are **filters, not preferences**. A task nobody can satisfy stays
-pending until the coordinator gives up on it (60s) and fails it with a message
-naming the requirement, rather than queueing forever.
-
-All four also apply to payloads passed to `mesh.submit(...)` from the Python
-API, and to the payload dicts you hand to `.map()`. Full shapes in
-[`docs/protocol.md`](docs/protocol.md); what is versioned and what a bump
-promises is in [`docs/stability.md`](docs/stability.md).
-
-### Monitoring
-
-| Command | Description |
-|---------|-------------|
-| `gpumesh workers` | List connected workers and their status |
-| `gpumesh devices` | Show all GPUs/CPUs as one unified pool |
-
-Job and monitoring commands (`submit`, `status`, `cancel`, `retry`, `workers`, `devices`, `kill`) accept `--url URL --token TOKEN`. If you omit them, gpumesh falls back to the `GPUMESH_URL` / `GPUMESH_TOKEN` environment variables, then to the connection saved by `join`/`serve`.
-
-### Environment variables
-
-| Variable | Where it applies | Effect |
-|----------|------------------|--------|
-| `GPUMESH_URL` | Job/monitoring commands | Coordinator URL when `--url` is omitted |
-| `GPUMESH_TOKEN` | Job/monitoring commands, `serve`, `join` | Auth token when `--token` is omitted (`quickjoin` and `worker` always require the flag) |
-| `GPUMESH_HOST` | `serve` | Bind address when `--host` is omitted. `0.0.0.0` opens the port to other machines |
-| `GPUMESH_HOST_IP` | `serve` | Pin the address advertised to workers (same as `--host-ip`) — does **not** change the bind. Must be an IP literal; a hostname is rejected with a warning and auto-detection is used instead |
-| `GPUMESH_CLAIM_HOST` | `worker`, and `setup` in worker mode | Bind address for the **claim** port. Defaults to all interfaces, unlike the coordinator — a claim server exists to be reached by another machine, so loopback would not make it safer, only broken. Narrow it to one address (your tailnet, say) if you do not need all of them |
-| `GPUMESH_LOCAL=1` | `@mesh` / `@accelerate` | Force local execution, never touch the mesh |
-| `GPUMESH_VERBOSE=1` | `@mesh` / `@accelerate` | Print which device handled each task |
-| `GPUMESH_COLOR` | All output | `1` forces colour, `0` disables it, `auto` (default) checks whether stdout is a TTY |
-
-**`GPUMESH_CLAIM_HOST` is deliberately not `GPUMESH_HOST`.** The two answer
-different questions and are routinely set on the same machine:
-`GPUMESH_HOST=127.0.0.1` is a perfectly sensible coordinator setting, and if
-the claim port read it too, every worker on that box would silently become
-unclaimable. A non-loopback claim bind prints a banner naming the OS user that
-claims will run as.
-
-`GPUMESH_COLOR` is the environment form. `gpumesh serve` and `gpumesh join`
-also take `--color` (force it on) and `--no-color` (force it off), which are
-mutually exclusive. The flags work by setting `GPUMESH_COLOR` and re-running
-the detection, so the choice reaches this process *and* the function-task
-subprocess a worker spawns, which inherits the environment. (Script tasks run
-with a deliberately minimal allowlisted environment and never see it.)
-
-One wrinkle: the auto-detection probes **stdout**, while `-v` log lines are
-written to **stderr**. For the uncommon shape where only stderr is redirected
-(`gpumesh serve 2> run.log` from a terminal), the detection says "terminal" and
-the log file gets escape sequences. `--no-color` or `GPUMESH_COLOR=0` is the
-escape hatch.
+Every command — server, jobs, monitoring — plus the environment variables
+behind them, with `--host` vs `--host-ip` and colour handling explained:
+[`docs/cli.md`](docs/cli.md).
 
 ---
 
@@ -663,39 +542,11 @@ opt-in to a wider audience.
 
 ## Architecture
 
-```
-                         COORDINATOR
-        ┌─────────────────────────────────────────────────┐
-        │                                                 │
-        │  ┌──────────┐  ┌──────────┐  ┌──────────────┐  │
-        │  │ Job Queue │  │ Task DB  │  │ Worker       │  │
-        │  │ (memory)  │  │ (SQLite) │  │ Registry     │  │
-        │  └────┬─────┘  └──────────┘  └──────┬───────┘  │
-        │       │                              │          │
-        │       └──────────┬───────────────────┘          │
-        │                  │                              │
-        │         HTTP API :8000                          │
-        └──────────────────┼──────────────────────────────┘
-                           │
-              ┌────────────┼────────────┐
-              │            │            │
-        ┌─────▼────┐ ┌────▼────┐ ┌────▼────┐
-        │ Worker 1 │ │Worker 2 │ │Worker 3 │
-        │ RTX 4090 │ │RTX 3080 │ │   T4    │
-        │Score: 120│ │Score: 85│ │Score: 12│
-        └──────────┘ └─────────┘ └─────────┘
-              │            │            │
-              └────────────┼────────────┘
-                           │
-                    ┌──────▼──────┐
-                    │   Results   │
-                    │  Collected  │
-                    └─────────────┘
-
-  JOB FLOW:  Submit ─► Queue ─► Claim ─► Execute ─► Report ─► Collect
-```
-
-**How it works:** jobs are stored in SQLite, workers pull tasks over HTTP with a lease (so a crashed worker's task is automatically re-queued), run each task in an isolated subprocess, and post results back. Workers are scored by a benchmark and the scheduler assigns heavier tasks to stronger workers.
+Jobs are stored in SQLite; workers pull tasks over HTTP with a lease (a crashed
+worker's task is automatically re-queued), run each task in an isolated
+subprocess, and post results back. Workers are scored by a benchmark and the
+scheduler assigns heavier tasks to stronger workers. Diagram and job flow:
+[`docs/architecture.md`](docs/architecture.md).
 
 ---
 
@@ -767,42 +618,9 @@ and a faster GPU than anything listed here would simply score higher.
 
 ## Troubleshooting
 
-| Problem | Fix |
-|---------|-----|
-| `command not found: gpumesh` | Use `python -m gpumesh` or check your PATH |
-| HTTP 401, `Invalid token` | Use the same token on coordinator and worker |
-| HTTP 401, `Too many attempts` | Not a token rejection — the token was not checked. Wait out the lockout and retry with the same token |
-| **Another machine cannot connect at all** | The coordinator binds `127.0.0.1` by default. Restart it with `--host 0.0.0.0` (or `GPUMESH_HOST=0.0.0.0`). Check this **before** the firewall — a loopback bind and a blocked firewall look identical from the other machine |
-| `--host-ip` set but still unreachable | `--host-ip` only changes the address that is *printed*. `--host` is the bind. Setting the first never opens the port |
-| `GPUMESH_HOST_IP` seems to be ignored | It takes an IP literal, not a hostname — almost any typo is a syntactically valid hostname, so it is validated and a non-IP value is discarded with a `WARNING` line at startup. `gpumesh doctor` prints the address actually being advertised |
-| Coordinator unreachable | Check firewall; is the coordinator running? |
-| Task timed out | Increase `--timeout` or split tasks |
-| Windows connection error | Run `gpumesh serve` as Administrator for firewall rules |
-| Worker not showing up | Both on the same network? Try `gpumesh radar` |
-| `ModuleNotFoundError: torch` | `pip install gpumesh[gpu]` |
-| UDP broadcast not working | Use `gpumesh join URL` directly |
-| `ModuleNotFoundError` inside a task | Install that package on the **worker** too — gpumesh ships your code, not your environment |
-| `cannot send result of type ...` | Return plain data. Sockets, locks, database handles and live GPU handles can't cross machines |
-| `NameError` inside a function that works locally | The worker is on a different Python minor version, so the function shipped as source text and lost its module-level constants and closures. Match versions, or move the constants inside the function |
-| `Cannot run this task on a Python X worker` | Same cause, no source to fall back to — the function was defined in a REPL or heredoc. Put it in a `.py` file |
-| No colour in a Docker log or CI pane | `isatty()` is false there, which is the correct default. Force it with `gpumesh serve --color` / `gpumesh join --color`, or `GPUMESH_COLOR=1` |
-| `Refusing to register this worker: incompatible gpumesh protocol version` | The two machines are more than one wire-protocol version apart. The message names both numbers and which side is behind; `pip install -U gpumesh` on that side. Details in [`docs/stability.md`](docs/stability.md) |
-| Results differ from a local run | They shouldn't — file an issue. Confirm with `GPUMESH_LOCAL=1 python your_script.py` |
-
-**Start with `gpumesh doctor`.** It is read-only, it never prints the token,
-and its output is meant to be pasted into an issue. For *"workers can't
-connect"* it shows in one screen whether the coordinator binds loopback, which
-address this machine would advertise (and whether that address belongs to a
-virtual adapter no other machine can route to), whether a Windows firewall
-rule for the port exists, and whether the saved coordinator answers at all.
-For *"NameError on a task"* it prints this machine's Python, gpumesh and
-cloudpickle versions and flags any connected worker reported as differing —
-which is the cause nearly every time. If the coordinator does not report
-worker versions it says so and tells you to run `gpumesh doctor` on each
-machine and compare the Python lines by hand. `gpumesh doctor --json` gives
-the same report as a parseable document.
-
-**Verbose logging:** `gpumesh -v serve` (the flag is global, so it works on any command) — **decorator routing messages:** `GPUMESH_VERBOSE=1 python my_script.py` — **force local-only:** `GPUMESH_LOCAL=1 python my_script.py`
+The usual suspects — bind vs firewall, mismatched tokens, cross-version tasks,
+missing torch on a worker — in one table, plus how to read `gpumesh doctor`:
+[`docs/troubleshooting.md`](docs/troubleshooting.md).
 
 ---
 
@@ -898,9 +716,37 @@ corrected.
 
 ---
 
+## Maintainers
+
+<table>
+  <tr>
+    <td align="center">
+      <a href="https://github.com/Samurai007AK">
+        <img src="https://avatars.githubusercontent.com/Samurai007AK?s=150" width="120" alt="Samurai007AK"/><br/>
+        <strong>Samurai007AK</strong>
+      </a>
+      <p>
+        <a href="https://github.com/Samurai007AK"><img src="https://img.shields.io/badge/GitHub-100000?style=flat&logo=github&logoColor=white" alt="GitHub"/></a>
+        <a href="mailto:arijitkonar16@gmail.com"><img src="https://img.shields.io/badge/Email-D14836?style=flat&logo=gmail&logoColor=white" alt="Email"/></a>
+      </p>
+    </td>
+    <td align="center">
+      <a href="https://github.com/jinia-konar">
+        <img src="https://avatars.githubusercontent.com/jinia-konar?s=150" width="120" alt="jinia-konar"/><br/>
+        <strong>jinia-konar</strong>
+      </a>
+      <p>
+        <a href="https://github.com/jinia-konar"><img src="https://img.shields.io/badge/GitHub-100000?style=flat&logo=github&logoColor=white" alt="GitHub"/></a>
+      </p>
+    </td>
+  </tr>
+</table>
+
+---
+
 ## License
 
-MIT License. See [LICENSE](LICENSE) for details.
+GNU AGPL-3.0. See [LICENSE](LICENSE) for details.
 
 ---
 
