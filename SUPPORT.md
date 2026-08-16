@@ -8,10 +8,10 @@ report. This page says where each kind of thing goes.
 
 | You have… | Go here |
 |---|---|
-| A question — "how do I", "is this supposed to work like this", "which flag do I want" | [Discussions → Q&A](https://github.com/Samurai007AK/gpumesh/discussions/categories/q-a) |
-| Something that does not work the way the docs say it should | [Open a bug report](https://github.com/Samurai007AK/gpumesh/issues/new?template=bug_report.yml) |
-| A capability gpumesh does not have yet | [Open a feature request](https://github.com/Samurai007AK/gpumesh/issues/new?template=feature_request.yml) |
-| An idea that is not yet a concrete request | [Discussions → Ideas](https://github.com/Samurai007AK/gpumesh/discussions/categories/ideas) |
+| A question — "how do I", "is this supposed to work like this", "which flag do I want" | [Discussions → Q&A](https://github.com/K4-LABS/gpumesh/discussions/categories/q-a) |
+| Something that does not work the way the docs say it should | [Open a bug report](https://github.com/K4-LABS/gpumesh/issues/new?template=bug_report.yml) |
+| A capability gpumesh does not have yet | [Open a feature request](https://github.com/K4-LABS/gpumesh/issues/new?template=feature_request.yml) |
+| An idea that is not yet a concrete request | [Discussions → Ideas](https://github.com/K4-LABS/gpumesh/discussions/categories/ideas) |
 | A security vulnerability | **Do not open an issue.** See [SECURITY.md](SECURITY.md) and use the Security tab → *Report a vulnerability* |
 | A code of conduct concern | [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) |
 | You want to contribute | [CONTRIBUTING.md](CONTRIBUTING.md) |

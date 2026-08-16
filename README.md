@@ -4,9 +4,9 @@
 
 [![PyPI version](https://img.shields.io/pypi/v/gpumesh.svg)](https://pypi.org/project/gpumesh/)
 [![Python](https://img.shields.io/pypi/pyversions/gpumesh.svg)](https://pypi.org/project/gpumesh/)
-[![License](https://img.shields.io/pypi/l/gpumesh.svg)](https://github.com/Samurai007AK/gpumesh/blob/main/LICENSE)
-[![Tests](https://github.com/Samurai007AK/gpumesh/actions/workflows/tests.yml/badge.svg)](https://github.com/Samurai007AK/gpumesh/actions/workflows/tests.yml)
-[![Status](https://img.shields.io/badge/status-beta-blue)](https://github.com/Samurai007AK/gpumesh)
+[![License](https://img.shields.io/pypi/l/gpumesh.svg)](https://github.com/K4-LABS/gpumesh/blob/master/LICENSE)
+[![Tests](https://github.com/K4-LABS/gpumesh/actions/workflows/tests.yml/badge.svg)](https://github.com/K4-LABS/gpumesh/actions/workflows/tests.yml)
+[![Status](https://img.shields.io/badge/status-beta-blue)](https://github.com/K4-LABS/gpumesh)
 [![Docker](https://img.shields.io/badge/docker-ready-2496ED?logo=docker&logoColor=white)](https://hub.docker.com/r/samurai007ak/gpumesh)
 
 ---
@@ -834,7 +834,7 @@ the same report as a parseable document.
 ## Development
 
 ```bash
-git clone https://github.com/Samurai007AK/gpumesh.git
+git clone https://github.com/K4-LABS/gpumesh.git
 cd gpumesh
 pip install -e ".[dev]"
 pytest                 # on Windows a few skip and one xpasses
@@ -842,7 +842,7 @@ python -m build        # build wheel + sdist
 ```
 
 CI runs the suite on Linux (Python 3.9, 3.11, 3.12), Windows and macOS for
-every push and pull request — the [badge](https://github.com/Samurai007AK/gpumesh/actions/workflows/tests.yml)
+every push and pull request — the [badge](https://github.com/K4-LABS/gpumesh/actions/workflows/tests.yml)
 at the top of this page is the live count, so it cannot drift the way a
 hand-written number does.
 
@@ -918,7 +918,7 @@ automatic backend detection.
 
 If you maintain one of these and think the credit is wrong, or the influence
 is closer to copying than we believe,
-[open an issue](https://github.com/Samurai007AK/gpumesh/issues) and it will be
+[open an issue](https://github.com/K4-LABS/gpumesh/issues) and it will be
 corrected.
 
 ---
@@ -929,4 +929,4 @@ MIT License. See [LICENSE](LICENSE) for details.
 
 ---
 
-[GitHub](https://github.com/Samurai007AK/gpumesh) · [Issues](https://github.com/Samurai007AK/gpumesh/issues) · [PyPI](https://pypi.org/project/gpumesh/)
+[GitHub](https://github.com/K4-LABS/gpumesh) · [Issues](https://github.com/K4-LABS/gpumesh/issues) · [PyPI](https://pypi.org/project/gpumesh/)

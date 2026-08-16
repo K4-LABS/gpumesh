@@ -10,31 +10,31 @@ header:
   schema-version: 2.2.0
   last-updated: '2026-08-15'
   last-reviewed: '2026-08-15'
-  url: https://raw.githubusercontent.com/Samurai007AK/gpumesh/main/SECURITY-INSIGHTS.yml
+  url: https://raw.githubusercontent.com/K4-LABS/gpumesh/main/SECURITY-INSIGHTS.yml
   comment: |
     Single-repository file: gpumesh is one repo shipping one PyPI package and
     one container image.
 
 project:
   name: gpumesh
-  homepage: https://github.com/Samurai007AK/gpumesh
+  homepage: https://github.com/K4-LABS/gpumesh
   administrators:
     - name: Samurai007AK
       primary: true
       social: https://github.com/Samurai007AK
   documentation:
-    quickstart-guide: https://github.com/Samurai007AK/gpumesh#readme
-    detailed-guide: https://github.com/Samurai007AK/gpumesh#readme
+    quickstart-guide: https://github.com/K4-LABS/gpumesh#readme
+    detailed-guide: https://github.com/K4-LABS/gpumesh#readme
   repositories:
     - name: gpumesh
-      url: https://github.com/Samurai007AK/gpumesh
+      url: https://github.com/K4-LABS/gpumesh
       comment: |
         The only repository. Contains the coordinator, the worker, the CLI,
         the Python API, and the Dockerfile behind the published image.
   vulnerability-reporting:
     reports-accepted: true
     bug-bounty-available: false
-    policy: https://github.com/Samurai007AK/gpumesh/blob/main/SECURITY.md
+    policy: https://github.com/K4-LABS/gpumesh/blob/master/SECURITY.md
     contact:
       name: |
         Report privately via the repository's Security tab ("Report a
@@ -172,7 +172,7 @@ project:
       not degrading other people's service, and reporting privately.
 
 repository:
-  url: https://github.com/Samurai007AK/gpumesh
+  url: https://github.com/K4-LABS/gpumesh
   status: active
   bug-fixes-only: false
   accepts-change-request: true
@@ -183,27 +183,27 @@ repository:
       primary: true
       social: https://github.com/Samurai007AK
   documentation:
-    contributing-guide: https://github.com/Samurai007AK/gpumesh/blob/main/CONTRIBUTING.md
-    security-policy: https://github.com/Samurai007AK/gpumesh/blob/main/SECURITY.md
+    contributing-guide: https://github.com/K4-LABS/gpumesh/blob/master/CONTRIBUTING.md
+    security-policy: https://github.com/K4-LABS/gpumesh/blob/master/SECURITY.md
   license:
-    url: https://github.com/Samurai007AK/gpumesh/blob/main/LICENSE
+    url: https://github.com/K4-LABS/gpumesh/blob/master/LICENSE
     expression: MIT
   release:
-    changelog: https://github.com/Samurai007AK/gpumesh/blob/main/CHANGELOG.md
+    changelog: https://github.com/K4-LABS/gpumesh/blob/master/CHANGELOG.md
     automated-pipeline: false
     distribution-points:
       - uri: pkg:pypi/gpumesh
         comment: PyPI package — https://pypi.org/project/gpumesh/
       - uri: pkg:docker/samurai007ak/gpumesh
         comment: Container image — https://hub.docker.com/r/samurai007ak/gpumesh
-      - uri: https://github.com/Samurai007AK/gpumesh/releases
+      - uri: https://github.com/K4-LABS/gpumesh/releases
         comment: GitHub releases
   security:
     assessments:
       self:
         name: gpumesh threat model
         date: '2026-08-15'
-        evidence: https://github.com/Samurai007AK/gpumesh/blob/main/THREAT_MODEL.md
+        evidence: https://github.com/K4-LABS/gpumesh/blob/master/THREAT_MODEL.md
         comment: |
           Maintainer-authored threat model written against commit 96eee91
           plus the working tree of that date, and reconciled against the code

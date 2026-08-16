@@ -10,7 +10,7 @@ network, you want to use them for an afternoon, and you are not willing to
 stand up a cluster to do it.
 
 This page tries to be honest about where that line is. If it reads as
-partisan, [open an issue](https://github.com/Samurai007AK/gpumesh/issues) —
+partisan, [open an issue](https://github.com/K4-LABS/gpumesh/issues) —
 a comparison nobody trusts is worth less than no comparison.
 
 ---
