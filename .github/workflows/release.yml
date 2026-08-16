@@ -13,13 +13,13 @@ name: release
 #     Add a "GitHub" publisher with EXACTLY these values — a mismatch in any
 #     one of them makes the OIDC exchange fail with a 403 that does not say
 #     which field was wrong:
-#         Owner:              Samurai007AK
+#         Owner:              K4-LABS
 #         Repository:         gpumesh
 #         Workflow name:      release.yml
 #         Environment name:   pypi
 #
 #  2. Create the `pypi` environment in this repository.
-#     https://github.com/Samurai007AK/gpumesh/settings/environments
+#     https://github.com/K4-LABS/gpumesh/settings/environments
 #     Name it `pypi` and add a required reviewer (yourself). The environment
 #     is the actual security control here: it is what stops a compromised
 #     workflow file on a branch from minting a publish token, because the run
@@ -33,7 +33,7 @@ name: release
 #     credential that bypasses everything above — the environment gate, the
 #     reviewer, the attestations. Leaving one in place means the hardening in
 #     this file is decorative. Also delete `PYPI_API_TOKEN` (or similar) from
-#     https://github.com/Samurai007AK/gpumesh/settings/secrets/actions
+#     https://github.com/K4-LABS/gpumesh/settings/secrets/actions
 #
 #  4. Optional but recommended: enable 2FA enforcement and require a
 #     hardware key on the PyPI account, and turn on GitHub's

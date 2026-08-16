@@ -9,7 +9,7 @@ These files ship with the git repository, not with the pip package. Clone
 first:
 
 ```bash
-git clone https://github.com/Samurai007AK/gpumesh.git
+git clone https://github.com/K4-LABS/gpumesh.git
 cd gpumesh
 pip install -e .
 ```

@@ -16,7 +16,7 @@ name: scorecard
 #   feeds https://api.securityscorecards.dev — nothing else is required for
 #   the SARIF upload to the Security tab.
 #   Badge markdown, once the first run completes:
-#     https://api.scorecard.dev/projects/github.com/Samurai007AK/gpumesh/badge
+#     https://api.scorecard.dev/projects/github.com/K4-LABS/gpumesh/badge
 
 on:
   # Re-scored weekly. Scorecard's answer changes when GitHub changes settings,
@@ -28,7 +28,7 @@ on:
   # should re-score immediately rather than wait up to a week.
   branch_protection_rule:
   push:
-    branches: [main]
+    branches: [master]
   workflow_dispatch:
 
 permissions: {}

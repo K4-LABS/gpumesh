@@ -24,6 +24,11 @@ include CITATION.cff
 
 recursive-include docs *.md
 
+# Logos referenced from the README. check-manifest requires every git-tracked
+# file to be covered, and these are referenced by relative path in README.md.
+include docs/img/gpumesh-logo.png
+include docs/img/gpumesh-logo-dark.png
+
 recursive-include gpumesh *.py
 
 # PEP 561 marker. `recursive-include gpumesh *.py` does not match it, and

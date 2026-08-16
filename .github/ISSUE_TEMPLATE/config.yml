@@ -12,17 +12,17 @@ blank_issues_enabled: false
 
 contact_links:
   - name: Getting help — read this first
-    url: https://github.com/Samurai007AK/gpumesh/blob/main/SUPPORT.md
+    url: https://github.com/K4-LABS/gpumesh/blob/master/SUPPORT.md
     about: Where questions, bugs, ideas and security reports each go, and what a good gpumesh report contains.
 
   - name: Question or general discussion
-    url: https://github.com/Samurai007AK/gpumesh/discussions/categories/q-a
+    url: https://github.com/K4-LABS/gpumesh/discussions/categories/q-a
     about: For "how do I", "is this supposed to work like this", and ideas that are not yet a concrete request.
 
   - name: Report a security vulnerability
-    url: https://github.com/Samurai007AK/gpumesh/security/advisories/new
+    url: https://github.com/K4-LABS/gpumesh/security/advisories/new
     about: Please do not open a public issue for security problems. Note that no transport encryption and workers executing coordinator-sent code are documented design properties, not vulnerabilities.
 
   - name: Code of conduct concern
-    url: https://github.com/Samurai007AK/gpumesh/blob/main/CODE_OF_CONDUCT.md
+    url: https://github.com/K4-LABS/gpumesh/blob/master/CODE_OF_CONDUCT.md
     about: How to report a conduct issue, including an independent channel if the report concerns the maintainer.
