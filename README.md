@@ -925,7 +925,7 @@ corrected.
 
 ## License
 
-MIT License. See [LICENSE](LICENSE) for details.
+GNU AGPL-3.0. See [LICENSE](LICENSE) for details.
 
 ---
 
