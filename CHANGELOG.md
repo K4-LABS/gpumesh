@@ -827,10 +827,10 @@ version get a real diff link:
 then replace the PyPI links below with compare/ links.
 -->
 
-[Unreleased]: https://github.com/Samurai007AK/gpumesh/compare/v2.0.0...HEAD
-[2.0.0]: https://github.com/Samurai007AK/gpumesh/compare/v1.3.0...v2.0.0
-[1.3.0]: https://github.com/Samurai007AK/gpumesh/compare/v1.2.0...v1.3.0
-[1.2.0]: https://github.com/Samurai007AK/gpumesh/releases/tag/v1.2.0
+[Unreleased]: https://github.com/K4-LABS/gpumesh/compare/v2.0.0...HEAD
+[2.0.0]: https://github.com/K4-LABS/gpumesh/compare/v1.3.0...v2.0.0
+[1.3.0]: https://github.com/K4-LABS/gpumesh/compare/v1.2.0...v1.3.0
+[1.2.0]: https://github.com/K4-LABS/gpumesh/releases/tag/v1.2.0
 [1.1.0]: https://pypi.org/project/gpumesh/1.1.0/
 [1.0.0]: https://pypi.org/project/gpumesh/1.0.0/
 [0.9.0]: https://pypi.org/project/gpumesh/0.9.0/
