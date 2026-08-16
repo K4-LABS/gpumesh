@@ -15,15 +15,7 @@ across machines on your network — with one decorator, one CLI command, or a Py
 
 </div>
 
----
 
-> [!CAUTION]
-> **gpumesh runs code you send it — there is no sandbox.** A worker executes
-> arbitrary Python as the OS user that started it, and results are deserialized
-> by the submitter — trust runs **both ways**. Use it only with machines and
-> people you trust. See [SECURITY.md](SECURITY.md) and [THREAT_MODEL.md](THREAT_MODEL.md).
-
----
 
 ## What is gpumesh?
 
@@ -50,6 +42,17 @@ gpumesh turns multiple machines into a **single, unified compute pool**. Start a
 - **Isolated execution** — every task runs in its own subprocess; a crashing task can't take down a worker
 - **Token security** — all API calls require a token; rate-limited, timing-safe verification
 - **Jupyter support** — `%%mesh` cell magic wraps every function in a cell automatically
+
+---
+
+
+---
+
+> [!CAUTION]
+> **gpumesh runs code you send it — there is no sandbox.** A worker executes
+> arbitrary Python as the OS user that started it, and results are deserialized
+> by the submitter — trust runs **both ways**. Use it only with machines and
+> people you trust. See [SECURITY.md](SECURITY.md) and [THREAT_MODEL.md](THREAT_MODEL.md).
 
 ---
 
