@@ -1,39 +1,20 @@
-# gpumesh
+<p align="center">
+  <img src="docs/img/gpumesh-logo-dark.png" alt="gpumesh — GPU Mesh Network" width="240">
+</p>
 
-> Borrow your friends' GPUs. A distributed compute mesh that lets you share GPU power across machines on your network — with one decorator, one CLI command, or a Python API.  
+<p align="center">
+  <b>Borrow your friends' GPUs.</b> A distributed compute mesh that lets you share GPU power
+  across machines on your network — with one decorator, one CLI command, or a Python API.
+</p>
 
-[![PyPI version](https://img.shields.io/pypi/v/gpumesh.svg)](https://pypi.org/project/gpumesh/)
-[![Python](https://img.shields.io/pypi/pyversions/gpumesh.svg)](https://pypi.org/project/gpumesh/)
-[![License](https://img.shields.io/pypi/l/gpumesh.svg)](https://github.com/K4-LABS/gpumesh/blob/master/LICENSE)
-[![Tests](https://github.com/K4-LABS/gpumesh/actions/workflows/tests.yml/badge.svg)](https://github.com/K4-LABS/gpumesh/actions/workflows/tests.yml)
-[![Status](https://img.shields.io/badge/status-beta-blue)](https://github.com/K4-LABS/gpumesh)
-[![Docker](https://img.shields.io/badge/docker-ready-2496ED?logo=docker&logoColor=white)](https://hub.docker.com/r/samurai007ak/gpumesh)
-
----
-
-```
-  ╔═══════════════════════════════════════════════════════════╗
-  ║              gpumesh - GPU Mesh Network                   ║
-  ║        "like Bluetooth, but for your GPUs"                ║
-  ╚═══════════════════════════════════════════════════════════╝
-
-         ┌─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─┐
-         │           NETWORK TRAFFIC FLOW            │
-         │                                           │
-         │   ┌──────────┐     ┌──────────┐           │
-         │   │ RTX 4090 │◄───►│ RTX 3080 │           │
-         │   │  Server  │     │  Laptop  │           │
-         │   │120.5 G/s │     │ 85.2 G/s │           │
-         │   └────┬─────┘     └────┬─────┘           │
-         │        │                │                 │
-         │   ┌────▼────────────────▼────┐            │
-         │   │        T4 (12.0)         │            │
-         │   │      running tasks       │            │
-         │   └──────────────────────────┘            │
-         │                                           │
-         │   >>> results collected automatically     │
-         └─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─┘
-```
+<p align="center">
+  [![PyPI version](https://img.shields.io/pypi/v/gpumesh.svg)](https://pypi.org/project/gpumesh/)
+  [![Python](https://img.shields.io/pypi/pyversions/gpumesh.svg)](https://pypi.org/project/gpumesh/)
+  [![License](https://img.shields.io/pypi/l/gpumesh.svg)](https://github.com/K4-LABS/gpumesh/blob/master/LICENSE)
+  [![Tests](https://github.com/K4-LABS/gpumesh/actions/workflows/tests.yml/badge.svg)](https://github.com/K4-LABS/gpumesh/actions/workflows/tests.yml)
+  [![Status](https://img.shields.io/badge/status-beta-blue)](https://github.com/K4-LABS/gpumesh)
+  [![Docker](https://img.shields.io/badge/docker-ready-2496ED?logo=docker&logoColor=white)](https://hub.docker.com/r/samurai007ak/gpumesh)
+</p>
 
 ---
 
@@ -53,6 +34,29 @@
 > with people you actually trust. Read [SECURITY.md](SECURITY.md) and
 > [THREAT_MODEL.md](THREAT_MODEL.md) before exposing a coordinator to a
 > network.
+
+---
+
+## Table of contents
+
+- [What is gpumesh?](#what-is-gpumesh)
+- [Quick demo](#quick-demo)
+- [Installation](#installation)
+- [Quickstart](#quickstart)
+- [Jupyter notebooks](#jupyter-notebooks)
+- [CLI reference](#cli-reference)
+- [Python API](#python-api)
+- [`@accelerate` patterns](#accelerate-patterns)
+- [Docker](#docker)
+- [Network options](#network-options)
+- [Architecture](#architecture)
+- [Security](#security)
+- [Benchmark scoring](#benchmark-scoring)
+- [Troubleshooting](#troubleshooting)
+- [Development](#development)
+- [Limitations](#limitations)
+- [Prior art and credits](#prior-art-and-credits)
+- [License](#license)
 
 ---
 
