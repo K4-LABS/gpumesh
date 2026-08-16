@@ -30,7 +30,7 @@ authors:
 
 version: 2.0.0
 date-released: "2026-08-15"
-license: MIT
+license: AGPL-3.0-or-later
 
 repository-code: "https://github.com/Samurai007AK/gpumesh"
 url: "https://github.com/Samurai007AK/gpumesh"
