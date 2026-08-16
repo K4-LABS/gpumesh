@@ -4,7 +4,7 @@
 
 [![PyPI version](https://img.shields.io/pypi/v/gpumesh.svg)](https://pypi.org/project/gpumesh/)
 [![Python](https://img.shields.io/pypi/pyversions/gpumesh.svg)](https://pypi.org/project/gpumesh/)
-[![License](https://img.shields.io/pypi/l/gpumesh.svg)](https://github.com/Samurai007AK/gpumesh/blob/main/LICENSE)
+[![License](https://img.shields.io/pypi/l/gpumesh.svg)](https://github.com/K4-LABS/gpumesh/blob/master/LICENSE)
 [![Docker](https://img.shields.io/badge/docker-ready-2496ED?logo=docker&logoColor=white)](https://hub.docker.com/r/samurai007ak/gpumesh)
 
 ---
@@ -54,8 +54,8 @@
 > - Generate a real token:
 >   `python -c "import secrets; print(secrets.token_urlsafe(32))"`.
 >
-> Read [SECURITY.md](https://github.com/Samurai007AK/gpumesh/blob/main/SECURITY.md)
-> and [THREAT_MODEL.md](https://github.com/Samurai007AK/gpumesh/blob/main/THREAT_MODEL.md).
+> Read [SECURITY.md](https://github.com/K4-LABS/gpumesh/blob/master/SECURITY.md)
+> and [THREAT_MODEL.md](https://github.com/K4-LABS/gpumesh/blob/master/THREAT_MODEL.md).
 
 ---
 
@@ -163,7 +163,7 @@ docker pull samurai007ak/gpumesh:2.0.0
 ## 🎯 Docker Compose (Recommended)
 
 Create a `docker-compose.yml`. This mirrors the
-[file in the repository](https://github.com/Samurai007AK/gpumesh/blob/main/docker-compose.yaml),
+[file in the repository](https://github.com/K4-LABS/gpumesh/blob/master/docker-compose.yaml),
 which carries the full reasoning in comments:
 
 ```yaml
@@ -392,8 +392,8 @@ None of it is a sandbox.
 > crosses a network you do not control.
 >
 > Full detail:
-> [SECURITY.md](https://github.com/Samurai007AK/gpumesh/blob/main/SECURITY.md)
-> · [THREAT_MODEL.md](https://github.com/Samurai007AK/gpumesh/blob/main/THREAT_MODEL.md)
+> [SECURITY.md](https://github.com/K4-LABS/gpumesh/blob/master/SECURITY.md)
+> · [THREAT_MODEL.md](https://github.com/K4-LABS/gpumesh/blob/master/THREAT_MODEL.md)
 
 ---
 
@@ -426,25 +426,25 @@ None of it is a sandbox.
 
 ## 📚 Full Documentation
 
-- **GitHub:** [github.com/Samurai007AK/gpumesh](https://github.com/Samurai007AK/gpumesh)
+- **GitHub:** [github.com/K4-LABS/gpumesh](https://github.com/K4-LABS/gpumesh)
 - **PyPI:** [pypi.org/project/gpumesh](https://pypi.org/project/gpumesh/)
-- **Issues:** [github.com/Samurai007AK/gpumesh/issues](https://github.com/Samurai007AK/gpumesh/issues)
-- **HTTP API and wire format:** [docs/protocol.md](https://github.com/Samurai007AK/gpumesh/blob/main/docs/protocol.md)
-- **Public API, versioning and the protocol compatibility window:** [docs/stability.md](https://github.com/Samurai007AK/gpumesh/blob/main/docs/stability.md)
-- **Why not Ray or Dask?** [docs/why-not-ray-or-dask.md](https://github.com/Samurai007AK/gpumesh/blob/main/docs/why-not-ray-or-dask.md)
-- **Runnable examples:** [examples/](https://github.com/Samurai007AK/gpumesh/tree/main/examples)
+- **Issues:** [github.com/K4-LABS/gpumesh/issues](https://github.com/K4-LABS/gpumesh/issues)
+- **HTTP API and wire format:** [docs/protocol.md](https://github.com/K4-LABS/gpumesh/blob/master/docs/protocol.md)
+- **Public API, versioning and the protocol compatibility window:** [docs/stability.md](https://github.com/K4-LABS/gpumesh/blob/master/docs/stability.md)
+- **Why not Ray or Dask?** [docs/why-not-ray-or-dask.md](https://github.com/K4-LABS/gpumesh/blob/master/docs/why-not-ray-or-dask.md)
+- **Runnable examples:** [examples/](https://github.com/K4-LABS/gpumesh/tree/master/examples)
 
 ---
 
 ## 🤝 Contributing
 
-Contributions are welcome! See the [GitHub repository](https://github.com/Samurai007AK/gpumesh) for guidelines.
+Contributions are welcome! See the [GitHub repository](https://github.com/K4-LABS/gpumesh) for guidelines.
 
 ---
 
 ## 📄 License
 
-MIT License — see [LICENSE](https://github.com/Samurai007AK/gpumesh/blob/main/LICENSE) for details.
+MIT License — see [LICENSE](https://github.com/K4-LABS/gpumesh/blob/master/LICENSE) for details.
 
 ---
 
