@@ -1,6 +1,6 @@
 # gpumesh
 
-> Borrow your friends' GPUs. A distributed compute mesh that lets you share GPU power across machines on your network — with one decorator, one CLI command, or a Python API.
+> Borrow your friends' GPUs. A distributed compute mesh that lets you share GPU power across machines on your network — with one decorator, one CLI command, or a Python API.  
 
 [![PyPI version](https://img.shields.io/pypi/v/gpumesh.svg)](https://pypi.org/project/gpumesh/)
 [![Python](https://img.shields.io/pypi/pyversions/gpumesh.svg)](https://pypi.org/project/gpumesh/)
