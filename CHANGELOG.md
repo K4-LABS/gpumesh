@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **The project is now licensed under the GNU AGPL-3.0** (previously MIT).
+  The goal is copyleft protection for a network service: anyone who modifies
+  gpumesh and runs it as a service must offer their modified source in turn
+  (AGPL section 13). Already-released versions remain under the MIT terms
+  they were published under; the new license applies going forward.
+
 ### Fixed
 - **Two coordinators could silently bind the same port on Windows.** A second
   `gpumesh serve` on an occupied port used to start anyway: `HTTPServer`
