@@ -14,6 +14,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (AGPL section 13). Already-released versions remain under the MIT terms
   they were published under; the new license applies going forward.
 
+### Added
+- **CodeQL static analysis (SAST) in CI.** A new `codeql` workflow runs
+  GitHub's taint/data-flow analysis on every push and PR and on a weekly
+  schedule. For a project that deserializes callables received over a
+  socket and hands script paths to subprocesses, this is the layer that
+  catches the injection-shaped bugs style lint cannot.
+- **A test-coverage floor in CI.** `pytest` now runs under `pytest-cov` with
+  `--cov-fail-under=80`, so a PR that shrinks the suite's ~81% coverage
+  fails instead of silently regressing. The floor is a guard, not a target;
+  raise it as the low-coverage entry points get covered.
+- **Dependency vulnerability scanning in CI.** A new `pip-audit` workflow
+  builds the real wheel, installs it into an isolated venv, and scans the
+  installed tree for known CVEs on every push/PR and weekly. This catches
+  advisories against transitive dependencies, which Dependabot's update
+  proposals never surface on their own.
+
 ### Fixed
 - **The coordinator's job queue was lost on restart from a different
   directory.** `gpumesh serve --db` defaulted to the RELATIVE path

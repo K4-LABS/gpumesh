@@ -1,0 +1,75 @@
+name: pip-audit
+
+# Dependency vulnerability scan.
+#
+# Dependabot opens upgrade PRs; this answers a different question: is the
+# dependency tree *right now* known to contain a CVE? It matters most for a
+# project like this one because gpumesh ships code to other machines — a
+# vulnerable version of cloudpickle (or anything it pulls in) is a standing
+# bug in every mesh, not a local annoyance.
+#
+# The audit runs against the freshly built package (not the repo checkout),
+# so it scans exactly what a `pip install gpumesh` would install.
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  # Dependabot only proposes updates for what it can see; a CVE published
+  # against a transitive dependency appears in neither Dependabot's view nor
+  # any PR. The weekly run is what notices that.
+  schedule:
+    - cron: "29 4 * * 1"
+  workflow_dispatch:
+
+# Deny by default; this workflow only reads.
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    name: pip-audit (dependency CVEs)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      # Build the wheel and install it into an isolated venv so the scan
+      # covers the transitive closure, not just the direct dependencies.
+      # pip-audit itself stays in the runner Python: it audits the venv's
+      # frozen requirement list, so it never audits its own dependency tree.
+      - name: Build and install
+        run: |
+          python -m pip install --upgrade pip build pip-audit
+          python -m build --wheel --outdir dist
+          python -m venv /tmp/audit-venv
+          /tmp/audit-venv/bin/pip install --upgrade pip --quiet
+          /tmp/audit-venv/bin/pip install --quiet dist/*.whl
+
+      - name: Run pip-audit
+        # Freeze what the wheel actually pulled in, drop the venv tooling
+        # (pip/setuptools/wheel are bundled with every venv and routinely
+        # carry CVEs that have nothing to do with this package) and the
+        # editable-looking gpumesh line itself, then audit that list.
+        # No --output file: pip-audit only creates it when it finds
+        # vulnerabilities, so a clean run would fail the trailing `cat`.
+        # The columns report goes to stdout either way.
+        run: |
+          /tmp/audit-venv/bin/pip freeze | \
+            grep -vE '^(pip|setuptools|wheel)==' | \
+            grep -v '^gpumesh @' > /tmp/audit-requirements.txt
+          cat /tmp/audit-requirements.txt
+          python -m pip_audit -r /tmp/audit-requirements.txt \
+            --progress-spinner off \
+            --format columns
