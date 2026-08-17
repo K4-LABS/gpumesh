@@ -148,7 +148,7 @@ def _hermetic_wizard(monkeypatch):
 def mock_tailscale_installed():
     """Mock Tailscale as installed and running."""
     with patch("gpumesh.setup_wizard._has_tailscale", return_value=True), \
-         patch("gpumesh.setup_wizard._get_tailscale_ip", return_value="100.67.72.79"):
+         patch("gpumesh.setup_wizard._get_tailscale_ip", return_value="100.100.100.100"):
         yield
 
 
@@ -341,12 +341,12 @@ class TestCoordinatorFlowTailscale:
                 output = mock_stdout.getvalue()
 
                 assert "YOUR CONNECTION DETAILS" in output
-                assert "URL:   http://100.67.72.79:8000" in output
+                assert "URL:   http://100.100.100.100:8000" in output
                 assert "Token: testToken123" in output
                 # The bind address is now part of the command: without it
                 # `gpumesh serve` listens on 127.0.0.1 and the tailnet URL
                 # advertised two lines above answers nothing.
-                assert ("gpumesh serve --host 100.67.72.79 --port 8000 "
+                assert ("gpumesh serve --host 100.100.100.100 --port 8000 "
                         "--token testToken123 --tailscale") in output
 
     def test_coordinator_tailscale_not_available(self, mock_tailscale_not_installed, mock_lan_ip,
@@ -1226,10 +1226,10 @@ class TestShowCoordinatorInstructions:
     def test_tailscale_mode_steps(self, wz_console):
         from gpumesh.setup_wizard import _show_coordinator_instructions
 
-        _show_coordinator_instructions("http://100.67.72.79:8000", "tok12345",
+        _show_coordinator_instructions("http://100.100.100.100:8000", "tok12345",
                                        "tailscale")
         out = wz_console.getvalue()
-        assert ("gpumesh serve --host 100.67.72.79 --port 8000 "
+        assert ("gpumesh serve --host 100.100.100.100 --port 8000 "
                 "--token tok12345 --tailscale") in out
         assert "https://tailscale.com/download" in out
         assert "gpumesh quickjoin --token tok12345 --tailscale" in out
@@ -1239,13 +1239,13 @@ class TestShowCoordinatorInstructions:
         from gpumesh.setup_wizard import _show_coordinator_instructions
         from gpumesh.cli import _is_loopback_bind
 
-        _show_coordinator_instructions("http://100.67.72.79:8000", "tok12345",
+        _show_coordinator_instructions("http://100.100.100.100:8000", "tok12345",
                                        "tailscale")
         out = wz_console.getvalue()
         serve_line = next(ln for ln in out.splitlines() if "gpumesh serve" in ln)
         parts = serve_line.split()
-        assert parts[parts.index("--host") + 1] == "100.67.72.79"
-        assert not _is_loopback_bind("100.67.72.79")
+        assert parts[parts.index("--host") + 1] == "100.100.100.100"
+        assert not _is_loopback_bind("100.100.100.100")
         assert "EXPOSURE" in out
         assert "tailnet" in out
 
@@ -1284,9 +1284,9 @@ class TestSetupCoordinatorManual:
         from gpumesh.setup_wizard import _setup_coordinator_manual
 
         with patch("gpumesh.connection_manager.save_connection") as save:
-            _setup_coordinator_manual("cpu", True, "100.67.72.79", "192.168.1.10",
+            _setup_coordinator_manual("cpu", True, "100.100.100.100", "192.168.1.10",
                                       "tok12345")
-        save.assert_called_once_with("http://100.67.72.79:8000", "tok12345")
+        save.assert_called_once_with("http://100.100.100.100:8000", "tok12345")
 
     def test_generates_a_token_when_none_is_supplied(self, wz_console):
         from gpumesh.setup_wizard import _setup_coordinator_manual
@@ -1405,14 +1405,14 @@ class TestClaimWorker:
         peer = _peer()
         body = json.dumps({
             "error": "unreachable",
-            "tried": ["http://172.22.96.1:8000", "http://192.168.1.10:8000"],
+            "tried": ["http://172.22.0.1:8000", "http://192.168.1.10:8000"],
         }).encode()
         with self._select(peer):
             with patch("urllib.request.urlopen", side_effect=_http_error(502, body)):
                 _claim_worker([peer], "http://192.168.1.10:8000", "coordTok")
         out = claim_env.getvalue()
         assert "Claim failed: unreachable" in out
-        assert "http://172.22.96.1:8000" in out
+        assert "http://172.22.0.1:8000" in out
         assert "--host-ip" in out
 
     def test_http_error_with_an_unreadable_body(self, claim_env):
@@ -1544,13 +1544,13 @@ class TestSetupCoordinatorRadar:
 
         monkeypatch.setattr("gpumesh.setup_wizard._has_tailscale", lambda: True)
         monkeypatch.setattr("gpumesh.setup_wizard._get_tailscale_ip",
-                            lambda: "100.67.72.79")
+                            lambda: "100.100.100.100")
         with patch("gpumesh.server.serve") as serve:
             with patch("builtins.input", side_effect=["2"]):
                 _setup_coordinator_radar("cpu")
         serve.assert_not_called()
         out = coordinator_env.getvalue()
-        assert "http://100.67.72.79:8000" in out
+        assert "http://100.100.100.100:8000" in out
         assert "--tailscale" in out
 
     def test_missing_tailscale_offers_only_two_options(self, coordinator_env):
@@ -2070,10 +2070,10 @@ class TestSetupWorkerTailscaleAndManual:
         with patch("gpumesh.connection_manager.save_connection") as save:
             with patch("gpumesh.worker.run_worker") as run:
                 with patch("builtins.input",
-                           side_effect=["100.67.72.79:8000", "tok12345"]):
+                           side_effect=["100.100.100.100:8000", "tok12345"]):
                     _setup_worker_tailscale("cpu")
-        save.assert_called_once_with("http://100.67.72.79:8000", "tok12345")
-        run.assert_called_once_with("http://100.67.72.79:8000", "tok12345")
+        save.assert_called_once_with("http://100.100.100.100:8000", "tok12345")
+        run.assert_called_once_with("http://100.100.100.100:8000", "tok12345")
 
     def test_tailscale_missing_url(self, wz_console):
         from gpumesh.setup_wizard import _setup_worker_tailscale
@@ -2089,7 +2089,7 @@ class TestSetupWorkerTailscaleAndManual:
 
         with patch("gpumesh.connection_manager.save_connection") as save:
             with patch("gpumesh.worker.run_worker") as run:
-                with patch("builtins.input", side_effect=["100.67.72.79", ""]):
+                with patch("builtins.input", side_effect=["100.100.100.100", ""]):
                     _setup_worker_tailscale("cpu")
         run.assert_not_called()
         save.assert_not_called()
@@ -2102,7 +2102,7 @@ class TestSetupWorkerTailscaleAndManual:
             with patch("gpumesh.worker.run_worker",
                        side_effect=OSError("connection refused")):
                 with patch("builtins.input",
-                           side_effect=["100.67.72.79", "tok12345"]):
+                           side_effect=["100.100.100.100", "tok12345"]):
                     _setup_worker_tailscale("cpu")
         assert "Failed to connect: connection refused" in wz_console.getvalue()
 
@@ -2190,12 +2190,12 @@ class TestSetupWorkerTailscaleAndManual:
         with patch("gpumesh.connection_manager.save_connection") as save:
             with patch("gpumesh.worker.run_worker") as run:
                 with patch("builtins.input",
-                           side_effect=["ftp://100.67.72.79", "100.67.72.79:8000",
+                           side_effect=["ftp://100.100.100.100", "100.100.100.100:8000",
                                         "tok12345"]):
                     _setup_worker_tailscale("cpu")
         assert "not a supported scheme" in wz_console.getvalue()
-        save.assert_called_once_with("http://100.67.72.79:8000", "tok12345")
-        run.assert_called_once_with("http://100.67.72.79:8000", "tok12345")
+        save.assert_called_once_with("http://100.100.100.100:8000", "tok12345")
+        run.assert_called_once_with("http://100.100.100.100:8000", "tok12345")
 
     def test_an_empty_token_is_re_prompted(self, wz_console):
         """The coordinator's token has no length rule, but must exist."""
