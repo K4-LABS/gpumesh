@@ -19,11 +19,14 @@
 """
 
 import argparse
+import errno
+import ipaddress
 import os
 import platform
 import secrets
 import signal
 import socket
+import sqlite3
 import subprocess
 import sys
 import time
@@ -574,6 +577,56 @@ def _refuse_tailscale_on_loopback(bind_host: str, port: int, token: str):
     sys.exit(1)
 
 
+def _refuse_foreign_host_ip(ip: str, port: int):
+    """Stop `serve --host-ip <IP>` when <IP> is not an address of this machine.
+
+    ``--host-ip`` only changes the address that is *printed* for workers to
+    dial; the bind is untouched (that is ``--host``). A pin that does not
+    belong to this machine is not a bind failure — the coordinator starts
+    fine and then advertises an address nothing here answers, which turns
+    into every remote worker timing out (WinError 10060) with the
+    coordinator looking perfectly healthy. That is the exact failure the
+    ``--host-ip`` flag exists to prevent, so fail fast instead of printing
+    the dead URL.
+
+    Addresses that ARE this machine's come from ``utils.lan_ip_candidates()``
+    (the same ranking the coordinator uses to advertise). Loopback is allowed
+    too: ``--host-ip 127.0.0.1`` is the sensible pin for a loopback-bound
+    coordinator. CGNAT/tailnet (100.x) addresses are deliberately NOT in the
+    candidate list — they are reachable only inside a tailnet — so they are
+    allowed as well, since ``--tailscale`` pins exactly that.
+    """
+    try:
+        ipaddress.ip_address(ip)
+    except ValueError:
+        # Not an IP literal. The GPUMESH_HOST_IP env-var path already
+        # rejects hostnames with its own warning; for the flag, let the
+        # auto-detection path fall back rather than double-reporting.
+        return
+    candidates = utils.lan_ip_candidates()
+    if ip in candidates:
+        return
+    # The candidate list deliberately excludes loopback and CGNAT/tailnet
+    # (100.x) addresses: loopback is the correct pin for a loopback-bound
+    # coordinator, and ``--tailscale`` pins exactly a tailnet address. Both
+    # are "special" in the same sense lan_ip_candidates filters out, so the
+    # same helper judges them.
+    if utils._is_loopback_or_special(ip):
+        return
+    print()
+    print(red(bold(f"[ERROR] --host-ip {ip} is not an address of this machine.")))
+    print(yellow("   Workers would be told to dial that address, and nothing here"))
+    print(yellow("   answers it — every remote worker would time out (WinError 10060)."))
+    print()
+    print("   Addresses this machine actually has:")
+    for candidate in candidates:
+        print(f"     {cyan(candidate)}")
+    print()
+    print("   Re-run with one of those, or drop --host-ip and let")
+    print("   auto-detection pick (it only ever chooses a real address).")
+    sys.exit(1)
+
+
 def cmd_serve(args):
     token = args.token or secrets.token_urlsafe(12)
     # Bind to loopback unless the user asked for more. See _resolve_bind_host
@@ -645,6 +698,11 @@ def cmd_serve(args):
                   "firewall."))
             print(dim("   Start 'gpumesh serve' as Administrator, or open "
                   f"port {args.port} manually (see hint above)."))
+    # A pinned --host-ip that is not an address of this machine is not a bind
+    # failure — the coordinator starts fine and then advertises a dead URL.
+    # Fail before binding, while the mistake is cheap to explain.
+    if getattr(args, "host_ip", ""):
+        _refuse_foreign_host_ip(args.host_ip, args.port)
     # ``--db`` defaults to None so the stable location (next to the saved
     # connection, not the working directory) can be filled in here. The
     # relative-path default that preceded this lost every queued job when the
@@ -655,6 +713,39 @@ def cmd_serve(args):
         httpd = server.serve(bind_host, args.port, db_path, token,
                              discovery=not args.no_discovery,
                              safe_mode=args.safe_mode)
+    except sqlite3.Error as exc:
+        # An unwritable --db path surfaces as sqlite3.OperationalError, which
+        # is NOT an OSError — the port-in-use handler below never saw it, so
+        # the coordinator died with a raw traceback naming no path at all.
+        # Name the path and say what to do instead.
+        print(red(f"[ERROR] Cannot open database at {db_path}: {exc}"))
+        print(yellow("   The coordinator stores queued jobs here, and it is not"))
+        print(yellow("   writable (or its parent directory does not exist)."))
+        print(dim("   Check the directory is writable, or point --db at a"))
+        print(dim("   writable location, e.g.:  gpumesh serve --db ./gpumesh.db"))
+        sys.exit(1)
+    except PermissionError as exc:
+        # A privileged port (<1024) is refused by the OS with EACCES/EPERM on
+        # POSIX (Windows has no privileged ports, so a PermissionError there
+        # is the database, handled below). The generic port-in-use message
+        # would send the user to pick another port — which does not fix a
+        # permission error.
+        if (platform.system() != "Windows" and args.port < 1024
+                and getattr(exc, "errno", None) in (errno.EACCES, errno.EPERM)):
+            print(red(f"[ERROR] Permission denied binding port {args.port}: {exc}"))
+            print(yellow("   Ports below 1024 are privileged and are refused by the"))
+            print(yellow("   OS for unprivileged processes."))
+            print(dim(f"   Try a port above 1024, e.g.:  gpumesh serve --port 8000"))
+            sys.exit(1)
+        # The other PermissionError source inside serve() is the database's
+        # parent directory (Database._open_db calls os.makedirs). Name it the
+        # way the sqlite branch below names an unwritable file.
+        print(red(f"[ERROR] Cannot open database at {db_path}: {exc}"))
+        print(yellow("   The coordinator stores queued jobs here, and its parent"))
+        print(yellow("   directory is not writable."))
+        print(dim("   Check the directory is writable, or point --db at a"))
+        print(dim("   writable location, e.g.:  gpumesh serve --db ./gpumesh.db"))
+        sys.exit(1)
     except OSError as exc:
         print(red(f"[ERROR] {exc}"))
         print(yellow(f"   Port {args.port} is already in use."))
