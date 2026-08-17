@@ -645,8 +645,14 @@ def cmd_serve(args):
                   "firewall."))
             print(dim("   Start 'gpumesh serve' as Administrator, or open "
                   f"port {args.port} manually (see hint above)."))
+    # ``--db`` defaults to None so the stable location (next to the saved
+    # connection, not the working directory) can be filled in here. The
+    # relative-path default that preceded this lost every queued job when the
+    # coordinator was restarted from a different folder: a fresh, empty
+    # database is indistinguishable from "no jobs", and nothing says why.
+    db_path = args.db or connection_manager.default_db_path()
     try:
-        httpd = server.serve(bind_host, args.port, args.db, token,
+        httpd = server.serve(bind_host, args.port, db_path, token,
                              discovery=not args.no_discovery,
                              safe_mode=args.safe_mode)
     except OSError as exc:
@@ -2133,8 +2139,10 @@ def main():
     )
     p.add_argument("--port", type=int, default=8000,
                    help="port to listen on (default: 8000)")
-    p.add_argument("--db", default="gpumesh.db",
-                   help="database file for job storage (default: gpumesh.db)")
+    p.add_argument("--db", default=None,
+                   help="database file for job storage (default: "
+                        "~/.gpumesh/gpumesh.db, so queued jobs survive "
+                        "restarts from any directory)")
     # Two host-shaped flags is confusing, so the help text has to carry the
     # distinction: --host is the bind (a security boundary), --host-ip is
     # cosmetic (which address gets printed).

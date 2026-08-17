@@ -196,7 +196,7 @@ class GPUMesh:
     def start_coordinator(
         port: int = 8000,
         token: str | None = None,
-        db_path: str = "gpumesh.db",
+        db_path: str | None = None,
         tailscale: bool = False,
         safe_mode: bool = False,
         self_worker: bool = True,
@@ -207,7 +207,10 @@ class GPUMesh:
         Args:
             port: Port to listen on
             token: Auth token (generated if None)
-            db_path: SQLite database path
+            db_path: SQLite database path. None (the default) uses
+                ``~/.gpumesh/gpumesh.db``, a stable location that does not
+                change with the working directory, so queued jobs survive
+                coordinator restarts from anywhere.
             tailscale: Use Tailscale for network access
             host: Bind address. Defaults to loopback, so only this machine can
                 connect. Pass "0.0.0.0" to let other machines join — see the
@@ -232,6 +235,14 @@ class GPUMesh:
 
         if token is None:
             token = _secrets.token_urlsafe(12)
+
+        # ``db_path=None`` means "the stable default": next to the saved
+        # connection, not in the working directory. The old relative-path
+        # default ("gpumesh.db") silently lost every queued job when the
+        # coordinator was restarted from a different folder.
+        if db_path is None:
+            from . import connection_manager
+            db_path = connection_manager.default_db_path()
 
         # Bind to loopback unless the caller deliberately opens it up.
         #
