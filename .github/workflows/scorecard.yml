@@ -41,12 +41,18 @@ jobs:
   analysis:
     name: Scorecard analysis
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       # Needed to upload the SARIF result to the code-scanning dashboard.
       security-events: write
-      # Needed by the Branch-Protection and Webhooks checks to read repository
-      # administrative settings. Read-only.
+      # Not a repository-read scope, despite the name sitting next to two that
+      # are: this is what lets the action mint an OIDC token and sign the
+      # result it sends to the OpenSSF API, which is the `publish_results`
+      # setting below. Removing it does not weaken the scan, it just stops the
+      # published score (and therefore the badge) from being attributable.
       id-token: write
+      # Branch-Protection, Webhooks and the workflow checks read repository
+      # settings and Actions metadata through these.
       contents: read
       actions: read
 
