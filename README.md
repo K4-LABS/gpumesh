@@ -625,6 +625,11 @@ The usual suspects — bind vs firewall, mismatched tokens, cross-version tasks,
 missing torch on a worker — in one table, plus how to read `gpumesh doctor`:
 [`docs/troubleshooting.md`](docs/troubleshooting.md).
 
+Windows-specific setup — why Administrator matters for firewall rules, the
+manual `netsh` command, `python -m gpumesh` when the script is not on PATH,
+and how to tell a firewall block (10060) from a coordinator that is not
+running (10061): [`docs/windows.md`](docs/windows.md).
+
 ---
 
 ## Development
@@ -654,6 +659,7 @@ and what makes a change easy to review.
 | [`docs/stability.md`](docs/stability.md) | What counts as gpumesh's public API, what a version bump promises, the wire-protocol compatibility window, and the deprecation policy |
 | [`docs/why-not-ray-or-dask.md`](docs/why-not-ray-or-dask.md) | An honest comparison, including when Ray or Dask is the right answer |
 | [`examples/`](examples/README.md) | Runnable scripts for the first hour: hello-mesh, a second machine, a `.map()` sweep, non-JSON return values, a worker that disappears |
+| [`docs/windows.md`](docs/windows.md) | Windows setup: firewall rules, `python -m gpumesh`, and reading 10060 vs 10061 connection errors |
 | [SECURITY.md](SECURITY.md) · [THREAT_MODEL.md](THREAT_MODEL.md) | What a token grants, and the same flow traced through the code |
 
 ---
