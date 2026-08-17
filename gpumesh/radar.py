@@ -7,6 +7,7 @@ a TTY.
 
 from __future__ import annotations
 
+import getpass
 import shutil
 import sys
 import time
@@ -295,10 +296,17 @@ def select_worker_for_claim(peers: list[Peer]) -> tuple[Peer, str] | tuple[None,
             print(_yellow("  Cannot prompt in non-interactive mode."))
         return None, None
 
-    # Prompt for token
+    # Prompt for token. getpass, not input: the token is a credential and
+    # input() echoes it in plaintext into the terminal and its scrollback.
+    # (The peer-selection prompt above stays input() — only the token is
+    # sensitive.) EOFError and KeyboardInterrupt are handled the same way
+    # getpass raises them as input() did, so the non-interactive paths are
+    # unchanged.
     print()
     try:
-        token = input(_bold(f"  Enter token for {peer.hostname}: ")).strip()
+        token = getpass.getpass(
+            _bold(f"  Enter token for {peer.hostname}: ")
+        ).strip()
     except (EOFError, KeyboardInterrupt):
         print()
         return None, None
