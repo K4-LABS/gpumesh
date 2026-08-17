@@ -301,3 +301,49 @@ class TestGetConnection:
         # url is truthy so env_url = url (explicit), env_token = env var
         assert url == "http://explicit:8000"
         assert token == "envtoken"
+
+
+class TestDefaultDbPath:
+    """default_db_path() is the stable home of the coordinator's job queue.
+
+    The old default was the relative path "gpumesh.db", which lived in the
+    working directory: a coordinator restarted from a different folder opened
+    a fresh, empty database and every queued job vanished. The default must
+    therefore be (a) derived from the config directory, not the cwd, and
+    (b) usable on a first run, when the directory does not exist yet.
+    """
+
+    def test_path_is_inside_config_dir_not_cwd(self, tmp_path, monkeypatch):
+        """The default DB path lives next to config.json, not in the cwd."""
+        config_dir = tmp_path / ".gpumesh"
+        elsewhere = tmp_path / "somewhere-else"
+        elsewhere.mkdir()
+        monkeypatch.setattr(cm, "_CONFIG_DIR", str(config_dir))
+        monkeypatch.setattr(cm, "_DB_PATH", str(config_dir / "gpumesh.db"))
+        monkeypatch.chdir(elsewhere)
+
+        db_path = cm.default_db_path()
+
+        assert db_path == str(config_dir / "gpumesh.db")
+        assert not str(db_path).startswith(str(tmp_path / "somewhere-else"))
+
+    def test_creates_the_directory_on_first_run(self, tmp_path, monkeypatch):
+        """A fresh machine has no ~/.gpumesh yet; the default must not fail."""
+        config_dir = tmp_path / ".gpumesh"
+        assert not config_dir.exists()
+        monkeypatch.setattr(cm, "_CONFIG_DIR", str(config_dir))
+        monkeypatch.setattr(cm, "_DB_PATH", str(config_dir / "gpumesh.db"))
+
+        db_path = cm.default_db_path()
+
+        assert config_dir.exists()
+        assert db_path == str(config_dir / "gpumesh.db")
+
+    def test_db_and_config_share_one_directory(self, tmp_path, monkeypatch):
+        """A single mount/backup of ~/.gpumesh covers both token and queue."""
+        config_dir = tmp_path / ".gpumesh"
+        monkeypatch.setattr(cm, "_CONFIG_DIR", str(config_dir))
+        monkeypatch.setattr(cm, "_CONFIG_PATH", str(config_dir / "config.json"))
+        monkeypatch.setattr(cm, "_DB_PATH", str(config_dir / "gpumesh.db"))
+
+        assert os.path.dirname(cm._DB_PATH) == os.path.dirname(cm._CONFIG_PATH)

@@ -22,9 +22,29 @@ _STALE_CLEAR_SECONDS = 86400  # default max age for clear_if_stale (1 day)
 _CONFIG_DIR = os.path.join(os.path.expanduser("~"), ".gpumesh")
 _CONFIG_PATH = os.path.join(_CONFIG_DIR, "config.json")
 
+# The coordinator's job database lives next to the saved connection, not in
+# the process's working directory. The old default -- the relative path
+# "gpumesh.db" -- meant the queue was wherever `gpumesh serve` happened to be
+# run from: restart the coordinator from another folder and it opened a fresh,
+# empty database, silently discarding every queued job. Jobs are the whole
+# point of the coordinator, so the database gets the same stable home as the
+# token.
+_DB_PATH = os.path.join(_CONFIG_DIR, "gpumesh.db")
+
 
 def _ensure_dir():
     os.makedirs(_CONFIG_DIR, exist_ok=True)
+
+
+def default_db_path() -> str:
+    """The stable default location for the coordinator's job database.
+
+    ``~/.gpumesh/gpumesh.db``, next to ``config.json``: a path that does not
+    change with the working directory, so a coordinator restarted from
+    anywhere reopens the same queue instead of a fresh empty one.
+    """
+    _ensure_dir()
+    return _DB_PATH
 
 
 def _normalize_url(url: str) -> str:

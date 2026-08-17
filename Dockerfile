@@ -86,12 +86,14 @@ ARG GID=10001
 # deliberate — gpumesh writes state to two different kinds of path and one
 # mount point needs to cover both:
 #
-#   * `gpumesh serve --db` defaults to the RELATIVE path "gpumesh.db", so it
-#     lands in the process's working directory. Previously there was no
-#     WORKDIR at all, the process started in `/`, and the coordinator database
-#     was created at /gpumesh.db — in the container's writable layer, outside
-#     every volume, and therefore destroyed on `docker compose down`. The old
-#     compose file mounted /root/.gpumesh, which never held the database.
+#   * `gpumesh serve --db` defaults to ~/.gpumesh/gpumesh.db — next to
+#     config.json, not in the working directory — so the coordinator's job
+#     queue survives restarts from anywhere. Previously the default was the
+#     RELATIVE path "gpumesh.db", which landed wherever the process started;
+#     with no WORKDIR at all it was created at /gpumesh.db, in the
+#     container's writable layer, outside every volume, and destroyed on
+#     `docker compose down`. The old compose file mounted /root/.gpumesh,
+#     which never held the database.
 #
 #   * connection_manager.py writes ~/.gpumesh/config.json, and security.py
 #     stores tokens there at mode 0600. That resolves through HOME.
