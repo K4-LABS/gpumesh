@@ -258,7 +258,11 @@ class TestCoordinatorFlowSameNetwork:
         host, port, db_path, token = serve.call_args[0][:4]
         assert host == WIZARD_LAN_BIND_HOST
         assert port == 8000
-        assert db_path == "gpumesh.db"
+        # The wizard must use the stable per-user database location, not a
+        # working-directory-relative path, so a coordinator restarted from
+        # anywhere reopens the same job queue.
+        from gpumesh.connection_manager import default_db_path
+        assert db_path == default_db_path()
         assert token == "testToken123"
 
     def test_coordinator_scan_interrupt_stops_cleanly(self, mock_tailscale_installed,

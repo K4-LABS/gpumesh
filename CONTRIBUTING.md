@@ -409,9 +409,9 @@ worker execute code from an unauthenticated source, certainly is.
 ## License
 
 By contributing you agree that your contributions are licensed under the
-[MIT License](LICENSE) that covers this project.
+[GNU AGPL-3.0](LICENSE) that covers this project.
 
 The `Signed-off-by:` line on each commit ([DCO](#sign-your-commits-dco)) is the
 record of that agreement. There is no CLA and no copyright assignment — you keep
-the copyright in what you write, and it is licensed out under the same MIT terms
-as everything else here.
+the copyright in what you write, and it is licensed out under the same AGPL-3.0
+terms as everything else here.

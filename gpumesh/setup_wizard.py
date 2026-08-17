@@ -573,13 +573,17 @@ def _setup_coordinator_radar(device: str):
 
     bind_host = _resolve_wizard_bind_host()
 
+    # Use the stable database location (next to the saved connection), so a
+    # coordinator re-started from this wizard or `gpumesh serve` from any
+    # directory reopens the same queue instead of a fresh empty one.
+    db_path = connection_manager.default_db_path()
     try:
-        httpd = server.serve(bind_host, 8000, "gpumesh.db", token)
+        httpd = server.serve(bind_host, 8000, db_path, token)
     except OSError as exc:
         _console.print(f"  [ERROR] Failed to start server: {exc}", style="red")
         _console.print("  Port 8000 may already be in use.", style="yellow")
         try:
-            httpd = server.serve(bind_host, 8001, "gpumesh.db", token)
+            httpd = server.serve(bind_host, 8001, db_path, token)
             coordinator_url = f"http://{lan_ip}:8001"
             _console.print("  Server started on port 8001 instead.", style="green")
         except OSError:

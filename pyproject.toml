@@ -44,7 +44,7 @@ readme = "README.md"
 requires-python = ">=3.9"
 
 # PEP 639: an SPDX expression, not the deprecated `{text = "..."}` table.
-license = "MIT"
+license = "AGPL-3.0-or-later"
 license-files = ["LICENSE"]
 
 authors = [

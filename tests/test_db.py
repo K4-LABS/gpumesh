@@ -20,6 +20,21 @@ def db(tmp_path):
     return Database(str(tmp_path / "test.db"))
 
 
+def test_database_creates_missing_parent_directory(tmp_path):
+    """A first-run DB path (e.g. ~/.gpumesh/gpumesh.db) must just work.
+
+    sqlite3.connect() creates the file but not its parent directories, so a
+    stable per-user default would fail on a fresh machine without this.
+    """
+    nested = tmp_path / "fresh" / "dir" / "jobs.db"
+    assert not nested.parent.exists()
+
+    db = Database(str(nested))
+    db.close()
+
+    assert nested.exists()
+
+
 def test_register_and_list_workers(db):
     wid = db.register_worker("laptop-a", "cpu", 1.5)
     workers = db.list_workers()
