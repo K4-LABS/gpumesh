@@ -7,6 +7,7 @@ threaded). WAL mode keeps readers from blocking the writer.
 """
 
 import json
+import os
 import sqlite3
 import threading
 import time
@@ -347,6 +348,12 @@ class Database:
 
     @staticmethod
     def _open_db(path: str):
+        # Create the parent directory so a fresh ``~/.gpumesh`` (or any other
+        # first-run location) does not fail with "unable to open database
+        # file". sqlite3.connect() creates the file but not its parents.
+        parent = os.path.dirname(os.path.abspath(path))
+        if parent:
+            os.makedirs(parent, exist_ok=True)
         try:
             conn = sqlite3.connect(path, check_same_thread=False)
             conn.execute("PRAGMA journal_mode=WAL")
@@ -497,7 +504,10 @@ class Database:
             conn.commit()
             return conn
         except sqlite3.DatabaseError as exc:
-            import os, shutil
+            # ``os`` is module-level; only ``shutil`` needs importing here.
+            # (Importing ``os`` locally would shadow the module-level name for
+            # the whole function and break the parent-dir creation above.)
+            import shutil
             backup_path = path + ".corrupted"
             safe_print(f"{bold('[gpumesh]')} {yellow('WARNING')}: Database corrupted ({exc})")
             try:

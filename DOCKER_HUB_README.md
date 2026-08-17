@@ -444,7 +444,7 @@ Contributions are welcome! See the [GitHub repository](https://github.com/K4-LAB
 
 ## 📄 License
 
-MIT License — see [LICENSE](https://github.com/K4-LABS/gpumesh/blob/master/LICENSE) for details.
+GNU AGPL-3.0 — see [LICENSE](https://github.com/K4-LABS/gpumesh/blob/master/LICENSE) for details.
 
 ---
 

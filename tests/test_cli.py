@@ -657,8 +657,10 @@ class TestCLIArgumentParsing:
             except SystemExit:
                 pass
 
-            # Verify port was passed correctly
-            mock_serve.assert_called_once_with("127.0.0.1", 9000, "gpumesh.db", "test123", discovery=True, safe_mode=False)
+            # Verify port was passed correctly. The default DB path is the
+            # stable per-user location, not the working directory.
+            from gpumesh.connection_manager import default_db_path
+            mock_serve.assert_called_once_with("127.0.0.1", 9000, default_db_path(), "test123", discovery=True, safe_mode=False)
 
     def test_serve_token_argument(self):
         """--token argument is correctly parsed."""
@@ -675,7 +677,8 @@ class TestCLIArgumentParsing:
                 pass
 
             # Verify token was passed correctly
-            mock_serve.assert_called_once_with("127.0.0.1", 8000, "gpumesh.db", "mysecrettoken", discovery=True, safe_mode=False)
+            from gpumesh.connection_manager import default_db_path
+            mock_serve.assert_called_once_with("127.0.0.1", 8000, default_db_path(), "mysecrettoken", discovery=True, safe_mode=False)
 
     def test_serve_default_token_generated(self):
         """Token is generated when not provided."""
@@ -693,7 +696,8 @@ class TestCLIArgumentParsing:
                 pass
 
             # Verify generated token was used
-            mock_serve.assert_called_once_with("127.0.0.1", 8000, "gpumesh.db", "generatedtoken123", discovery=True, safe_mode=False)
+            from gpumesh.connection_manager import default_db_path
+            mock_serve.assert_called_once_with("127.0.0.1", 8000, default_db_path(), "generatedtoken123", discovery=True, safe_mode=False)
 
     def test_serve_reads_token_from_environment(self, monkeypatch):
         """GPUMESH_TOKEN is honoured, matching `join`.
@@ -716,8 +720,9 @@ class TestCLIArgumentParsing:
             except SystemExit:
                 pass
 
+            from gpumesh.connection_manager import default_db_path
             mock_serve.assert_called_once_with(
-                "127.0.0.1", 8000, "gpumesh.db", "token-from-env",
+                "127.0.0.1", 8000, default_db_path(), "token-from-env",
                 discovery=True, safe_mode=False,
             )
 
@@ -736,8 +741,9 @@ class TestCLIArgumentParsing:
             except SystemExit:
                 pass
 
+            from gpumesh.connection_manager import default_db_path
             mock_serve.assert_called_once_with(
-                "127.0.0.1", 8000, "gpumesh.db", "explicit",
+                "127.0.0.1", 8000, default_db_path(), "explicit",
                 discovery=True, safe_mode=False,
             )
 
