@@ -1,5 +1,3 @@
-Markdown
-
 # 2-Node Docker Compose Example
 
 This directory contains a self-contained, working example of a two-node `gpumesh` cluster (one coordinator and one worker) running in Docker.
@@ -10,23 +8,29 @@ Start the cluster in detached mode from this directory:
 
 ```bash
 docker compose up -d
+```
+
 (Wait a few seconds for the worker to connect to the coordinator).
 
-🛠️ Submitting a Job
-Once the cluster is running, you can submit the grid_search.py example to the containerized coordinator.
+## 🛠️ Submitting a Job
+
+Once the cluster is running, you can submit the `grid_search.py` example to the containerized coordinator.
 
 Run this command from the root of the repository:
 
-Bash
-export GPUMESH_URL=[http://127.0.0.1:8732](http://127.0.0.1:8732)
+```bash
+export GPUMESH_URL=http://127.0.0.1:8732
 export GPUMESH_TOKEN=my-secret-mesh-token
 
 # If gpumesh is not in your PATH, use `python -m gpumesh`
 python -m gpumesh submit examples/grid_search.py --payloads examples/payloads.json --wait
-✅ Expected Output
+```
+
+## ✅ Expected Output
+
 A successful run will indicate that the tasks were distributed and completed across the mesh. You should see output exactly like this:
 
-Plaintext
+```plaintext
 ============================================================
   gpumesh installed successfully!
   version 2.0.0
@@ -60,16 +64,19 @@ Job: examples/grid_search.py (dd72a3c2a1cf)
     result: {"lr": 0.2, "epochs": 500, "l2": 0.001, "val_accuracy": 0.948, "weights": [2.9428, -3.9689, -0.0151]}
   ✓ task 9a3124f9b8d9 [done]  cost=10.0  worker=5718d2bb6fba
     result: {"lr": 0.3, "epochs": 1000, "l2": 0.01, "val_accuracy": 0.952, "weights": [2.1907, -2.9448, 0.0191]}
-⚠️ Important Note on Ports
+```
+
+## ⚠️ Important Note on Ports
+
 If you are writing your own client scripts, please note the port configuration differences:
 
-This Docker image defaults to port 8732.
+- This Docker image defaults to port 8732.
+- Running the coordinator locally on your host via `gpumesh serve` defaults to port 8000.
 
-Running the coordinator locally on your host via gpumesh serve defaults to port 8000.
+## 🛑 Teardown
 
-🛑 Teardown
-To stop and remove the containers, run this from the examples/docker-2node/ directory:
+To stop and remove the containers, run this from the `examples/docker-2node/` directory:
 
-Bash
+```bash
 docker compose down
 ```
