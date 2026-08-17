@@ -87,11 +87,12 @@ heading.
 The realistic failure mode of a solo project is not a hostile takeover, it is
 silence. What adopters should be able to plan around:
 
-**The license is the guarantee.** gpumesh is MIT and every contribution is
-MIT-licensed inbound (see [CONTRIBUTING.md](CONTRIBUTING.md)). No CLA assigns
+**The license is the guarantee.** gpumesh is AGPL-3.0 and every contribution is
+AGPL-licensed inbound (see [CONTRIBUTING.md](CONTRIBUTING.md)). No CLA assigns
 copyright to anyone, and there is no entity that could relicense the existing
 code out from under you. Whatever happens to this repository, the code you have
-stays usable, modifiable and redistributable, forever, by anyone.
+stays usable, modifiable and redistributable, forever, by anyone — and any
+modification made available over a network must offer its source in turn.
 
 **Fork without asking.** If the project goes quiet and you need it maintained,
 fork it. That is not a hostile act and no permission is required or expected.
