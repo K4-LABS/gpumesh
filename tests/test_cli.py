@@ -114,15 +114,19 @@ class TestServeBindHost:
     """
 
     @staticmethod
-    def _run_serve(argv, lan_ip="192.168.1.50"):
+    def _run_serve(argv, lan_ip="192.168.1.50", lan_candidates=None):
         """Drive cmd_serve to completion with a fake server, return the mock."""
         from gpumesh.cli import main
 
+        if lan_candidates is None:
+            lan_candidates = [lan_ip]
         with patch("sys.argv", ["gpumesh", "serve"] + argv), \
              patch("gpumesh.cli.server.serve") as mock_serve, \
              patch("gpumesh.cli.worker.spawn_local_worker"), \
              patch("gpumesh.cli.connection_manager.save_connection"), \
              patch("gpumesh.cli.utils.get_lan_ip", return_value=lan_ip), \
+             patch("gpumesh.cli.utils.lan_ip_candidates",
+                   return_value=lan_candidates), \
              patch("gpumesh.cli.utils.show_ip_alternatives"), \
              patch("gpumesh.cli.utils.try_add_firewall_rule",
                    return_value=True) as mock_firewall, \
@@ -163,7 +167,8 @@ class TestServeBindHost:
     def test_host_ip_does_not_change_the_bind(self):
         """The confusing pair: --host-ip is advertising only, never the bind."""
         mock_serve = self._run_serve(
-            ["--host-ip", "10.1.2.3", "--token", "test123"]
+            ["--host-ip", "10.1.2.3", "--token", "test123"],
+            lan_candidates=["10.1.2.3"],
         )
         assert mock_serve.call_args[0][0] == "127.0.0.1"
 
@@ -175,6 +180,81 @@ class TestServeBindHost:
     def test_firewall_rule_is_requested_for_a_wide_bind(self):
         mock_serve = self._run_serve(["--host", "0.0.0.0", "--token", "test123"])
         mock_serve.firewall_mock.assert_called_once_with(8000)
+
+    def test_serve_refuses_foreign_host_ip_and_lists_candidates(self, capsys):
+        """A --host-ip that is not this machine's is refused, with the list."""
+        from gpumesh.cli import main
+
+        with patch("sys.argv", ["gpumesh", "serve", "--host-ip", "10.9.9.9",
+                                "--token", "test123"]), \
+             patch("gpumesh.cli.server.serve") as mock_serve, \
+             patch("gpumesh.cli.utils.lan_ip_candidates",
+                   return_value=["192.168.1.50"]), \
+             patch("gpumesh.cli.connection_manager.save_connection"), \
+             patch("gpumesh.cli.utils.try_add_firewall_rule",
+                   return_value=True), \
+             patch("gpumesh.cli.tunnel.open_tunnel"):
+            with pytest.raises(SystemExit) as excinfo:
+                main()
+        assert excinfo.value.code == 1
+        mock_serve.assert_not_called()
+        out = _plain(capsys.readouterr().out)
+        assert "10.9.9.9 is not an address of this machine" in out
+        assert "192.168.1.50" in out
+
+    def test_serve_accepts_loopback_host_ip(self):
+        """Loopback is the sensible pin for a loopback-bound coordinator."""
+        mock_serve = self._run_serve(
+            ["--host-ip", "127.0.0.1", "--token", "test123"],
+            lan_candidates=[],
+        )
+        assert mock_serve.call_args[0][0] == "127.0.0.1"
+
+    def test_serve_reports_unwritable_db_path(self, capsys):
+        """An unwritable --db names the path and the fix, not a traceback."""
+        import sqlite3
+        from gpumesh.cli import main
+
+        with patch("sys.argv", ["gpumesh", "serve", "--db", "/no/such/dir/db.sqlite",
+                                "--token", "test123"]), \
+             patch("gpumesh.cli.server.serve",
+                   side_effect=sqlite3.OperationalError(
+                       "unable to open database file")), \
+             patch("gpumesh.cli.connection_manager.save_connection"), \
+             patch("gpumesh.cli.utils.try_add_firewall_rule",
+                   return_value=True), \
+             patch("gpumesh.cli.tunnel.open_tunnel"):
+            with pytest.raises(SystemExit) as excinfo:
+                main()
+        assert excinfo.value.code == 1
+        out = _plain(capsys.readouterr().out)
+        assert "Cannot open database" in out
+        assert "/no/such/dir/db.sqlite" in out
+        assert "--db" in out
+
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="Windows has no privileged ports below 1024")
+    def test_serve_privileged_port_permission_denied(self, capsys):
+        """EACCES on a port <1024 explains privilege, not 'port in use'."""
+        import errno
+        from gpumesh.cli import main
+
+        with patch("sys.argv", ["gpumesh", "serve", "--port", "80",
+                                "--token", "test123"]), \
+             patch("gpumesh.cli.server.serve",
+                   side_effect=PermissionError(errno.EACCES,
+                                               "Permission denied")), \
+             patch("gpumesh.cli.connection_manager.save_connection"), \
+             patch("gpumesh.cli.utils.try_add_firewall_rule",
+                   return_value=True), \
+             patch("gpumesh.cli.tunnel.open_tunnel"):
+            with pytest.raises(SystemExit) as excinfo:
+                main()
+        assert excinfo.value.code == 1
+        out = _plain(capsys.readouterr().out)
+        assert "Permission denied binding port 80" in out
+        assert "below 1024" in out
+        assert "port 8000" in out
 
 
 def _plain(text: str) -> str:

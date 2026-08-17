@@ -13,6 +13,7 @@ from gpumesh.radar import (
     print_radar_header,
     print_radar_peers,
     select_peer,
+    select_worker_for_claim,
 )
 
 
@@ -305,3 +306,76 @@ class TestSelectPeer:
             captured = capsys.readouterr()
             assert "GPU" in captured.out
             assert "CLAIM" in captured.out or "-----" in captured.out
+
+
+class TestSelectWorkerForClaim:
+    """The claim flow must read the token without echoing it."""
+
+    @staticmethod
+    def _peer(hostname="pc1", score=85.0, claim_port=8001):
+        return Peer({
+            "hostname": hostname,
+            "device": "cpu",
+            "score": score,
+            "claim_port": claim_port,
+        }, ("1.2.3.4", 80))
+
+    def test_token_read_via_getpass_not_input(self):
+        """The token prompt must not echo — getpass, never input()."""
+        peers = [self._peer()]
+        with patch("builtins.input", return_value="1") as mock_input, \
+             patch("gpumesh.radar.getpass.getpass",
+                   return_value="s3cret-token") as mock_getpass:
+            peer, token = select_worker_for_claim(peers)
+        assert peer is not None and peer.hostname == "pc1"
+        assert token == "s3cret-token"
+        # Exactly one plaintext input() (the peer pick), one getpass (the
+        # token). The token must never travel through the echoing input().
+        assert mock_input.call_count == 1
+        assert mock_getpass.call_count == 1
+        assert "s3cret-token" not in str(mock_input.call_args)
+
+    def test_getpass_prompt_names_the_worker(self):
+        peers = [self._peer(hostname="shreyash")]
+        with patch("builtins.input", return_value="1"), \
+             patch("gpumesh.radar.getpass.getpass") as mock_getpass:
+            select_worker_for_claim(peers)
+        prompt = mock_getpass.call_args[0][0]
+        assert "shreyash" in prompt
+
+    def test_getpass_eof_returns_none(self):
+        peers = [self._peer()]
+        with patch("builtins.input", return_value="1"), \
+             patch("gpumesh.radar.getpass.getpass", side_effect=EOFError):
+            peer, token = select_worker_for_claim(peers)
+        assert peer is None and token is None
+
+    def test_getpass_keyboard_interrupt_returns_none(self):
+        peers = [self._peer()]
+        with patch("builtins.input", return_value="1"), \
+             patch("gpumesh.radar.getpass.getpass",
+                   side_effect=KeyboardInterrupt):
+            peer, token = select_worker_for_claim(peers)
+        assert peer is None and token is None
+
+    def test_empty_token_rejected(self, capsys):
+        peers = [self._peer()]
+        with patch("builtins.input", return_value="1"), \
+             patch("gpumesh.radar.getpass.getpass", return_value="   "):
+            peer, token = select_worker_for_claim(peers)
+        assert peer is None and token is None
+        assert "No token provided" in capsys.readouterr().out
+
+    def test_invalid_choice_never_prompts_for_token(self):
+        peers = [self._peer()]
+        with patch("builtins.input", return_value="99"), \
+             patch("gpumesh.radar.getpass.getpass") as mock_getpass:
+            peer, token = select_worker_for_claim(peers)
+        assert peer is None and token is None
+        mock_getpass.assert_not_called()
+
+    def test_empty_peers_returns_none(self):
+        with patch("gpumesh.radar.getpass.getpass") as mock_getpass:
+            peer, token = select_worker_for_claim([])
+        assert peer is None and token is None
+        mock_getpass.assert_not_called()
