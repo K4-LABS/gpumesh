@@ -1,2 +1,13 @@
+# Code owners. Every PR automatically requests review from the accounts below.
+#
+# Both handles are the maintainers listed in README.md and GOVERNANCE.md.
+#
+# One failure mode to know about: GitHub silently ignores a CODEOWNERS entry
+# naming an account that does not have *write* access to this repository — no
+# error, no warning, the reviewer request simply never happens. If reviews stop
+# being requested from someone here, check their permission on the repository
+# (and, if a team is ever added below, that the team has explicit repository
+# access) before assuming the file is wrong.
+
 # Default owners for everything in the repo
 * @Samurai007AK @jinia-konar
