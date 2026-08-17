@@ -44,13 +44,22 @@ ARG VERSION=2.0.0
 # Labels for Docker Hub
 LABEL maintainer="samurai007ak"
 LABEL description="Borrow your friends' GPUs: a distributed compute mesh in pure Python"
-LABEL version="2.0.0"
+# Both version labels read the same ARG. Hardcoding the number here meant
+# `--build-arg VERSION=x.y.z` moved image.version but left this one saying
+# 2.0.0, so an image could carry two different answers to "what version is
+# this".
+LABEL version="${VERSION}"
 # image.source is what links this image to the repository on GitHub — it is
 # what GitHub Packages, Docker Hub, and provenance tooling read to associate
 # the artifact with its source. Do not remove it.
-LABEL org.opencontainers.image.source="https://github.com/Samurai007AK/gpumesh"
-LABEL org.opencontainers.image.documentation="https://github.com/Samurai007AK/gpumesh#readme"
-LABEL org.opencontainers.image.licenses="MIT"
+LABEL org.opencontainers.image.source="https://github.com/K4-LABS/gpumesh"
+LABEL org.opencontainers.image.documentation="https://github.com/K4-LABS/gpumesh#readme"
+# Must match the `license` field in pyproject.toml and the notice at the top
+# of LICENSE. This label is what SBOM and container-scanning tools report as
+# the image's license, so a stale value here is how a downstream consumer
+# concludes gpumesh is permissively licensed when it is copyleft. It said
+# "MIT" through the 2.0.0 relicensing.
+LABEL org.opencontainers.image.licenses="AGPL-3.0-or-later"
 LABEL org.opencontainers.image.title="gpumesh"
 LABEL org.opencontainers.image.version="${VERSION}"
 

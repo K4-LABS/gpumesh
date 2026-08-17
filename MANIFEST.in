@@ -24,8 +24,12 @@ include CITATION.cff
 
 recursive-include docs *.md
 
-# Logos referenced from the README. check-manifest requires every git-tracked
-# file to be covered, and these are referenced by relative path in README.md.
+# Logos. README.md now references these by absolute raw.githubusercontent.com
+# URL — a relative path 404s on PyPI, which renders the long description as a
+# standalone page — so the sdist does not strictly need them to render. They
+# stay listed anyway: check-manifest requires every git-tracked file to be
+# covered, and a source distribution that omits the project's own artwork is
+# not a complete source distribution.
 include docs/img/gpumesh-logo.png
 include docs/img/gpumesh-logo-light.png
 
