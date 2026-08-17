@@ -597,7 +597,7 @@ def _refuse_foreign_host_ip(ip: str, port: int):
     allowed as well, since ``--tailscale`` pins exactly that.
     """
     try:
-        addr = ipaddress.ip_address(ip)
+        ipaddress.ip_address(ip)
     except ValueError:
         # Not an IP literal. The GPUMESH_HOST_IP env-var path already
         # rejects hostnames with its own warning; for the flag, let the
