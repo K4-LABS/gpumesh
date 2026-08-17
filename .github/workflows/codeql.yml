@@ -1,0 +1,81 @@
+name: codeql
+
+# GitHub's built-in static analysis (SAST).
+#
+# The lint job in tests.yml checks style and a handful of always-a-bug rules;
+# CodeQL is a different layer. It models data flow across functions and
+# modules and flags the patterns that matter most for this project: a
+# cloudpickled callable is deserialized from bytes that came off a socket, a
+# script path and its payload are handed to a subprocess, and a token is
+# compared against hashes. Those are precisely the places a "the user typed
+# the wrong type" review misses and a taint-style analysis finds.
+#
+# It also feeds the OpenSSF Scorecard's SAST check, so the score moves with it.
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  # Weekly, for the same reason as the other scheduled runs: dependencies and
+  # the codebase drift without anything in this repo changing.
+  schedule:
+    - cron: "23 4 * * 1"
+  workflow_dispatch:
+
+# Deny by default. CodeQL needs to upload its results to the security tab,
+# which is the one non-read scope this workflow has.
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: Analyze (Python)
+    runs-on: ubuntu-latest
+    permissions:
+      # Uploading the SARIF results to the Security tab's code-scanning
+      # dashboard is the entire point; without this the analysis runs but
+      # its findings go nowhere.
+      security-events: write
+      contents: read
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Same reasoning as the other workflows: nothing here pushes, so no
+          # credential should exist on disk for a later step to read.
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      # CodeQL needs the project importable to build its model; installing
+      # the package gives it the real import graph instead of a guess.
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Initialize CodeQL
+        # SHA-pinned to the same release line the scorecard workflow already
+        # uses (v4.37.7); the trailing comment is what Dependabot rewrites.
+        uses: github/codeql-action/init@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
+        with:
+          languages: python
+          # The queries that ship by default are the "recommended" set. The
+          # security-extended set adds more taint rules; it is a strict
+          # superset and costs minutes, so start with the defaults and widen
+          # only if a gap shows up in practice.
+          queries: security-and-quality
+
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
+        with:
+          category: "/language:python"

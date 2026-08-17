@@ -146,6 +146,7 @@ ui = ["rich>=13.0", "questionary>=2.0"]
 # because pulling their dependency tree into nine matrix jobs buys nothing.
 dev = [
     "pytest>=7.0",
+    "pytest-cov>=4.1",
     "build>=1.0",
     "twine>=5.0",
 ]
