@@ -197,13 +197,13 @@ class TestLanIpCandidates:
         already appended, and lan_ip_candidates did not de-duplicate at all.
         Where the hostname resolves to the default-route address — the common
         case — the list came back as
-        ``['10.126.13.214', '10.126.13.214', '172.22.96.1']``.
+        ``['10.0.0.7', '10.0.0.7', '172.22.96.1']``.
         """
         monkeypatch.setattr(
             utils, "_gather_candidate_ips",
-            lambda: ["10.126.13.214", "10.126.13.214", "172.22.96.1"],
+            lambda: ["10.0.0.7", "10.0.0.7", "172.22.96.1"],
         )
-        assert utils.lan_ip_candidates() == ["10.126.13.214", "172.22.96.1"]
+        assert utils.lan_ip_candidates() == ["10.0.0.7", "172.22.96.1"]
 
     def test_deduplication_keeps_the_best_ranked_position(self, monkeypatch):
         """The survivor is the first occurrence *after* ranking, not before."""
@@ -254,7 +254,7 @@ class TestLanIpCandidates:
                 pass
 
             def getsockname(self):
-                return ("10.126.13.214", 51234)
+                return ("10.0.0.7", 51234)
 
             def close(self):
                 pass
@@ -264,11 +264,11 @@ class TestLanIpCandidates:
         monkeypatch.setattr(
             utils.socket, "getaddrinfo",
             lambda host, port: [
-                (2, 1, 6, "", ("10.126.13.214", 0)),
+                (2, 1, 6, "", ("10.0.0.7", 0)),
                 (2, 1, 6, "", ("172.22.96.1", 0)),
             ],
         )
-        assert utils._gather_candidate_ips() == ["10.126.13.214", "172.22.96.1"]
+        assert utils._gather_candidate_ips() == ["10.0.0.7", "172.22.96.1"]
 
 
 # ── get_lan_ip ─────────────────────────────────────────────────────────────

@@ -385,7 +385,14 @@ class TestAccelerateEnhanced:
         def train(x):
             return x
 
-        device = train._get_torch_device()
+        # Force the ImportError rather than relying on torch being absent from
+        # whoever's machine happens to run this. The test asserted the ambient
+        # environment: it passed in CI (which installs no torch) and failed for
+        # any contributor who had torch, where `_get_torch_device()` correctly
+        # returns device(type='cpu'). A `None` entry in sys.modules is what
+        # makes `import torch` raise, which is the branch under test.
+        with patch.dict("sys.modules", {"torch": None}):
+            device = train._get_torch_device()
         assert device is None
 
     def test_to_method_returns_new_instance(self):
