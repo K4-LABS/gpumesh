@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Coordinator startup errors now say what to do.** `gpumesh serve` used to
+  report every bind failure as "port already in use". Three common failures
+  are now tailored: an unwritable `--db` path names the path (it previously
+  escaped the OSError handler entirely as a raw `sqlite3.OperationalError`
+  traceback, because that error is not an OSError); binding a privileged
+  port (<1024) on POSIX explains that ports below 1024 need elevation
+  instead of suggesting another port; and a `--host-ip` that is not an
+  address of this machine is refused before binding, with the machine's
+  actual addresses listed.
+
 ### Changed
 - **The project is now licensed under the GNU AGPL-3.0** (previously MIT).
   The goal is copyleft protection for a network service: anyone who modifies
