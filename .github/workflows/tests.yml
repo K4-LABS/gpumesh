@@ -97,12 +97,20 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev,ui,notebook]" numpy
 
-      - name: Run tests
+      - name: Run tests with coverage
         # Several tests bind real loopback sockets and wait on leases, so the
         # suite is slower than its size suggests. The timeout is a guard
         # against a hung server thread, not a performance target.
+        #
+        # The coverage floor is a regression guard, not a target: the suite
+        # sat at ~81% before it existed, and the point of the floor is to
+        # stop it sliding. Measuring coverage in the test job (rather than a
+        # separate job) means the floor rides the same matrix and reports
+        # per-OS, which catches platform-specific branches a single-job run
+        # would hide. Raise the floor as the low-hanging entry points
+        # (__main__, _function_subprocess) get covered.
         timeout-minutes: 25
-        run: pytest -q --durations=10
+        run: pytest -q --durations=10 --cov=gpumesh --cov-report=term-missing --cov-fail-under=80
 
   lint:
     name: lint (ruff + mypy)
