@@ -24,7 +24,10 @@ name: release
 #     is the actual security control here: it is what stops a compromised
 #     workflow file on a branch from minting a publish token, because the run
 #     pauses for a human before the `publish` job's OIDC token is ever issued.
-#     Restrict the deployment branches to `main` and to tags.
+#     Restrict the deployment branches to `master` and to tags. (`master`, not
+#     `main` — this repository's default branch was renamed. An environment
+#     whose branch policy names a branch that does not exist rejects every
+#     deployment, and the error it gives says nothing about why.)
 #
 #  3. DELETE every existing PyPI API token for this project.
 #     https://pypi.org/manage/account/token/
@@ -65,6 +68,7 @@ jobs:
   build:
     name: build distributions
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       contents: read
     outputs:
@@ -138,6 +142,7 @@ jobs:
     name: generate SBOMs
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       contents: write # only to attach the SBOM to the GitHub release
     steps:
@@ -178,6 +183,9 @@ jobs:
     needs: [build, sbom]
     if: github.event_name == 'release' || inputs.publish
     runs-on: ubuntu-latest
+    # Time spent waiting on the environment's required reviewer does not count
+    # against this: the job is not running yet. This only caps the upload.
+    timeout-minutes: 15
 
     # The environment is what makes this safe. It gates the job behind the
     # protection rules configured on github.com (see manual step 2), and PyPI
@@ -201,6 +209,24 @@ jobs:
         with:
           name: dist
           path: dist
+
+      - name: Verify the artifacts are the ones the build job hashed
+        # The `build` job records these two hashes as outputs and, until now,
+        # nothing read them — a declared output that no job consumes is a check
+        # that only looks like it exists. Re-hashing here closes the one gap
+        # between "twine checked it" and "PyPI has it": the artifact store and
+        # the round trip through it. It costs a second, it needs no network,
+        # and it is the last moment anything can be compared before the version
+        # number is spent.
+        env:
+          EXPECTED_WHEEL: ${{ needs.build.outputs.wheel-sha256 }}
+          EXPECTED_SDIST: ${{ needs.build.outputs.sdist-sha256 }}
+        run: |
+          set -euo pipefail
+          printf '%s  %s\n' "$EXPECTED_WHEEL" "$(ls dist/*.whl)" \
+            | sha256sum --check --strict -
+          printf '%s  %s\n' "$EXPECTED_SDIST" "$(ls dist/*.tar.gz)" \
+            | sha256sum --check --strict -
 
       - name: Publish
         uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
