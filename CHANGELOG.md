@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **The coordinator's job queue was lost on restart from a different
+  directory.** `gpumesh serve --db` defaulted to the RELATIVE path
+  `gpumesh.db`, so the database lived in whatever folder the coordinator
+  happened to be started from; restart it from anywhere else and it opened a
+  fresh, empty database, silently discarding every queued job. The default is
+  now the stable per-user path `~/.gpumesh/gpumesh.db` (next to the saved
+  connection), so jobs submitted while no worker is online wait in the queue
+  and run when a worker joins — and survive coordinator restarts from any
+  directory. An explicit `--db` still wins. Applies to `gpumesh serve`, the
+  setup wizard, and `GPUMesh.start_coordinator()`.
 - **Two coordinators could silently bind the same port on Windows.** A second
   `gpumesh serve` on an occupied port used to start anyway: `HTTPServer`
   inherits `allow_reuse_address = 1`, which on Windows lets a new process bind

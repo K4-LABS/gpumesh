@@ -87,9 +87,10 @@ services:
     command: serve --host 0.0.0.0 --port 8732 --color
     volumes:
       # The image sets WORKDIR=/data and HOME=/data. The coordinator's
-      # database is created at the relative path ./gpumesh.db, and
-      # ~/.gpumesh/config.json holds the saved connection and token — so both
-      # live under /data and one mount covers them.
+      # database defaults to ~/.gpumesh/gpumesh.db (a stable per-user path,
+      # not the working directory), and ~/.gpumesh/config.json holds the
+      # saved connection and token — so both live under /data and one mount
+      # covers them.
       #
       # This previously mounted /root/.gpumesh, which was wrong twice over:
       # the container no longer runs as root, and the database was never in
