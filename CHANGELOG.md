@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Claim token no longer echoed in the radar flow.** `select_worker_for_claim`
+  read the worker token with `input()`, echoing it in plaintext into the
+  terminal and its scrollback. It now uses `getpass.getpass()`, matching the
+  existing pattern elsewhere in the CLI; the peer-selection prompt is
+  unchanged, and the non-interactive (EOF/`Ctrl+C`) paths behave identically.
 - **Coordinator startup errors now say what to do.** `gpumesh serve` used to
   report every bind failure as "port already in use". Three common failures
   are now tailored: an unwritable `--db` path names the path (it previously
