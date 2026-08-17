@@ -62,6 +62,9 @@ jobs:
         # (pip/setuptools/wheel are bundled with every venv and routinely
         # carry CVEs that have nothing to do with this package) and the
         # editable-looking gpumesh line itself, then audit that list.
+        # No --output file: pip-audit only creates it when it finds
+        # vulnerabilities, so a clean run would fail the trailing `cat`.
+        # The columns report goes to stdout either way.
         run: |
           /tmp/audit-venv/bin/pip freeze | \
             grep -vE '^(pip|setuptools|wheel)==' | \
@@ -69,6 +72,4 @@ jobs:
           cat /tmp/audit-requirements.txt
           python -m pip_audit -r /tmp/audit-requirements.txt \
             --progress-spinner off \
-            --format columns \
-            --output /tmp/audit-report.txt
-          cat /tmp/audit-report.txt
+            --format columns
