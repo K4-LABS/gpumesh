@@ -102,7 +102,7 @@ jobs:
           set -euo pipefail
           python -m pip install --quiet --upgrade pip packaging
           cat > resolve_released.py <<'PY'
-          import json, os, pathlib, sys, tomllib, urllib.request
+          import json, os, pathlib, sys, time, tomllib, urllib.request
           from packaging.version import InvalidVersion, Version
 
           override = os.environ.get("RELEASED_VERSION_INPUT", "").strip()
@@ -113,9 +113,26 @@ jobs:
           current = Version(tomllib.loads(
               pathlib.Path("pyproject.toml").read_text())["project"]["version"])
 
-          with urllib.request.urlopen(
-                  "https://pypi.org/pypi/gpumesh/json", timeout=30) as resp:
-              releases = json.load(resp)["releases"]
+          # This job gates the whole workflow on one network call to the PyPI
+          # JSON API. A transient 5xx from PyPI (or a dropped connection)
+          # would otherwise fail compat for the day with no signal at all, so
+          # the fetch retries with backoff before giving up.
+          releases = None
+          last_error = None
+          for attempt in range(5):
+              try:
+                  with urllib.request.urlopen(
+                          "https://pypi.org/pypi/gpumesh/json",
+                          timeout=30) as resp:
+                      releases = json.load(resp)["releases"]
+                  break
+              except Exception as exc:  # noqa: BLE001 - retry anything transient
+                  last_error = exc
+                  time.sleep(2 ** attempt)
+          if releases is None:
+              raise RuntimeError(
+                  "PyPI API unreachable after 5 attempts: "
+                  f"{last_error!r}")
 
           older = []
           for raw, files in releases.items():
