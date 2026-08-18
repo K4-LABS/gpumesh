@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.0.0] — 2026-08-18
+
+> **Why 3.0.0 and not 2.1.0:** under the project's stability policy
+> (`docs/stability.md`), changing a flag's default is a **MAJOR** change, and
+> this release changes the `--db` default (below). PyPI's 2.0.0 is also
+> already published and immutable, so the unreleased work since it cannot ship
+> under that number. This release additionally carries the AGPL relicensing,
+> which applies going forward only.
+
 ### Fixed
 - **Claim token no longer echoed in the radar flow.** `select_worker_for_claim`
   read the worker token with `input()`, echoing it in plaintext into the
@@ -29,6 +38,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   gpumesh and runs it as a service must offer their modified source in turn
   (AGPL section 13). Already-released versions remain under the MIT terms
   they were published under; the new license applies going forward.
+- **The container image moved to `k4-labs/gpumesh` and is now published from
+  CI.** It was hand-published on a personal namespace and had drifted two
+  minor versions behind the repository (the documented compose file pinned a
+  tag that never existed). A new `docker` workflow builds on every PR that
+  touches the image or package, and publishes on a release; `latest` moves
+  only on a real release. The old `samurai007ak/gpumesh` tags remain up as
+  they are, frozen.
 
 ### Added
 - **CodeQL static analysis (SAST) in CI.** A new `codeql` workflow runs
@@ -876,7 +892,8 @@ version get a real diff link:
 then replace the PyPI links below with compare/ links.
 -->
 
-[Unreleased]: https://github.com/K4-LABS/gpumesh/compare/v2.0.0...HEAD
+[Unreleased]: https://github.com/K4-LABS/gpumesh/compare/v3.0.0...HEAD
+[3.0.0]: https://github.com/K4-LABS/gpumesh/compare/v2.0.0...v3.0.0
 [2.0.0]: https://github.com/K4-LABS/gpumesh/compare/v1.3.0...v2.0.0
 [1.3.0]: https://github.com/K4-LABS/gpumesh/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/K4-LABS/gpumesh/releases/tag/v1.2.0

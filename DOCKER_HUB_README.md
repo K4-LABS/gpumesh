@@ -5,7 +5,7 @@
 [![PyPI version](https://img.shields.io/pypi/v/gpumesh.svg)](https://pypi.org/project/gpumesh/)
 [![Python](https://img.shields.io/pypi/pyversions/gpumesh.svg)](https://pypi.org/project/gpumesh/)
 [![License](https://img.shields.io/pypi/l/gpumesh.svg)](https://github.com/K4-LABS/gpumesh/blob/master/LICENSE)
-[![Docker](https://img.shields.io/badge/docker-ready-2496ED?logo=docker&logoColor=white)](https://hub.docker.com/r/samurai007ak/gpumesh)
+[![Docker](https://img.shields.io/badge/docker-ready-2496ED?logo=docker&logoColor=white)](https://hub.docker.com/r/k4-labs/gpumesh)
 
 ---
 
@@ -92,7 +92,7 @@ docker run -d \
   --name gpumesh-coordinator \
   -p 127.0.0.1:8732:8732 \
   -e GPUMESH_TOKEN \
-  samurai007ak/gpumesh:2.0.0 \
+  k4-labs/gpumesh:3.0.0 \
   serve --host 0.0.0.0 --port 8732
 ```
 
@@ -114,7 +114,7 @@ coffee-shop wifi, and on many home routers the public internet via UPnP.
 docker run -d \
   --name gpumesh-worker \
   -e GPUMESH_TOKEN \
-  samurai007ak/gpumesh:2.0.0 \
+  k4-labs/gpumesh:3.0.0 \
   join http://coordinator-ip:8732
 ```
 
@@ -146,16 +146,17 @@ results = train.map([{"lr": 0.01}, {"lr": 0.05}, {"lr": 0.1}])
 | Tag | Description |
 |-----|-------------|
 | `latest` | Latest stable release |
+| `3.0.0` | Version 3.0.0 (AGPL-licensed, loopback-default release) |
 | `2.0.0` | Version 2.0.0 (loopback-default release) |
 
 ### Pull Commands
 
 ```bash
 # Latest version
-docker pull samurai007ak/gpumesh:latest
+docker pull k4-labs/gpumesh:3.0.0
 
 # Specific version
-docker pull samurai007ak/gpumesh:2.0.0
+docker pull k4-labs/gpumesh:3.0.0
 ```
 
 ---
@@ -171,7 +172,7 @@ services:
   coordinator:
     # Pinned, not `latest`. The wire format is pickled Python, so a version
     # skew between coordinator and worker is a real failure, not a cosmetic one.
-    image: samurai007ak/gpumesh:2.0.0
+    image: k4-labs/gpumesh:3.0.0
     ports:
       # host-side bind : container port.
       # GPUMESH_BIND defaults to 127.0.0.1 — this machine only. Set it to
@@ -205,7 +206,7 @@ services:
       - ALL
 
   worker:
-    image: samurai007ak/gpumesh:2.0.0
+    image: k4-labs/gpumesh:3.0.0
     depends_on:
       coordinator:
         condition: service_healthy

@@ -66,12 +66,17 @@ def update_version_in_file(filepath: Path, new_version: str) -> bool:
             f'__version__ = "{new_version}"',
             content
         )
-    # Update version in pyproject.toml
+    # Update version in pyproject.toml. Anchored to the start of a line so
+    # it matches ONLY the [project] `version = "..."` field, never a
+    # `target-version` (ruff) or `python_version` (mypy) key — the
+    # unanchored form once rewrote both of those to the package version,
+    # which broke the interpreter-config the release was supposed to verify.
     elif filepath.name == "pyproject.toml":
         new_content = re.sub(
-            r'version\s*=\s*"[^"]+"',
+            r'^version\s*=\s*"[^"]+"',
             f'version = "{new_version}"',
-            content
+            content,
+            flags=re.MULTILINE,
         )
     # Update the version in the Dockerfile (ARG default + image label)
     elif filepath.name == "Dockerfile":

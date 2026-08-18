@@ -77,7 +77,7 @@ concurrency:
 
 env:
   # See manual step 1. Change this one line to move the image.
-  IMAGE_NAME: samurai007ak/gpumesh
+  IMAGE_NAME: k4-labs/gpumesh
 
 jobs:
   build:
