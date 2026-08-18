@@ -68,11 +68,37 @@ jobs:
         # No --output file: pip-audit only creates it when it finds
         # vulnerabilities, so a clean run would fail the trailing `cat`.
         # The columns report goes to stdout either way.
+        #
+        # The audit talks to PyPI's advisory API, so a transient 5xx is a
+        # real failure mode. The loop retries anything that is NOT a
+        # findings report: exit 0 is clean, an output naming
+        # "vulnerabilities" is a real finding (fail immediately, no
+        # retry), anything else is treated as transient and retried.
         run: |
           /tmp/audit-venv/bin/pip freeze | \
             grep -vE '^(pip|setuptools|wheel)==' | \
             grep -v '^gpumesh @' > /tmp/audit-requirements.txt
           cat /tmp/audit-requirements.txt
-          python -m pip_audit -r /tmp/audit-requirements.txt \
-            --progress-spinner off \
-            --format columns
+          rc=2
+          for attempt in 1 2 3; do
+            set +e
+            output="$(python -m pip_audit -r /tmp/audit-requirements.txt \
+              --progress-spinner off --format columns 2>&1)"
+            rc=$?
+            set -e
+            printf '%s\n' "$output"
+            if [ "$rc" -eq 0 ]; then break; fi
+            if printf '%s\n' "$output" | grep -qi vulnerabilit; then
+              echo "::error::Vulnerabilities found (see report above)"
+              exit 1
+            fi
+            if [ "$attempt" -lt 3 ]; then
+              echo "pip-audit attempt $attempt failed with exit $rc " \
+                   "(no findings reported — treating as transient), retrying..."
+              sleep 10
+            fi
+          done
+          [ "$rc" -eq 0 ] || {
+            echo "::error::pip-audit failed after 3 attempts (exit $rc)"
+            exit "$rc"
+          }
