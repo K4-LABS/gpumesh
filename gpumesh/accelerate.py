@@ -1,6 +1,12 @@
 """Transparent GPU acceleration decorator for gpumesh.
 
-Copies patterns from:
+API shape and scheduling strategy adapted from the projects below. No code was
+taken from any of them; what was borrowed is the idea of what a good interface
+looks like. The wording matters for burla in particular, which is licensed
+FSL-1.1-Apache-2.0 — source-available, not OSI open source — so a docstring
+saying this file "copies" from it would be a gift to anyone arguing the
+opposite in bad faith. See the prior-art section of README.md.
+
 - distry: @distry decorator for single function execution
 - burla: remote_parallel_map for batch distribution, func_gpu for hardware
 - clustrix: @cluster(cores=8, memory='16GB') for resource specs

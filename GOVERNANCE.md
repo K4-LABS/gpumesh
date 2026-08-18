@@ -8,11 +8,16 @@ none, because people plan around it.
 ## The short version
 
 gpumesh is a **BDFL project**. [@Samurai007AK](https://github.com/Samurai007AK)
-is the sole maintainer and has final say on every decision: what ships, what is
-rejected, what the release cadence is, and what the project is for.
+has final say on every decision: what ships, what is rejected, what the release
+cadence is, and what the project is for.
+[@jinia-konar](https://github.com/jinia-konar) is the second maintainer — both
+are listed in the README and in `.github/CODEOWNERS`, and either can review and
+merge.
 
-There is no steering committee, no vote, and no tie-break procedure, because
-there is no one to tie with. If that changes, this file changes with it.
+There is no steering committee, no vote, and no tie-break procedure. Two people
+who disagree talk it out in the thread, and if that does not settle it,
+@Samurai007AK decides. If the project grows past the point where that is
+honest, this file changes with it.
 
 ## How decisions get made
 
@@ -29,8 +34,9 @@ for years.
 
 **Bias toward "not yet".** gpumesh's public surface (`@mesh`, `@accelerate`,
 `GPUMesh`, the CLI) is small on purpose and everything added to it has to be
-maintained across three operating systems and five Python versions. A proposal
-being reasonable is not sufficient; it also has to be worth its permanent cost.
+maintained across three operating systems and six Python versions (3.9 through
+3.14). A proposal being reasonable is not sufficient; it also has to be worth
+its permanent cost.
 Expect "open an issue and make the case first" as the standard answer to
 unsolicited feature PRs.
 
@@ -42,16 +48,16 @@ welcome, but they are arguments about the project's purpose, not bug reports.
 
 | Role | Who | Can |
 |---|---|---|
-| **Maintainer** | @Samurai007AK | Merge, release, set direction, grant roles |
+| **Maintainer** | @Samurai007AK, @jinia-konar | Merge, release, set direction, grant roles. Both are `CODEOWNERS`, so a PR requests review from them automatically |
 | **Triager** | Nobody yet | Label, close duplicates, ask for repro info, mark `needs-triage` / `needs-repro` |
 | **Contributor** | Anyone with a merged PR | Everything anyone can do, plus the credibility that comes with having shipped something here |
 
 ## Becoming a triager
 
 This is the one role with a real path attached, and it is deliberately a low
-bar, because triage is the bottleneck on a solo project. There is no application
-form. The maintainer will offer triage rights to someone who has, over a few
-weeks:
+bar, because triage is the bottleneck on a two-person project. There is no
+application form. The maintainers will offer triage rights to someone who has,
+over a few weeks:
 
 - Reproduced or ruled out bugs on issues that were not theirs — especially the
   networking ones, where the reporter and the maintainer often have no OS or
@@ -79,13 +85,13 @@ actually occurred.
 
 The maintainer cuts releases. Versioning is semantic-ish: the public surface
 follows semver, and internal APIs change without a deprecation cycle. Each
-release ships from `main` with `CHANGELOG.md` updated under the version
+release ships from `master` with `CHANGELOG.md` updated under the version
 heading.
 
-## If the maintainer steps away
+## If the maintainers step away
 
-The realistic failure mode of a solo project is not a hostile takeover, it is
-silence. What adopters should be able to plan around:
+The realistic failure mode of a project this small is not a hostile takeover, it
+is silence. What adopters should be able to plan around:
 
 **The license is the guarantee.** gpumesh is AGPL-3.0 and every contribution is
 AGPL-licensed inbound (see [CONTRIBUTING.md](CONTRIBUTING.md)). No CLA assigns
@@ -99,7 +105,7 @@ fork it. That is not a hostile act and no permission is required or expected.
 Please do rename the PyPI distribution and the Docker image so users are not
 confused about who is answering for what.
 
-**Archiving is announced, not silent.** If the maintainer decides to stop, the
+**Archiving is announced, not silent.** If the maintainers decide to stop, the
 intent is to: mark the repository archived, say so in the README and in a
 release note, and — if a credible fork exists by then — link to it from the
 README so that people arriving from search engines land somewhere maintained.
@@ -109,11 +115,14 @@ issues or commits for six months and no archive notice, treat the project as
 unmaintained and act accordingly. Six months of silence is a real answer, and
 you should not have to guess at it.
 
-**What is not transferable.** The PyPI project `gpumesh`, the Docker Hub
-namespace `samurai007ak/gpumesh`, and the GitHub repository are tied to the
-maintainer's personal accounts. There is no organisation account and no shared
-credential, so a fork cannot inherit the published names. This is a real
-limitation of a solo project and is stated here rather than discovered later.
+**What is not transferable.** The repository lives in the
+[K4-LABS](https://github.com/K4-LABS) GitHub organisation, so the repo itself is
+not tied to one personal account. The **published names are**: the PyPI project
+`gpumesh` is on the maintainer's personal account, and the Docker Hub
+namespace `k4-labs/gpumesh` lives in the K4-LABS organisation alongside the
+repository. The PyPI project has no shared credential behind it, so a fork
+cannot inherit it — which is why the ask above is to rename the distribution.
+This is a real limitation and is stated here rather than discovered later.
 
 ## Changing this document
 

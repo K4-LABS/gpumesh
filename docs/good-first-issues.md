@@ -129,16 +129,22 @@ record of what was seeded.
 
 > ### What is wrong
 >
-> gpumesh's version is written down in **three** files that must agree, and
-> nothing checks that they do:
+> gpumesh's version is written down in **four** files that must agree, and
+> nothing *checks* that they do:
 >
 > | File | Field |
 > |---|---|
-> | `gpumesh/__init__.py` | `__version__ = "1.3.0"` — what `gpumesh --version` prints |
-> | `pyproject.toml` | `version = "1.3.0"` — what PyPI and `pip` see |
-> | `CITATION.cff` | `version: 1.3.0` — what GitHub's "Cite this repository" renders |
+> | `gpumesh/__init__.py` | `__version__ = "3.0.0"` — what `gpumesh --version` prints |
+> | `pyproject.toml` | `version = "3.0.0"` — what PyPI and `pip` see |
+> | `CITATION.cff` | `version: 3.0.0` — what GitHub's "Cite this repository" renders |
+> | `Dockerfile` | `ARG VERSION=3.0.0` — what the image's `version` and `org.opencontainers.image.version` labels report |
 >
-> A release that bumps two of the three ships a package whose installed version
+> There *is* a writer: `scripts/bump_version.py` rewrites all four in one go.
+> What is missing is the reader — nothing fails if the four drift, and they can
+> drift the moment someone edits one by hand, resolves a merge conflict in one
+> of them, or bumps a release without using the script.
+>
+> A release that bumps three of the four ships a package whose installed version
 > disagrees with the version it reports about itself. That is a nasty one to
 > notice, because everything still works — it only shows up in bug reports,
 > where `gpumesh --version` is the field being used to decide whether a reporter
@@ -147,9 +153,16 @@ record of what was seeded.
 >
 > ### What to add
 >
-> A small test — `tests/test_version_consistency.py` — that reads all three and
+> A small test — `tests/test_version_consistency.py` — that reads all four and
 > asserts they match. Give it a docstring saying which failure it prevents, per
 > the testing conventions in CONTRIBUTING.md.
+>
+> **Already fixed in 3.0.0 (keep the reader part):** `docker-compose.yaml`
+> pins the image in two places and used to be missing from
+> `bump_version.py`'s file list — the one version most likely to go stale.
+> The script now rewrites the compose tag too (and respects the
+> `LABEL version="${VERSION}"` indirection in the Dockerfile), so the only
+> remaining piece of this issue is the consistency test itself.
 >
 > One wrinkle worth knowing before you start: gpumesh supports **Python 3.9**,
 > and `tomllib` only arrived in 3.11. Options, roughly in order of preference:
@@ -167,7 +180,7 @@ record of what was seeded.
 > ### How to verify
 >
 > `pytest tests/test_version_consistency.py -v` passes. Then confirm the test can
-> actually fail: temporarily change one of the three to `9.9.9`, watch it go red,
+> actually fail: temporarily change one of the four to `9.9.9`, watch it go red,
 > and change it back. A consistency test that cannot fail is worse than no test,
 > so please do check this and say in the PR that you did.
 >
@@ -311,14 +324,15 @@ files rather than at a vibe.
 | Label | Modules |
 |---|---|
 | `area:networking` | `discovery.py`, `claimer.py`, `connection_manager.py`, `tunnel.py`, `utils.py` |
-| `area:coordinator` | `server.py`, `db.py` (routes, persistence, the reaper thread) |
-| `area:scheduling` | `db.py` (`lease_task`), `capability.py` — which worker gets which task |
+| `area:coordinator` | `server.py`, `db.py` (routes, persistence, the reaper thread), `security.py` (token hashing, rate limiting) |
+| `area:scheduling` | `db.py` (`lease_task`, `_worker_can_run`), `capability.py` — which worker gets which task, and which tasks nobody can run |
 | `area:worker` | `worker.py`, `sandbox.py`, `_function_subprocess.py` |
 | `area:serialization` | `serializer.py`, `_function_subprocess.py` — the cross-version function transport, which is where the most common real-world failures land |
+| `area:protocol` | `gpumesh/__init__.py` (`PROTOCOL_VERSION` / `MIN_PROTOCOL_VERSION`) and the registration handshake in `server.py` / `worker.py`. Anything labelled here has to be checked against `.github/workflows/compat.yml`, which runs a real task between the current tree and a released gpumesh in both role assignments |
 | `area:api` | `api.py`, `accelerate.py`, `mesh.py`, `client.py`, `jupyter_magic.py`, `torch.py` |
-| `area:cli` | `cli.py`, `status.py`, `radar.py`, `setup_wizard.py`, `ansi.py` |
-| `area:docker` | `Dockerfile`, `docker-compose.yaml`, the published image |
-| `area:docs` | `README.md`, `CONTRIBUTING.md`, `examples/`, docstrings |
+| `area:cli` | `cli.py`, `status.py`, `radar.py`, `setup_wizard.py`, `ansi.py`, `logging_config.py` |
+| `area:docker` | `Dockerfile`, `docker-compose.yaml`, `examples/docker-2node/`, the published image |
+| `area:docs` | `README.md`, `CONTRIBUTING.md`, `docs/`, `examples/`, docstrings |
 
 `area:serialization` and `area:worker` overlap on `_function_subprocess.py`
 because that file genuinely belongs to both — it duplicates the encoding half of

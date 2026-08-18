@@ -1,8 +1,8 @@
 <div align="center">
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/img/gpumesh-logo.png">
-  <img alt="gpumesh — GPU Mesh Network" src="docs/img/gpumesh-logo-light.png" width="240">
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/K4-LABS/gpumesh/master/docs/img/gpumesh-logo.png">
+  <img alt="gpumesh — GPU Mesh Network" src="https://raw.githubusercontent.com/K4-LABS/gpumesh/master/docs/img/gpumesh-logo-light.png" width="240">
 </picture>
 
 # gpumesh
@@ -10,8 +10,16 @@
 **Borrow your friends' GPUs.** A distributed compute mesh that lets you share GPU power
 across machines on your network — with one decorator, one CLI command, or a Python API.
 
-[![License](https://img.shields.io/badge/License-AGPL--3.0-blue.svg?style=for-the-badge)](LICENSE)
+[![Tests](https://img.shields.io/github/actions/workflow/status/K4-LABS/gpumesh/tests.yml?branch=master&label=tests&style=for-the-badge)](https://github.com/K4-LABS/gpumesh/actions/workflows/tests.yml)
+[![PyPI](https://img.shields.io/pypi/v/gpumesh?style=for-the-badge)](https://pypi.org/project/gpumesh/)
+[![Python](https://img.shields.io/pypi/pyversions/gpumesh?style=for-the-badge)](https://pypi.org/project/gpumesh/)
+[![License](https://img.shields.io/badge/License-AGPL--3.0-blue.svg?style=for-the-badge)](https://github.com/K4-LABS/gpumesh/blob/master/LICENSE)
 [![Contributors](https://img.shields.io/github/contributors/K4-LABS/gpumesh?style=for-the-badge)](https://github.com/K4-LABS/gpumesh/graphs/contributors)
+
+[Quickstart](#quickstart) ·
+[Docs](https://github.com/K4-LABS/gpumesh/tree/master/docs) ·
+[Contributing](https://github.com/K4-LABS/gpumesh/blob/master/CONTRIBUTING.md) ·
+[Issues](https://github.com/K4-LABS/gpumesh/issues)
 
 </div>
 
@@ -45,14 +53,12 @@ gpumesh turns multiple machines into a **single, unified compute pool**. Start a
 
 ---
 
-
----
-
 > [!CAUTION]
 > **gpumesh runs code you send it — there is no sandbox.** A worker executes
 > arbitrary Python as the OS user that started it, and results are deserialized
 > by the submitter — trust runs **both ways**. Use it only with machines and
-> people you trust. See [SECURITY.md](SECURITY.md) and [THREAT_MODEL.md](THREAT_MODEL.md).
+> people you trust. See [SECURITY.md](https://github.com/K4-LABS/gpumesh/blob/master/SECURITY.md)
+> and [THREAT_MODEL.md](https://github.com/K4-LABS/gpumesh/blob/master/THREAT_MODEL.md).
 
 ---
 
@@ -92,7 +98,7 @@ pip install gpumesh[all]       # Everything above
 Or with Docker:
 
 ```bash
-docker pull samurai007ak/gpumesh:latest
+docker pull k4-labs/gpumesh:3.0.0
 ```
 
 **Requires:** Python 3.9+, cloudpickle (auto-installed). PyTorch is optional (needed for GPU detection).
@@ -101,7 +107,7 @@ Verify the install:
 
 ```console
 $ gpumesh --version
-gpumesh 1.3.0 (3.11.9, Windows)
+gpumesh 3.0.0 (3.11.9, Windows)
 ```
 
 ---
@@ -193,7 +199,8 @@ That is the whole workflow. Kill the coordinator and run it again — you get
 the identical output, computed locally. Your script does not break because
 the mesh went away.
 
-More runnable examples, all verified: [`examples/`](examples/README.md).
+More runnable examples, all verified:
+[`examples/`](https://github.com/K4-LABS/gpumesh/tree/master/examples).
 
 ### 4. Add a second machine
 
@@ -286,23 +293,11 @@ Job: examples/grid_search.py (c3f81cc498f0)
 
 ### Code normally
 
-This is the entire point. Once a worker is connected, every machine sees the same pool. Write normal Python and mark the heavy functions:
-
-```python
-from gpumesh import mesh   # auto-connects from saved config
-
-@mesh
-def train(lr, epochs):
-    return {"accuracy": 0.95}
-
-# Single call — runs on a mesh worker (your own machine if nothing else joined)
-result = train(lr=0.01, epochs=100)
-
-# .map() — spreads across EVERY connected laptop + your machine
-results = train.map([{"lr": 0.01}, {"lr": 0.05}, {"lr": 0.1}])
-```
-
-Works in VS Code, Jupyter, PyCharm, or a plain terminal. No job submission, no CLI commands, no ceremony.
+This is the entire point. Once a worker is connected, every machine sees the
+same pool, and the `demo.py` above is already the whole API — write normal
+Python, mark the heavy functions, call `.map()` when you have a batch. It works
+in VS Code, Jupyter, PyCharm, or a plain terminal. No job submission, no CLI
+commands, no ceremony.
 
 Your function returns whatever it normally returns — a dict, an int, a list, a numpy array, a torch tensor — and you get that same object back:
 
@@ -350,7 +345,7 @@ Like `%%time`, the cell's own output displays normally. Loading the extension al
 
 Every command — server, jobs, monitoring — plus the environment variables
 behind them, with `--host` vs `--host-ip` and colour handling explained:
-[`docs/cli.md`](docs/cli.md).
+[`docs/cli.md`](https://github.com/K4-LABS/gpumesh/blob/master/docs/cli.md).
 
 ---
 
@@ -457,7 +452,7 @@ Either path returns the identical value, so switching between them never changes
 
 ## Docker
 
-A prebuilt image is available on Docker Hub ([samurai007ak/gpumesh](https://hub.docker.com/r/samurai007ak/gpumesh)).
+A prebuilt image is available on Docker Hub ([k4-labs/gpumesh](https://hub.docker.com/r/k4-labs/gpumesh)).
 
 First, a token:
 
@@ -482,13 +477,13 @@ one:
 docker run -d --name gpumesh-coordinator \
   -p 127.0.0.1:8732:8732 -p 127.0.0.1:48900:48900/udp \
   -e GPUMESH_TOKEN \
-  samurai007ak/gpumesh:1.3.0 \
+  k4-labs/gpumesh:3.0.0 \
   serve --host 0.0.0.0 --port 8732
 
 # Worker
 docker run -d --name gpumesh-worker \
   -e GPUMESH_TOKEN \
-  samurai007ak/gpumesh:1.3.0 \
+  k4-labs/gpumesh:3.0.0 \
   join http://coordinator-ip:8732
 ```
 
@@ -503,7 +498,8 @@ output. `join` takes the coordinator URL as a positional argument, so there is
 no `GPUMESH_URL` to set here — that variable is only read by the job and
 monitoring commands.
 
-Or use the included [`docker-compose.yaml`](docker-compose.yaml) for a
+Or use the included
+[`docker-compose.yaml`](https://github.com/K4-LABS/gpumesh/blob/master/docker-compose.yaml) for a
 coordinator + N workers, with a healthcheck the workers wait on before
 starting. It pulls the published image, so the file works on its own:
 
@@ -549,7 +545,7 @@ Jobs are stored in SQLite; workers pull tasks over HTTP with a lease (a crashed
 worker's task is automatically re-queued), run each task in an isolated
 subprocess, and post results back. Workers are scored by a benchmark and the
 scheduler assigns heavier tasks to stronger workers. Diagram and job flow:
-[`docs/architecture.md`](docs/architecture.md).
+[`docs/architecture.md`](https://github.com/K4-LABS/gpumesh/blob/master/docs/architecture.md).
 
 ---
 
@@ -592,9 +588,10 @@ this safe". None of it is a sandbox.
 > Traffic is **not encrypted** on a plain LAN. Use `--tailscale` or `--public`
 > (ngrok) when the mesh crosses a network you do not control.
 
-Full detail: **[SECURITY.md](SECURITY.md)** (what a token grants, how to
-report a vulnerability) and **[THREAT_MODEL.md](THREAT_MODEL.md)** (the same
-flow traced through the code, file and line).
+Full detail: **[SECURITY.md](https://github.com/K4-LABS/gpumesh/blob/master/SECURITY.md)**
+(what a token grants, how to report a vulnerability) and
+**[THREAT_MODEL.md](https://github.com/K4-LABS/gpumesh/blob/master/THREAT_MODEL.md)**
+(the same flow traced through the code, file and line).
 
 ---
 
@@ -623,7 +620,7 @@ and a faster GPU than anything listed here would simply score higher.
 
 The usual suspects — bind vs firewall, mismatched tokens, cross-version tasks,
 missing torch on a worker — in one table, plus how to read `gpumesh doctor`:
-[`docs/troubleshooting.md`](docs/troubleshooting.md).
+[`docs/troubleshooting.md`](https://github.com/K4-LABS/gpumesh/blob/master/docs/troubleshooting.md).
 
 Windows-specific setup — why Administrator matters for firewall rules, the
 manual `netsh` command, `python -m gpumesh` when the script is not on PATH,
@@ -642,25 +639,42 @@ pytest                 # on Windows a few skip and one xpasses
 python -m build        # build wheel + sdist
 ```
 
-CI runs the suite on Linux (Python 3.9, 3.11, 3.12), Windows and macOS for
-every push and pull request — the [badge](https://github.com/K4-LABS/gpumesh/actions/workflows/tests.yml)
-at the top of this page is the live count, so it cannot drift the way a
-hand-written number does.
+CI runs the suite on every push and pull request, plus a weekly scheduled run —
+that last one exists because the regressions this project actually hits come
+from dependencies changing under it, not from commits here. The matrix is
+Linux on every Python gpumesh claims to support, with Windows and macOS spot
+checks; the authoritative list is
+[`.github/workflows/tests.yml`](https://github.com/K4-LABS/gpumesh/blob/master/.github/workflows/tests.yml),
+and the [tests badge](https://github.com/K4-LABS/gpumesh/actions/workflows/tests.yml)
+at the top of this page is that matrix's live result, so neither can drift the
+way a hand-copied list does.
 
-Contributions are welcome — issues and pull requests both. See
-[CONTRIBUTING.md](CONTRIBUTING.md) for setup, how the pieces fit together,
-and what makes a change easy to review.
+---
 
-### Documentation
+## Contributing
+
+Issues and pull requests are both welcome, and small ones are welcome too — a
+typo fix counts.
+
+- [**CONTRIBUTING.md**](https://github.com/K4-LABS/gpumesh/blob/master/CONTRIBUTING.md)
+  — dev setup, how the pieces fit together, and what makes a change easy to review
+- [**Good first issues**](https://github.com/K4-LABS/gpumesh/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22)
+  — scoped starting points that name the file to change
+- [**Issue tracker**](https://github.com/K4-LABS/gpumesh/issues) — bugs, and
+  questions about whether something is worth doing before you write the code
+
+---
+
+## Documentation
 
 | Page | What it covers |
 |------|----------------|
-| [`docs/protocol.md`](docs/protocol.md) | The HTTP API, every endpoint, the task payload, the function and result envelopes, cross-Python-version behaviour |
-| [`docs/stability.md`](docs/stability.md) | What counts as gpumesh's public API, what a version bump promises, the wire-protocol compatibility window, and the deprecation policy |
-| [`docs/why-not-ray-or-dask.md`](docs/why-not-ray-or-dask.md) | An honest comparison, including when Ray or Dask is the right answer |
-| [`examples/`](examples/README.md) | Runnable scripts for the first hour: hello-mesh, a second machine, a `.map()` sweep, non-JSON return values, a worker that disappears |
-| [`docs/windows.md`](docs/windows.md) | Windows setup: firewall rules, `python -m gpumesh`, and reading 10060 vs 10061 connection errors |
-| [SECURITY.md](SECURITY.md) · [THREAT_MODEL.md](THREAT_MODEL.md) | What a token grants, and the same flow traced through the code |
+| [`docs/protocol.md`](https://github.com/K4-LABS/gpumesh/blob/master/docs/protocol.md) | The HTTP API, every endpoint, the task payload, the function and result envelopes, cross-Python-version behaviour |
+| [`docs/stability.md`](https://github.com/K4-LABS/gpumesh/blob/master/docs/stability.md) | What counts as gpumesh's public API, what a version bump promises, the wire-protocol compatibility window, and the deprecation policy |
+| [`docs/why-not-ray-or-dask.md`](https://github.com/K4-LABS/gpumesh/blob/master/docs/why-not-ray-or-dask.md) | An honest comparison, including when Ray or Dask is the right answer |
+| [`examples/`](https://github.com/K4-LABS/gpumesh/tree/master/examples) | Runnable scripts for the first hour: hello-mesh, a second machine, a `.map()` sweep, non-JSON return values, a worker that disappears |
+| [`docs/windows.md`](https://github.com/K4-LABS/gpumesh/blob/master/docs/windows.md) | Windows setup: firewall rules, `python -m gpumesh`, and reading 10060 vs 10061 connection errors |
+| [SECURITY.md](https://github.com/K4-LABS/gpumesh/blob/master/SECURITY.md) · [THREAT_MODEL.md](https://github.com/K4-LABS/gpumesh/blob/master/THREAT_MODEL.md) | What a token grants, and the same flow traced through the code |
 
 ---
 
@@ -680,7 +694,7 @@ and what makes a change easy to review.
 - Trusted networks only — workers run whatever code the coordinator sends, and submitters deserialize whatever workers return
 
 If several of those are dealbreakers, read
-[**Why not Ray or Dask?**](docs/why-not-ray-or-dask.md) — it says plainly
+[**Why not Ray or Dask?**](https://github.com/K4-LABS/gpumesh/blob/master/docs/why-not-ray-or-dask.md) — it says plainly
 which tool to use instead.
 
 ---
@@ -755,7 +769,40 @@ corrected.
 
 ## License
 
-GNU AGPL-3.0. See [LICENSE](LICENSE) for details.
+GNU AGPL-3.0-or-later. See
+[LICENSE](https://github.com/K4-LABS/gpumesh/blob/master/LICENSE) for details.
+
+```
+gpumesh — a distributed compute mesh
+Copyright (C) 2026 K4-LABS
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as published
+by the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program.  If not, see <https://www.gnu.org/licenses/>.
+```
+
+That notice lives here rather than at the top of `LICENSE` on purpose. GitHub
+detects a project's license by matching the whole `LICENSE` file against the
+known texts, and a prepended notice pushes the match below its threshold — the
+repository then reports its license as "Other", which is exactly the wrong
+signal for a copyleft project. `LICENSE` is now the unmodified AGPL-3.0 text,
+and the "or (at your option) any later version" grant above is what the
+`AGPL-3.0-or-later` in `pyproject.toml` reports.
+
+gpumesh was MIT-licensed through 2.0.0 and moves to the AGPL in the next
+release. That change is not retroactive: every release published up to and
+including 2.0.0 remains available under the MIT terms it was published
+under. If you run a modified gpumesh as a network service, AGPL section 13
+requires you to offer your modified source to its users.
 
 ---
 

@@ -34,9 +34,14 @@ unanswerable. Include:
 **1. The versions on *both* machines.** Not just the one that printed the error.
 
 ```bash
-gpumesh --version        # run this on the coordinator AND on the worker
-python --version         # same — on both
+gpumesh doctor           # run this on the coordinator AND on the worker
 ```
+
+`gpumesh doctor` is read-only and exists for exactly this: it prints the
+gpumesh version, the interpreter, torch/CUDA, cloudpickle (the wire format),
+the saved coordinator, and the addresses this machine would advertise — one
+block, meant for pasting. `gpumesh --version` and `python --version` on both
+machines are the minimum if you would rather not paste the whole report.
 
 This matters more here than in most projects. `@mesh` and `@accelerate` ship
 your *function* to another machine, and the mechanism for that depends on the
@@ -71,7 +76,7 @@ advice, so this one line usually saves a whole round trip.
 
 ## What to expect
 
-One person maintains gpumesh, in their own time. You can expect a response
+Two people maintain gpumesh, in their own time. You can expect a response
 within **7 days**. If a week passes with nothing, ping the thread — that is not
 rude, it is the intended behaviour, and a silent thread is more likely to have
 been lost than ignored.

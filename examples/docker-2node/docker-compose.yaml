@@ -1,0 +1,24 @@
+services:
+  coordinator:
+    image: k4-labs/gpumesh:3.0.0
+    # Explicitly pass the token to guarantee it matches
+    command: serve --port 8732 --token my-secret-mesh-token
+    ports:
+      - "8732:8732"
+    environment:
+      - GPUMESH_HOST=0.0.0.0
+    networks:
+      - mesh-network
+
+  worker:
+    image: k4-labs/gpumesh:3.0.0
+    # Explicitly pass the same token here
+    command: join http://coordinator:8732 --token my-secret-mesh-token
+    depends_on:
+      - coordinator
+    networks:
+      - mesh-network
+
+networks:
+  mesh-network:
+    driver: bridge

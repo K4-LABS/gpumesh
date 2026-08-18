@@ -92,6 +92,25 @@ updates:
   # tag silently picks up — which is precisely the tradeoff a digest pin makes
   # and precisely why it needs an automated bumper attached to it. Dependabot
   # rewrites the digest and records which tag it now points at.
+  #
+  # TWO THINGS TO VERIFY AFTER THE FIRST RUN, because if either is wrong this
+  # whole entry is a no-op that looks like coverage:
+  #
+  #  1. The base image is declared indirectly:
+  #         ARG PYTHON_IMAGE=python:3.11-slim@sha256:a630a63c...
+  #         FROM ${PYTHON_IMAGE}
+  #     (Dockerfile:19, :24, :38 — the ARG exists so the builder and runtime
+  #     stages cannot drift apart). Dependabot's Dockerfile parser is built
+  #     around literal `FROM` references, and support for resolving an ARG
+  #     default into the FROM line is not something GitHub documents. If no
+  #     digest-bump PR has appeared some weeks after a new python:3.11-slim
+  #     rebuild has shipped, that is the reason — the fix is to inline the
+  #     image on both FROM lines, not to widen anything here.
+  #
+  #  2. GitHub lists the docker ecosystem as supporting *version* updates but
+  #     NOT security updates. Nothing here will page anyone about a CVE in the
+  #     base image; the weekly bump is the entire mechanism. Do not read a
+  #     quiet Dependabot as a clean base image.
   - package-ecosystem: docker
     directory: "/"
     schedule:
@@ -109,3 +128,13 @@ updates:
       # Hub library image is different from that of a single-maintainer
       # package on PyPI.
       default-days: 3
+
+# ---------------------------------------------------------------------------
+# Deliberately NOT covered
+# ---------------------------------------------------------------------------
+# .pre-commit-config.yaml pins pre-commit-hooks, ruff-pre-commit and gitleaks
+# by tag. Dependabot has no pre-commit ecosystem, so nothing above updates
+# them and their pins will rot silently. `pre-commit autoupdate` is the manual
+# equivalent; run it when you touch that file. It is called out here because
+# an unlisted ecosystem is indistinguishable from a forgotten one, and gitleaks
+# going stale is the kind of thing this repository would rather notice.

@@ -1,0 +1,199 @@
+name: docker
+
+# Builds and publishes the container image.
+#
+# This workflow exists because the image had drifted badly without one. At the
+# time it was written, Docker Hub carried exactly three tags — 1.1.0, 1.2.0 and
+# `latest` — and `latest` was pushed in the same second as 1.2.0, so `latest`
+# WAS 1.2.0, two minor versions behind the repository. Meanwhile
+# `docker-compose.yaml` pinned a tag that had never been published at all, so
+# `docker compose up` failed at the pull while the README promised the file
+# "works on its own". Every one of those is what hand-publishing produces
+# eventually; none of them is visible to anyone who does not try it.
+#
+# The build itself is gated on every pull request (without pushing), so a
+# Dockerfile change that breaks the image is caught in review rather than at
+# the next release.
+#
+# =============================================================================
+# MANUAL STEPS — this workflow cannot push until these are done.
+# =============================================================================
+#
+#  1. Decide which namespace owns the image, and set it in `IMAGE_NAME` below.
+#     The repository moved to the K4-LABS org while the image stayed on a
+#     personal account. At the time of writing neither `k4labs/gpumesh` nor
+#     `k4-labs/gpumesh` existed on Docker Hub, so this is a real choice:
+#       * publish under the org — consistent with the repo, and survives the
+#         maintainer changing accounts. Requires creating the org and the
+#         repository on hub.docker.com, and updating `docker-compose.yaml`,
+#         `examples/docker-2node/docker-compose.yaml`, `README.md` and
+#         `DOCKER_HUB_README.md` in the same commit;
+#       * keep the personal account — nothing to create, but a project asking
+#         strangers to trust it ships an image from a namespace whose name
+#         matches nothing else about it.
+#     `IMAGE_NAME` is deliberately the ONLY place the name appears here.
+#
+#  2. Create a Docker Hub access token (NOT the account password) at
+#     https://hub.docker.com/settings/security with Read/Write scope on this
+#     repository only, and add it to
+#     https://github.com/K4-LABS/gpumesh/settings/secrets/actions as
+#     `DOCKERHUB_TOKEN`, alongside `DOCKERHUB_USERNAME`.
+#
+#  3. Create the `dockerhub` environment at
+#     https://github.com/K4-LABS/gpumesh/settings/environments with a required
+#     reviewer, and restrict its deployment branches to `master` and tags.
+#     Same reasoning as the `pypi` environment in release.yml: the environment,
+#     not the secret, is what stops a workflow change on some branch from
+#     pushing an image under the project's name.
+#
+# =============================================================================
+
+on:
+  release:
+    types: [published]
+  pull_request:
+    # Build-only verification. A PR never reaches the publish job, and never
+    # sees the registry credentials.
+    paths:
+      - "Dockerfile"
+      - ".dockerignore"
+      - "docker-compose.yaml"
+      - ".github/workflows/docker.yml"
+      - "pyproject.toml"
+      - "gpumesh/**"
+  workflow_dispatch:
+    inputs:
+      push:
+        description: "Push to Docker Hub (leave unchecked to build only)"
+        type: boolean
+        default: false
+
+# Deny by default; each job re-grants only what it needs.
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+env:
+  # See manual step 1. Change this one line to move the image.
+  IMAGE_NAME: k4-labs/gpumesh
+
+jobs:
+  build:
+    name: build image
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      # Pinned to full SHAs for the reason spelled out in tests.yml: a git tag
+      # is a mutable reference, and the tj-actions/changed-files compromise
+      # (CVE-2025-30066) worked by repointing every version tag of an action at
+      # a commit that dumped runner memory into the build log.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Derive the version from pyproject.toml
+        id: version
+        # The image version must come from the same place the wheel's does.
+        # A tag typed by hand at release time is how an image ends up labelled
+        # with a version it does not contain.
+        run: |
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import tomllib
+          with open("pyproject.toml", "rb") as fh:
+              print("version=" + tomllib.load(fh)["project"]["version"])
+          PY
+
+      - name: Check the tag matches the package version
+        # Only meaningful on a release. A mismatch here means the git tag and
+        # pyproject.toml disagree, and publishing either one is wrong.
+        if: github.event_name == 'release'
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          if [ "${TAG#v}" != "$VERSION" ]; then
+            echo "::error::release tag '$TAG' does not match pyproject version '$VERSION'"
+            exit 1
+          fi
+
+      - name: Build (no push)
+        # Every event builds. Only a release or an explicit dispatch goes on to
+        # push, and that happens in a separate job that holds the credentials.
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          docker build \
+            --build-arg "VERSION=$VERSION" \
+            --tag "$IMAGE_NAME:$VERSION" \
+            .
+
+      - name: Smoke-test the image
+        # A container that builds but cannot run is not a successful build.
+        # `--version` exercises the entry point, the console script and the
+        # package import in one command, and exits non-zero if any of them is
+        # wrong.
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          docker run --rm "$IMAGE_NAME:$VERSION" --version
+          docker run --rm "$IMAGE_NAME:$VERSION" doctor --json > doctor.json
+          python -c "import json; json.load(open('doctor.json'))"
+
+      - name: Report the labels the image will publish
+        # The OCI labels are what SBOM tooling, Docker Scout and Docker Hub
+        # read. This repo shipped an image labelled `licenses=MIT` while
+        # containing AGPL code, so the labels are printed into the log where a
+        # reviewer can actually see them.
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          docker image inspect "$IMAGE_NAME:$VERSION" \
+            --format '{{json .Config.Labels}}' | python -m json.tool
+
+  publish:
+    name: publish to Docker Hub
+    needs: build
+    if: github.event_name == 'release' || inputs.push
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment:
+      name: dockerhub
+      url: https://hub.docker.com/r/${{ env.IMAGE_NAME }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Derive the version from pyproject.toml
+        id: version
+        run: |
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import tomllib
+          with open("pyproject.toml", "rb") as fh:
+              print("version=" + tomllib.load(fh)["project"]["version"])
+          PY
+
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          push: true
+          build-args: |
+            VERSION=${{ steps.version.outputs.version }}
+          # `latest` moves only on a real release, never on a manual dispatch.
+          # An image where `latest` silently means "whatever someone rehearsed
+          # last" is worse than one with no `latest` at all — which is the
+          # state this repo was already in, with `latest` frozen at 1.2.0.
+          tags: |
+            ${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}
+            ${{ github.event_name == 'release' && format('{0}:latest', env.IMAGE_NAME) || '' }}

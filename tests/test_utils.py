@@ -35,7 +35,7 @@ class TestIsPrivateIp:
         "8.8.8.8", "203.0.113.9",
         "172.15.0.1",       # just below the private block
         "172.32.0.1",       # just above it
-        "100.67.72.79",     # CGNAT, not RFC1918
+        "100.100.100.100",     # CGNAT, not RFC1918
         "127.0.0.1",
         "11.0.0.1",
         "193.168.1.1",      # one digit off 192.168
@@ -58,7 +58,7 @@ class TestIsLoopbackOrSpecial:
     @pytest.mark.parametrize("ip", [
         "127.0.0.1", "127.255.255.254",
         "169.254.1.1",          # link-local / APIPA
-        "100.67.72.79",         # Tailscale CGNAT
+        "100.100.100.100",         # Tailscale CGNAT
     ])
     def test_special_ranges(self, ip):
         assert utils._is_loopback_or_special(ip) is True
@@ -105,7 +105,7 @@ class TestIsLoopbackOrSpecial:
 class TestIsVirtualAdapterIp:
     @pytest.mark.parametrize("ip", [
         "192.168.56.1", "192.168.99.1", "192.168.137.1", "10.0.75.1",
-        "172.17.0.1", "172.22.96.1", "172.31.0.1",
+        "172.17.0.1", "172.22.0.1", "172.31.0.1",
     ])
     def test_known_virtual_ranges(self, ip):
         assert utils._is_virtual_adapter_ip(ip) is True
@@ -197,13 +197,13 @@ class TestLanIpCandidates:
         already appended, and lan_ip_candidates did not de-duplicate at all.
         Where the hostname resolves to the default-route address — the common
         case — the list came back as
-        ``['10.126.13.214', '10.126.13.214', '172.22.96.1']``.
+        ``['10.0.0.7', '10.0.0.7', '172.22.0.1']``.
         """
         monkeypatch.setattr(
             utils, "_gather_candidate_ips",
-            lambda: ["10.126.13.214", "10.126.13.214", "172.22.96.1"],
+            lambda: ["10.0.0.7", "10.0.0.7", "172.22.0.1"],
         )
-        assert utils.lan_ip_candidates() == ["10.126.13.214", "172.22.96.1"]
+        assert utils.lan_ip_candidates() == ["10.0.0.7", "172.22.0.1"]
 
     def test_deduplication_keeps_the_best_ranked_position(self, monkeypatch):
         """The survivor is the first occurrence *after* ranking, not before."""
@@ -218,11 +218,11 @@ class TestLanIpCandidates:
         monkeypatch.delenv("GPUMESH_HOST_IP", raising=False)
         monkeypatch.setattr(
             utils, "_gather_candidate_ips",
-            lambda: ["192.168.1.10", "172.22.96.1", "172.22.96.1"],
+            lambda: ["192.168.1.10", "172.22.0.1", "172.22.0.1"],
         )
         utils.show_ip_alternatives("192.168.1.10", 8000)
         out = capsys.readouterr().out
-        assert out.count("http://172.22.96.1:8000") == 1
+        assert out.count("http://172.22.0.1:8000") == 1
 
     def test_duplicates_do_not_eat_a_fallback_slot(self, monkeypatch):
         """The other half: a peer was offered fewer *distinct* URLs than asked.
@@ -254,7 +254,7 @@ class TestLanIpCandidates:
                 pass
 
             def getsockname(self):
-                return ("10.126.13.214", 51234)
+                return ("10.0.0.7", 51234)
 
             def close(self):
                 pass
@@ -264,11 +264,11 @@ class TestLanIpCandidates:
         monkeypatch.setattr(
             utils.socket, "getaddrinfo",
             lambda host, port: [
-                (2, 1, 6, "", ("10.126.13.214", 0)),
-                (2, 1, 6, "", ("172.22.96.1", 0)),
+                (2, 1, 6, "", ("10.0.0.7", 0)),
+                (2, 1, 6, "", ("172.22.0.1", 0)),
             ],
         )
-        assert utils._gather_candidate_ips() == ["10.126.13.214", "172.22.96.1"]
+        assert utils._gather_candidate_ips() == ["10.0.0.7", "172.22.0.1"]
 
 
 # ── get_lan_ip ─────────────────────────────────────────────────────────────
@@ -343,10 +343,10 @@ class TestGetLanIp:
         monkeypatch.setenv("GPUMESH_HOST_IP", "nonsense")
         monkeypatch.setattr(
             utils, "_gather_candidate_ips",
-            lambda: ["192.168.1.10", "172.22.96.1"],
+            lambda: ["192.168.1.10", "172.22.0.1"],
         )
         utils.show_ip_alternatives("192.168.1.10", 8000)
-        assert "http://172.22.96.1:8000" in capsys.readouterr().out
+        assert "http://172.22.0.1:8000" in capsys.readouterr().out
 
     def test_link_local_only_machine_keeps_its_address(self, monkeypatch):
         """Everything is 'special', so the raw default-route answer is used."""

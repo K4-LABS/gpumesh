@@ -66,12 +66,17 @@ def update_version_in_file(filepath: Path, new_version: str) -> bool:
             f'__version__ = "{new_version}"',
             content
         )
-    # Update version in pyproject.toml
+    # Update version in pyproject.toml. Anchored to the start of a line so
+    # it matches ONLY the [project] `version = "..."` field, never a
+    # `target-version` (ruff) or `python_version` (mypy) key — the
+    # unanchored form once rewrote both of those to the package version,
+    # which broke the interpreter-config the release was supposed to verify.
     elif filepath.name == "pyproject.toml":
         new_content = re.sub(
-            r'version\s*=\s*"[^"]+"',
+            r'^version\s*=\s*"[^"]+"',
             f'version = "{new_version}"',
-            content
+            content,
+            flags=re.MULTILINE,
         )
     # Update the version in the Dockerfile (ARG default + image label)
     elif filepath.name == "Dockerfile":
@@ -80,10 +85,24 @@ def update_version_in_file(filepath: Path, new_version: str) -> bool:
             f'ARG VERSION={new_version}',
             content
         )
+        # LABEL version reads ${VERSION} (an ARG, so a --build-arg build
+        # labels the image with the version it actually contains). The
+        # literal rewrite below would clobber that indirection and
+        # re-introduce the "two different answers to what version is this"
+        # bug, so it is skipped when the label is already indirect.
+        if 'LABEL version="${VERSION}"' not in content:
+            new_content = re.sub(
+                r'LABEL version="[^"]+"',
+                f'LABEL version="{new_version}"',
+                new_content
+            )
+    # Update the image tag in the compose file(s). Keeps <ns>/gpumesh:2.0.0
+    # in step with the rest of the tree; the namespace part is left alone.
+    elif filepath.name == "docker-compose.yaml":
         new_content = re.sub(
-            r'LABEL version="[^"]+"',
-            f'LABEL version="{new_version}"',
-            new_content
+            r'(image:\s*[A-Za-z0-9._-]+/[A-Za-z0-9._-]+):[0-9]+\.[0-9]+\.[0-9]+',
+            rf'\g<1>:{new_version}',
+            content
         )
     # Update the citation metadata. GitHub renders this verbatim into the
     # "Cite this repository" panel and into people's bibliographies, so a
@@ -132,6 +151,7 @@ def main():
         project_root / "pyproject.toml",
         project_root / "Dockerfile",
         project_root / "CITATION.cff",
+        project_root / "docker-compose.yaml",
     ]
     
     for filepath in files_to_update:

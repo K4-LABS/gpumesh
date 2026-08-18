@@ -10,7 +10,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "gpumesh"
-version = "2.0.0"
+version = "3.0.0"
 description = "Borrow your friends' GPUs: a terminal-based distributed compute mesh in pure Python"
 readme = "README.md"
 
@@ -44,14 +44,25 @@ readme = "README.md"
 requires-python = ">=3.9"
 
 # PEP 639: an SPDX expression, not the deprecated `{text = "..."}` table.
+# Requires setuptools >= 77 (see [build-system] above); older backends reject
+# the string form. There must be NO `License ::` trove classifier alongside
+# this — modern setuptools errors out when both are present, and none is
+# listed below.
+#
+# `-or-later`, not `-only`, and that is a deliberate choice rather than a
+# default: the notice at the top of LICENSE grants "either version 3 of the
+# License, or (at your option) any later version", so the SPDX expression here
+# is simply reporting what the notice already says. Changing one without the
+# other makes the package metadata and the license file disagree about what
+# was actually granted.
 license = "AGPL-3.0-or-later"
 license-files = ["LICENSE"]
 
 authors = [
-    { name = "Samurai007AK", email = "vaivaswat2244@gmail.com" },
+    { name = "Samurai007AK", email = "arijitkonar16@gmail.com" },
 ]
 maintainers = [
-    { name = "Samurai007AK", email = "vaivaswat2244@gmail.com" },
+    { name = "Samurai007AK", email = "arijitkonar16@gmail.com" },
 ]
 
 classifiers = [
@@ -73,6 +84,31 @@ classifiers = [
 ]
 keywords = ["gpu", "distributed", "compute", "mesh", "ml", "pytorch", "cuda"]
 
+# LICENSE COMPATIBILITY OF DEPENDENCIES
+# -------------------------------------
+# gpumesh is AGPL-3.0-or-later, so every dependency has to be under a license
+# whose terms AGPL-3.0 can absorb — permissive licenses flow one way into
+# copyleft, and a dependency under a stricter or non-OSI license (SSPL, BUSL,
+# FSL, "source-available", anything with a field-of-use restriction) would
+# make the combined work undistributable no matter what this file says.
+#
+# Audited at the 2.0.0 relicensing, and the constraint any new entry must meet:
+#
+#   cloudpickle  BSD-3-Clause    torch        BSD-3/Apache-2.0/MIT mix
+#   pyngrok      MIT             psutil       BSD-3-Clause
+#   pandas       BSD-3-Clause    rich         MIT
+#   questionary  MIT
+#
+# All permissive, all one-way compatible with AGPL-3.0. (Apache-2.0 is
+# compatible with GPLv3/AGPLv3 in that direction only — Apache-licensed code
+# can be pulled into this project, but not the reverse.)
+#
+# One non-dependency worth naming, because README's "Prior art" section cites
+# it: **burla** is FSL-1.1-Apache-2.0, which is source-available and NOT OSI
+# open source. gpumesh borrows two ideas from it (`remote_parallel_map`-style
+# batching and hardware selection) and none of its code; it is not listed
+# here, not in any extra, and not imported anywhere in `gpumesh/`. Adding it
+# as a dependency would be a genuine licensing problem, not a style question.
 dependencies = [
     # cloudpickle is not an ordinary dependency here — it is this project's
     # WIRE FORMAT. A function pickled on the client is unpickled inside a
@@ -351,7 +387,12 @@ extend-immutable-calls = []
 # mypy
 # ---------------------------------------------------------------------------
 [tool.mypy]
-python_version = "2.0.0"
+# The interpreter version to type-check against, NOT the package version — the
+# package version was pasted here once and mypy rejects it outright, so the
+# advisory mypy step in CI was failing on its own config rather than on the
+# code. Keep this in step with `requires-python` above and with ruff's
+# `target-version`; all three answer the same question.
+python_version = "3.9"
 files = ["gpumesh"]
 
 # Deliberately gradual. The package ships py.typed, so downstream checkers

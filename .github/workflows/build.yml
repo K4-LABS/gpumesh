@@ -30,6 +30,11 @@ jobs:
   build:
     name: build and verify distributions
     runs-on: ubuntu-latest
+    # Two full builds plus four artifact checkers; this is generous for work
+    # that takes two or three minutes. The point of the cap is not to be tight,
+    # it is that a wedged `python -m build` otherwise sits on a runner for the
+    # six-hour default with nobody watching.
+    timeout-minutes: 20
     permissions:
       contents: read
     steps:
@@ -159,6 +164,7 @@ jobs:
     name: install from sdist (${{ matrix.os }} / py${{ matrix.python-version }})
     needs: build
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
     permissions:
       contents: read
     strategy:
@@ -168,11 +174,18 @@ jobs:
         # Packaging bugs are usually platform-independent, but console entry
         # points are not: `gpumesh` on Windows is a generated .exe shim rather
         # than a shebang script, and that is a distinct failure mode.
+        #
+        # "Newest" tracks the top of the tests.yml matrix and the top classifier
+        # in pyproject.toml. It said 3.13 while both of those said 3.14, which
+        # meant the newest interpreter gpumesh claims to support was the one
+        # interpreter never asked to build the sdist — and a build-time
+        # incompatibility in a dependency is exactly the kind of thing that
+        # shows up on the newest interpreter first.
         include:
           - os: ubuntu-latest
             python-version: "3.9"
           - os: ubuntu-latest
-            python-version: "3.13"
+            python-version: "3.14"
           - os: windows-latest
             python-version: "3.12"
     steps:

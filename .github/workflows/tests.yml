@@ -28,8 +28,8 @@ permissions: {}
 # Superseded runs waste minutes and, on a matrix this wide, delay the run that
 # actually matters. Keying on the PR number means a force-push to a PR cancels
 # that PR's earlier run and nothing else. Non-PR events fall back to run_id,
-# which is unique per run, so a scheduled run and a push to main never cancel
-# one another.
+# which is unique per run, so a scheduled run and a push to master never
+# cancel one another.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: true
@@ -38,6 +38,12 @@ jobs:
   test:
     name: ${{ matrix.os }} / Python ${{ matrix.python-version }}
     runs-on: ${{ matrix.os }}
+    # The step below carries its own 25-minute cap, which only covers pytest.
+    # This one covers the whole job — checkout, interpreter download, a pip
+    # resolve that can stall on a slow index. Without it the default is six
+    # hours, and a job wedged before pytest ever starts burns all of it on
+    # every cell of a nine-way matrix.
+    timeout-minutes: 35
     permissions:
       contents: read
     strategy:
@@ -115,6 +121,7 @@ jobs:
   lint:
     name: lint (ruff + mypy)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: read
     steps:
