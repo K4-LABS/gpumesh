@@ -40,7 +40,7 @@ recursive-include gpumesh *.py
 # to downstream checkers even though the wheel's are not.
 include gpumesh/py.typed
 
-recursive-include examples *.py *.json *.md
+recursive-include examples *.py *.json *.md *.yaml
 
 # Ship the tests in the sdist. Downstream packagers (conda-forge, Debian,
 # Homebrew) build from the sdist and run the suite as their build gate; an

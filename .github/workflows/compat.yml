@@ -188,8 +188,17 @@ jobs:
           python -m venv .venv-released
           .venv-released/bin/python -m pip install --upgrade pip
           .venv-released/bin/pip install "gpumesh==$COMPAT_RELEASED"
-          current="$(.venv-current/bin/python -c 'import gpumesh; print(gpumesh.__version__)')"
-          released="$(.venv-released/bin/python -c 'import gpumesh; print(gpumesh.__version__)')"
+          # Read the INSTALLED versions, not the checkout. From the repo root,
+          # `python -c 'import gpumesh'` prepends the working directory to
+          # sys.path, so BOTH venvs would import the source tree and report
+          # the same version — which makes the skew check below fail on every
+          # run the moment the tree version differs from what pip installed.
+          # Run the reads from an empty directory with absolute interpreter
+          # paths so each venv reports what it actually holds.
+          cd "$(mktemp -d)"
+          current="$("$GITHUB_WORKSPACE/.venv-current/bin/python" -c 'import gpumesh; print(gpumesh.__version__)')"
+          released="$("$GITHUB_WORKSPACE/.venv-released/bin/python" -c 'import gpumesh; print(gpumesh.__version__)')"
+          cd "$GITHUB_WORKSPACE"
           echo "current  : $current"
           echo "released : $released"
           # The `resolve` job should have made this impossible, but the whole
@@ -357,8 +366,13 @@ jobs:
           python -m venv .venv-released
           .venv-released/bin/python -m pip install --upgrade pip
           .venv-released/bin/pip install "gpumesh==$COMPAT_RELEASED"
-          current="$(.venv-current/bin/python -c 'import gpumesh; print(gpumesh.__version__)')"
-          released="$(.venv-released/bin/python -c 'import gpumesh; print(gpumesh.__version__)')"
+          # Same as the released-worker job: read the INSTALLED versions from
+          # an empty directory, or both venvs import the checkout via the
+          # working directory and always report the same version.
+          cd "$(mktemp -d)"
+          current="$("$GITHUB_WORKSPACE/.venv-current/bin/python" -c 'import gpumesh; print(gpumesh.__version__)')"
+          released="$("$GITHUB_WORKSPACE/.venv-released/bin/python" -c 'import gpumesh; print(gpumesh.__version__)')"
+          cd "$GITHUB_WORKSPACE"
           echo "current  : $current"
           echo "released : $released"
           if [ "$current" = "$released" ]; then
