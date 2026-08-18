@@ -39,7 +39,7 @@ FROM ${PYTHON_IMAGE}
 
 # Version for image labels. Kept in sync with pyproject.toml by
 # scripts/bump_version.py; override with --build-arg VERSION=x.y.z.
-ARG VERSION=2.0.0
+ARG VERSION=3.0.0
 
 # Labels for Docker Hub
 LABEL maintainer="samurai007ak"

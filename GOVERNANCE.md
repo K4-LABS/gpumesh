@@ -118,11 +118,11 @@ you should not have to guess at it.
 **What is not transferable.** The repository lives in the
 [K4-LABS](https://github.com/K4-LABS) GitHub organisation, so the repo itself is
 not tied to one personal account. The **published names are**: the PyPI project
-`gpumesh` and the Docker Hub namespace `samurai007ak/gpumesh` are both on the
-maintainer's personal accounts, with no shared credential behind either. A fork
-therefore cannot inherit them — which is why the ask above is to rename the
-distribution and the image. This is a real limitation and is stated here rather
-than discovered later.
+`gpumesh` is on the maintainer's personal account, and the Docker Hub
+namespace `k4-labs/gpumesh` lives in the K4-LABS organisation alongside the
+repository. The PyPI project has no shared credential behind it, so a fork
+cannot inherit it — which is why the ask above is to rename the distribution.
+This is a real limitation and is stated here rather than discovered later.
 
 ## Changing this document
 

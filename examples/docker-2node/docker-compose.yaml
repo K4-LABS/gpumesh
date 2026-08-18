@@ -1,6 +1,6 @@
 services:
   coordinator:
-    image: samurai007ak/gpumesh:latest
+    image: k4-labs/gpumesh:3.0.0
     # Explicitly pass the token to guarantee it matches
     command: serve --port 8732 --token my-secret-mesh-token
     ports:
@@ -11,7 +11,7 @@ services:
       - mesh-network
 
   worker:
-    image: samurai007ak/gpumesh:latest
+    image: k4-labs/gpumesh:3.0.0
     # Explicitly pass the same token here
     command: join http://coordinator:8732 --token my-secret-mesh-token
     depends_on:
