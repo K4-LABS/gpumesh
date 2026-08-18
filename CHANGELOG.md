@@ -38,7 +38,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   gpumesh and runs it as a service must offer their modified source in turn
   (AGPL section 13). Already-released versions remain under the MIT terms
   they were published under; the new license applies going forward.
-- **The container image moved to `k4-labs/gpumesh` and is now published from
+- **The container image moved to `samurai007ak/gpumesh` and is now published from
   CI.** It was hand-published on a personal namespace and had drifted two
   minor versions behind the repository (the documented compose file pinned a
   tag that never existed). A new `docker` workflow builds on every PR that

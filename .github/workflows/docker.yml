@@ -21,8 +21,7 @@ name: docker
 #
 #  1. Decide which namespace owns the image, and set it in `IMAGE_NAME` below.
 #     The repository moved to the K4-LABS org while the image stayed on a
-#     personal account. At the time of writing neither `k4labs/gpumesh` nor
-#     `k4-labs/gpumesh` existed on Docker Hub, so this is a real choice:
+#     personal account. At the time of writing neither `k4labs/gpumesh` nor# `samurai007ak/gpumesh` is the user's personal Docker Hub namespace.
 #       * publish under the org — consistent with the repo, and survives the
 #         maintainer changing accounts. Requires creating the org and the
 #         repository on hub.docker.com, and updating `docker-compose.yaml`,
@@ -77,7 +76,7 @@ concurrency:
 
 env:
   # See manual step 1. Change this one line to move the image.
-  IMAGE_NAME: k4-labs/gpumesh
+  IMAGE_NAME: samurai007ak/gpumesh
 
 jobs:
   build:
