@@ -28,8 +28,8 @@ authors:
     alias: Samurai007AK
     # orcid: "https://orcid.org/0000-0000-0000-0000"
 
-version: 2.0.0
-date-released: "2026-08-15"
+version: 3.0.0
+date-released: "2026-08-18"
 license: AGPL-3.0-or-later
 
 repository-code: "https://github.com/K4-LABS/gpumesh"

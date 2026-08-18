@@ -481,7 +481,7 @@ In scope:
 
 - This repository (`github.com/K4-LABS/gpumesh`)
 - The `gpumesh` package on PyPI
-- The `samurai007ak/gpumesh` container image
+- The `k4-labs/gpumesh` container image
 
 Out of scope:
 

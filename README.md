@@ -98,7 +98,7 @@ pip install gpumesh[all]       # Everything above
 Or with Docker:
 
 ```bash
-docker pull samurai007ak/gpumesh:latest
+docker pull k4-labs/gpumesh:3.0.0
 ```
 
 **Requires:** Python 3.9+, cloudpickle (auto-installed). PyTorch is optional (needed for GPU detection).
@@ -107,7 +107,7 @@ Verify the install:
 
 ```console
 $ gpumesh --version
-gpumesh 2.0.0 (3.11.9, Windows)
+gpumesh 3.0.0 (3.11.9, Windows)
 ```
 
 ---
@@ -452,7 +452,7 @@ Either path returns the identical value, so switching between them never changes
 
 ## Docker
 
-A prebuilt image is available on Docker Hub ([samurai007ak/gpumesh](https://hub.docker.com/r/samurai007ak/gpumesh)).
+A prebuilt image is available on Docker Hub ([k4-labs/gpumesh](https://hub.docker.com/r/k4-labs/gpumesh)).
 
 First, a token:
 
@@ -477,13 +477,13 @@ one:
 docker run -d --name gpumesh-coordinator \
   -p 127.0.0.1:8732:8732 -p 127.0.0.1:48900:48900/udp \
   -e GPUMESH_TOKEN \
-  samurai007ak/gpumesh:2.0.0 \
+  k4-labs/gpumesh:3.0.0 \
   serve --host 0.0.0.0 --port 8732
 
 # Worker
 docker run -d --name gpumesh-worker \
   -e GPUMESH_TOKEN \
-  samurai007ak/gpumesh:2.0.0 \
+  k4-labs/gpumesh:3.0.0 \
   join http://coordinator-ip:8732
 ```
 

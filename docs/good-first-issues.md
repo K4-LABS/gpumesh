@@ -134,10 +134,10 @@ record of what was seeded.
 >
 > | File | Field |
 > |---|---|
-> | `gpumesh/__init__.py` | `__version__ = "2.0.0"` — what `gpumesh --version` prints |
-> | `pyproject.toml` | `version = "2.0.0"` — what PyPI and `pip` see |
-> | `CITATION.cff` | `version: 2.0.0` — what GitHub's "Cite this repository" renders |
-> | `Dockerfile` | `ARG VERSION=2.0.0` — what the image's `version` and `org.opencontainers.image.version` labels report |
+> | `gpumesh/__init__.py` | `__version__ = "3.0.0"` — what `gpumesh --version` prints |
+> | `pyproject.toml` | `version = "3.0.0"` — what PyPI and `pip` see |
+> | `CITATION.cff` | `version: 3.0.0` — what GitHub's "Cite this repository" renders |
+> | `Dockerfile` | `ARG VERSION=3.0.0` — what the image's `version` and `org.opencontainers.image.version` labels report |
 >
 > There *is* a writer: `scripts/bump_version.py` rewrites all four in one go.
 > What is missing is the reader — nothing fails if the four drift, and they can
@@ -157,12 +157,12 @@ record of what was seeded.
 > asserts they match. Give it a docstring saying which failure it prevents, per
 > the testing conventions in CONTRIBUTING.md.
 >
-> **Bonus, and a real bug if you want it:** `docker-compose.yaml` pins
-> `image: samurai007ak/gpumesh:2.0.0` in two places and is *not* in
-> `bump_version.py`'s file list, so it is already the one most likely to go
-> stale. Either add it to the script and to the test, or say in the PR why it
-> should be pinned independently — both are defensible answers, but the current
-> situation (neither written nor checked) is not.
+> **Already fixed in 3.0.0 (keep the reader part):** `docker-compose.yaml`
+> pins the image in two places and used to be missing from
+> `bump_version.py`'s file list — the one version most likely to go stale.
+> The script now rewrites the compose tag too (and respects the
+> `LABEL version="${VERSION}"` indirection in the Dockerfile), so the only
+> remaining piece of this issue is the consistency test itself.
 >
 > One wrinkle worth knowing before you start: gpumesh supports **Python 3.9**,
 > and `tomllib` only arrived in 3.11. Options, roughly in order of preference:
