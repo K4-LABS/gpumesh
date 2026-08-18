@@ -622,6 +622,11 @@ The usual suspects — bind vs firewall, mismatched tokens, cross-version tasks,
 missing torch on a worker — in one table, plus how to read `gpumesh doctor`:
 [`docs/troubleshooting.md`](https://github.com/K4-LABS/gpumesh/blob/master/docs/troubleshooting.md).
 
+Windows-specific setup — why Administrator matters for firewall rules, the
+manual `netsh` command, `python -m gpumesh` when the script is not on PATH,
+and how to tell a firewall block (10060) from a coordinator that is not
+running (10061): [`docs/windows.md`](docs/windows.md).
+
 ---
 
 ## Development
@@ -668,6 +673,7 @@ typo fix counts.
 | [`docs/stability.md`](https://github.com/K4-LABS/gpumesh/blob/master/docs/stability.md) | What counts as gpumesh's public API, what a version bump promises, the wire-protocol compatibility window, and the deprecation policy |
 | [`docs/why-not-ray-or-dask.md`](https://github.com/K4-LABS/gpumesh/blob/master/docs/why-not-ray-or-dask.md) | An honest comparison, including when Ray or Dask is the right answer |
 | [`examples/`](https://github.com/K4-LABS/gpumesh/tree/master/examples) | Runnable scripts for the first hour: hello-mesh, a second machine, a `.map()` sweep, non-JSON return values, a worker that disappears |
+| [`docs/windows.md`](https://github.com/K4-LABS/gpumesh/blob/master/docs/windows.md) | Windows setup: firewall rules, `python -m gpumesh`, and reading 10060 vs 10061 connection errors |
 | [SECURITY.md](https://github.com/K4-LABS/gpumesh/blob/master/SECURITY.md) · [THREAT_MODEL.md](https://github.com/K4-LABS/gpumesh/blob/master/THREAT_MODEL.md) | What a token grants, and the same flow traced through the code |
 
 ---
