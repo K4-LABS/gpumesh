@@ -49,3 +49,7 @@ htmlcov/
 # scrubbed before every commit.
 HANDOFF.md
 worker_fix.bat
+
+# Internal operational notes (not for the repo)
+WORK_LOG.md
+.rel.json

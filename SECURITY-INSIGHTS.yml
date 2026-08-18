@@ -101,7 +101,7 @@ project:
         attacker-chosen URL without a valid token.
       - >-
         Vulnerabilities in the gpumesh PyPI package or the
-        k4-labs/gpumesh container image as published.
+        samurai007ak/gpumesh container image as published.
     out-of-scope:
       - >-
         A token holder executing arbitrary code on a worker. This is the
@@ -210,8 +210,8 @@ repository:
     distribution-points:
       - uri: pkg:pypi/gpumesh
         comment: PyPI package — https://pypi.org/project/gpumesh/
-      - uri: pkg:docker/k4-labs/gpumesh
-        comment: Container image — https://hub.docker.com/r/k4-labs/gpumesh
+      - uri: pkg:docker/samurai007ak/gpumesh
+        comment: Container image — https://hub.docker.com/r/samurai007ak/gpumesh
       - uri: https://github.com/K4-LABS/gpumesh/releases
         comment: GitHub releases
   security:
