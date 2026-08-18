@@ -39,6 +39,7 @@ that up, and what you are agreeing to when you do.
 | [`hello_mesh.py`](hello_mesh.py) | The smallest complete program: `@mesh`, a single call, a `.map()`, and the pool size | nothing |
 | [`second_machine.py`](second_machine.py) | Reads your live mesh and prints the exact `join` command for another machine, plus what `--host 0.0.0.0` really means | nothing |
 | [`param_sweep.py`](param_sweep.py) | A hyperparameter grid spread across the pool with `.map()` — the workload gpumesh exists for | nothing |
+| [`pytorch_sweep.py`](pytorch_sweep.py) | The same sweep with a real (tiny) PyTorch model, results back as a pandas DataFrame | torch (on every worker), pandas optional |
 | [`numpy_result.py`](numpy_result.py) | Returning values JSON cannot express: ndarrays, `Decimal`, `set`, `bytes` — and one that genuinely cannot cross machines | numpy (optional; skips cleanly without it) |
 | [`worker_leaves.py`](worker_leaves.py) | Lease expiry and re-queue, why your own bug is not retried three times, and the local fallback when the mesh is gone | nothing |
 | [`dev_mode.py`](dev_mode.py) | The "connect once, code normally" flow for VS Code / Jupyter / PyCharm | nothing |
