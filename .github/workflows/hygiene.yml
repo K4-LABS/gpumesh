@@ -1,0 +1,170 @@
+name: hygiene
+
+# The checks that keep the repository itself well-formed.
+#
+# Everything here is fast, needs no matrix, and — this is the part that
+# matters — is green on the day it lands. A required check that is red from
+# the first run is a check people learn to ignore, and the ignoring
+# generalises to the checks that were telling the truth. Same reasoning as the
+# advisory/hard split in tests.yml's lint job.
+#
+# Both jobs exist because of a gap, not because a longer workflow list looks
+# better. The gaps are named in each job.
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  pre-commit:
+    # -- The gap: .pre-commit-config.yaml was advice, not a gate ------------
+    #
+    # A contributor who never runs `pre-commit install` — which is every
+    # contributor arriving from a fork, on their first PR — got none of it.
+    # The hook that matters most is `check-yaml` over `.github/**`, and its
+    # own comment in .pre-commit-config.yaml says why: "A workflow that does
+    # not parse is a workflow that silently does not run. GitHub does not tell
+    # you loudly." Nothing else in CI catches that, and the workflow it would
+    # catch it in is the workflow that stopped running.
+    #
+    # `detect-private-key` and `check-added-large-files` earn their place for
+    # this repository specifically. HANDOFF.md and worker_fix.bat are
+    # gitignored because they carry a live coordinator token and SSH
+    # credentials for a second machine; a .gitignore stops `git add .` and
+    # stops nothing else.
+    name: pre-commit (repository hygiene hooks)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install pre-commit
+        run: |
+          python -m pip install --upgrade pip
+          pip install pre-commit
+
+      - name: Run the hooks
+        # Four hooks are skipped, each for a stated reason. Deleting a name
+        # from this list is how the skip gets retired — none of them are
+        # meant to be permanent.
+        #
+        #   trailing-whitespace, end-of-file-fixer
+        #     Both are FIXING hooks: they rewrite the file and then report
+        #     failure. Run over the whole tree today they touch 156 lines
+        #     across the existing sources plus two files missing a final
+        #     newline — a pre-existing backlog with nothing to do with the
+        #     change under review. They stay on for anyone who has the hooks
+        #     installed locally, where they only see staged files and the fix
+        #     is free. Retire the skip by sweeping the tree once, on its own
+        #     commit, at a moment when few branches are open.
+        #
+        #   ruff
+        #     Already run in tests.yml's lint job, and run there with a
+        #     deliberate split: a hard gate on the rules that are always bugs,
+        #     an advisory pass on the full ruleset. Running it a second time
+        #     here as a flat pass/fail would contradict that decision and put
+        #     the inherited backlog back in front of a merge button.
+        #
+        #   gitleaks
+        #     Its entry is `gitleaks ... --staged`, which on a CI checkout
+        #     with nothing staged inspects nothing and passes. It is a real
+        #     hook on a laptop and a no-op here; skipping it saves pulling a
+        #     binary release into CI for a check that cannot fire.
+        env:
+          SKIP: trailing-whitespace,end-of-file-fixer,ruff,gitleaks
+        run: pre-commit run --all-files --show-diff-on-failure --color always
+
+  docs-links:
+    # -- The gap: 19 markdown files, cross-linked, nothing checking them ----
+    #
+    # There is no docs build to break — the documentation is plain markdown
+    # read on github.com — so the failure mode is not a build error, it is a
+    # link that quietly 404s after a file is renamed. README.md alone points
+    # into docs/, and CONTRIBUTING.md, SECURITY.md and the rest point at each
+    # other. Renaming or moving one file is a normal, well-intentioned PR and
+    # is exactly what breaks them.
+    #
+    # RELATIVE links only, on purpose. A general link checker that resolves
+    # external URLs is the classic flaky required check: PyPI and github.com
+    # rate-limit CI runners, sites answer 403 to anything without a browser
+    # user-agent, and a red build caused by someone else's server teaches
+    # contributors that red means nothing. This job touches no network at
+    # all, runs in about a second, and every failure it reports is a real
+    # broken link in this repository that the author can fix.
+    name: docs (relative links resolve)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Check every relative markdown link resolves
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os, re, subprocess, sys
+
+          files = [f for f in subprocess.run(
+              ["git", "ls-files", "*.md"], capture_output=True, text=True,
+              check=True).stdout.splitlines() if f]
+
+          # [text](target) and ![alt](target), with an optional <> wrapper and
+          # an optional "title" after the target.
+          LINK = re.compile(r'\[[^\]]*\]\(\s*(<?)([^)\s>]+)\1\s*(?:"[^"]*")?\)')
+          # Fenced blocks are examples, not links. A shell snippet showing
+          # `[foo](bar)` is not a broken link and failing on one would be the
+          # fastest possible way to get this job disabled.
+          FENCE = re.compile(r'```.*?```', re.S)
+          EXTERNAL = re.compile(r'^(https?:|mailto:|tel:|ftp:|#)')
+
+          broken, checked = [], 0
+          for path in files:
+              text = FENCE.sub("", open(path, encoding="utf-8").read())
+              for match in LINK.finditer(text):
+                  link = match.group(2)
+                  if EXTERNAL.match(link):
+                      continue
+                  # Strip a trailing #anchor: the file has to exist, but
+                  # heading slugs are GitHub's business, not ours.
+                  target = link.split("#")[0]
+                  if not target:
+                      continue
+                  checked += 1
+                  resolved = os.path.normpath(
+                      os.path.join(os.path.dirname(path), target))
+                  if not os.path.exists(resolved):
+                      line = text[:match.start()].count("\n") + 1
+                      broken.append((path, line, link, resolved))
+
+          print(f"{len(files)} markdown files, {checked} relative links checked")
+          for path, line, link, resolved in broken:
+              print(f"::error file={path},line={line}::"
+                    f"broken relative link {link!r} (resolves to {resolved})")
+          if broken:
+              sys.exit(f"{len(broken)} broken relative link(s)")
+          print("every relative link resolves")
+          PY

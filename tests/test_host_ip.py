@@ -104,9 +104,9 @@ class TestHostIpOverride:
         """Tailscale-only host: better to advertise 100.x than loopback."""
         monkeypatch.delenv("GPUMESH_HOST_IP", raising=False)
         monkeypatch.setattr(
-            utils, "_gather_candidate_ips", lambda: ["100.67.72.79"],
+            utils, "_gather_candidate_ips", lambda: ["100.100.100.100"],
         )
-        assert utils.get_lan_ip() == "100.67.72.79"
+        assert utils.get_lan_ip() == "100.100.100.100"
 
 
 class TestShowIpAlternatives:
@@ -114,11 +114,11 @@ class TestShowIpAlternatives:
         monkeypatch.delenv("GPUMESH_HOST_IP", raising=False)
         monkeypatch.setattr(
             utils, "_gather_candidate_ips",
-            lambda: ["192.168.1.10", "172.22.96.1"],
+            lambda: ["192.168.1.10", "172.22.0.1"],
         )
         utils.show_ip_alternatives("192.168.1.10", 8000)
         out = capsys.readouterr().out
-        assert "http://172.22.96.1:8000" in out
+        assert "http://172.22.0.1:8000" in out
         assert "virtual adapter" in out
 
     def test_warns_when_chosen_address_is_virtual(self, monkeypatch, capsys):
@@ -135,7 +135,7 @@ class TestShowIpAlternatives:
         monkeypatch.setenv("GPUMESH_HOST_IP", "192.168.1.10")
         monkeypatch.setattr(
             utils, "_gather_candidate_ips",
-            lambda: ["192.168.1.10", "172.22.96.1"],
+            lambda: ["192.168.1.10", "172.22.0.1"],
         )
         utils.show_ip_alternatives("192.168.1.10", 8000)
         assert capsys.readouterr().out == ""

@@ -628,7 +628,7 @@ class TestQuickjoinTailscaleFlag:
         from gpumesh.cli import main
 
         with patch("sys.argv", ["gpumesh", "quickjoin", "--token", "test123", "--tailscale"]), \
-             patch("gpumesh.cli.tunnel._get_tailscale_ip", return_value="100.67.72.79"), \
+             patch("gpumesh.cli.tunnel._get_tailscale_ip", return_value="100.100.100.100"), \
              patch("gpumesh.cli.worker.run_worker") as mock_worker:
             try:
                 main()
@@ -638,7 +638,7 @@ class TestQuickjoinTailscaleFlag:
             # Verify worker was called with Tailscale URL
             mock_worker.assert_called_once()
             call_args = mock_worker.call_args
-            assert call_args[0][0] == "http://100.67.72.79:8000"
+            assert call_args[0][0] == "http://100.100.100.100:8000"
 
     def test_quickjoin_tailscale_not_available(self):
         """--tailscale flag handles Tailscale not being available."""
@@ -674,7 +674,7 @@ class TestQuickjoinTailscaleFlag:
         from gpumesh.cli import main
 
         with patch("sys.argv", ["gpumesh", "quickjoin", "--token", "test123", "--tailscale"]), \
-             patch("gpumesh.cli.tunnel._get_tailscale_ip", return_value="100.67.72.79"), \
+             patch("gpumesh.cli.tunnel._get_tailscale_ip", return_value="100.100.100.100"), \
              patch("gpumesh.cli.worker.run_worker") as mock_worker:
             try:
                 main()
@@ -689,7 +689,7 @@ class TestQuickjoinTailscaleFlag:
         from gpumesh.cli import main
 
         with patch("sys.argv", ["gpumesh", "quickjoin", "--token", "test123", "--tailscale", "--port", "9000"]), \
-             patch("gpumesh.cli.tunnel._get_tailscale_ip", return_value="100.67.72.79"), \
+             patch("gpumesh.cli.tunnel._get_tailscale_ip", return_value="100.100.100.100"), \
              patch("gpumesh.cli.worker.run_worker") as mock_worker:
             try:
                 main()
@@ -699,7 +699,7 @@ class TestQuickjoinTailscaleFlag:
             # Verify custom port is used
             mock_worker.assert_called_once()
             call_args = mock_worker.call_args
-            assert call_args[0][0] == "http://100.67.72.79:9000"
+            assert call_args[0][0] == "http://100.100.100.100:9000"
 
     def test_quickjoin_explicit_url_overrides_tailscale(self):
         """Explicit URL is used even with --tailscale flag."""
@@ -707,7 +707,7 @@ class TestQuickjoinTailscaleFlag:
 
         # When both URL and --tailscale are provided, explicit URL takes precedence
         with patch("sys.argv", ["gpumesh", "quickjoin", "http://192.168.1.100:8000", "--token", "test123", "--tailscale"]), \
-             patch("gpumesh.cli.tunnel._get_tailscale_ip", return_value="100.67.72.79"), \
+             patch("gpumesh.cli.tunnel._get_tailscale_ip", return_value="100.100.100.100"), \
              patch("gpumesh.cli.worker.run_worker") as mock_worker:
             try:
                 main()

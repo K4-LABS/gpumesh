@@ -8,9 +8,12 @@
 
 header:
   schema-version: 2.2.0
-  last-updated: '2026-08-15'
-  last-reviewed: '2026-08-15'
-  url: https://raw.githubusercontent.com/K4-LABS/gpumesh/main/SECURITY-INSIGHTS.yml
+  last-updated: '2026-08-18'
+  last-reviewed: '2026-08-18'
+  # The default branch is `master`, not `main`. A `main` URL here 404s, which
+  # is worse than no URL: the field exists so tooling can fetch the canonical
+  # copy, and a broken canonical copy is indistinguishable from an absent one.
+  url: https://raw.githubusercontent.com/K4-LABS/gpumesh/master/SECURITY-INSIGHTS.yml
   comment: |
     Single-repository file: gpumesh is one repo shipping one PyPI package and
     one container image.
@@ -25,6 +28,8 @@ project:
   documentation:
     quickstart-guide: https://github.com/K4-LABS/gpumesh#readme
     detailed-guide: https://github.com/K4-LABS/gpumesh#readme
+    code-of-conduct: https://github.com/K4-LABS/gpumesh/blob/master/CODE_OF_CONDUCT.md
+    support-policy: https://github.com/K4-LABS/gpumesh/blob/master/SUPPORT.md
   repositories:
     - name: gpumesh
       url: https://github.com/K4-LABS/gpumesh
@@ -39,7 +44,7 @@ project:
       name: |
         Report privately via the repository's Security tab ("Report a
         vulnerability"). Do not open a public issue.
-      email: vaivaswat2244@gmail.com
+      email: arijitkonar16@gmail.com
       primary: true
     in-scope:
       - >-
@@ -96,7 +101,7 @@ project:
         attacker-chosen URL without a valid token.
       - >-
         Vulnerabilities in the gpumesh PyPI package or the
-        samurai007ak/gpumesh container image as published.
+        k4-labs/gpumesh container image as published.
     out-of-scope:
       - >-
         A token holder executing arbitrary code on a worker. This is the
@@ -185,17 +190,28 @@ repository:
   documentation:
     contributing-guide: https://github.com/K4-LABS/gpumesh/blob/master/CONTRIBUTING.md
     security-policy: https://github.com/K4-LABS/gpumesh/blob/master/SECURITY.md
+    governance: https://github.com/K4-LABS/gpumesh/blob/master/GOVERNANCE.md
   license:
     url: https://github.com/K4-LABS/gpumesh/blob/master/LICENSE
-    expression: MIT
+    # The repository's license. LICENSE, pyproject.toml's `license` field and
+    # CITATION.cff all say AGPL-3.0-or-later; this field said MIT and was a
+    # structured false statement in the one place tooling reads rather than
+    # a human. `release.license` is deliberately NOT set here: the artifact
+    # currently on PyPI was published under a different license than the tree
+    # now carries, and asserting the tree's license as the release's would be
+    # the same mistake pointed the other way.
+    expression: AGPL-3.0-or-later
   release:
     changelog: https://github.com/K4-LABS/gpumesh/blob/master/CHANGELOG.md
-    automated-pipeline: false
+    # .github/workflows/release.yml builds, verifies and publishes to PyPI via
+    # Trusted Publishing (OIDC), gated on a GitHub Environment named `pypi`.
+    # No human runs `twine upload`, so this is `true`.
+    automated-pipeline: true
     distribution-points:
       - uri: pkg:pypi/gpumesh
         comment: PyPI package — https://pypi.org/project/gpumesh/
-      - uri: pkg:docker/samurai007ak/gpumesh
-        comment: Container image — https://hub.docker.com/r/samurai007ak/gpumesh
+      - uri: pkg:docker/k4-labs/gpumesh
+        comment: Container image — https://hub.docker.com/r/k4-labs/gpumesh
       - uri: https://github.com/K4-LABS/gpumesh/releases
         comment: GitHub releases
   security:
@@ -218,4 +234,113 @@ repository:
           remote socket to the coordinator do not exist until an operator
           opts into exposure with --host or GPUMESH_HOST.
 
-          No third-party security assessment has been performed.
+          No third-party security assessment has been performed, no external
+          audit has been commissioned, and there is no fuzzing harness. Read
+          the absence of a `third-party` key below as exactly that, not as an
+          oversight.
+    # Only tools that actually run in this repository are listed. There is
+    # deliberately no fuzzer entry: gpumesh has no fuzzing harness, and a
+    # claimed one would be the sort of thing this file exists to prevent.
+    tools:
+      - name: CodeQL
+        type: SAST
+        comment: |
+          .github/workflows/codeql.yml, `security-and-quality` query suite.
+          Runs on every push to master, every pull request, and weekly.
+          Results land in the repository's code-scanning dashboard. This is
+          the analysis that models data flow across modules, which is what
+          matters in a codebase whose central operation is unpickling a
+          callable that arrived over a socket.
+        rulesets:
+          - security-and-quality
+        integration:
+          adhoc: false
+          ci: true
+          release: false
+        results: {}
+
+      - name: pip-audit
+        type: SCA
+        comment: |
+          .github/workflows/pip-audit.yml. Audits the transitive closure of a
+          freshly built wheel installed into a clean venv, so it scans what a
+          `pip install gpumesh` actually pulls in rather than what the
+          checkout happens to contain. Runs on push, pull request, and weekly
+          — the weekly run is the one that catches an advisory published
+          against a transitive dependency, which no PR would surface.
+        rulesets:
+          - default
+        integration:
+          adhoc: false
+          ci: true
+          release: false
+        results: {}
+
+      - name: Dependabot
+        type: SCA
+        comment: |
+          .github/dependabot.yml. Covers the pip, github-actions and docker
+          ecosystems weekly, with a 7-day cooldown on new releases (3 days for
+          base images). Security advisories bypass the cooldown.
+        rulesets:
+          - default
+        integration:
+          adhoc: false
+          ci: true
+          release: false
+        results: {}
+
+      - name: OpenSSF Scorecard
+        type: other
+        comment: |
+          .github/workflows/scorecard.yml. Weekly, plus on branch-protection
+          changes. Publishes to the OpenSSF API and uploads SARIF to the
+          code-scanning dashboard.
+        rulesets:
+          - default
+        integration:
+          adhoc: false
+          ci: true
+          release: false
+        results: {}
+
+      - name: gitleaks (pre-commit hook)
+        type: secret
+        comment: |
+          .pre-commit-config.yaml. Scans the staged diff for
+          credential-shaped strings, alongside pre-commit-hooks'
+          detect-private-key.
+
+          Note the honest split, because it matters for what this entry
+          claims: gitleaks runs on a contributor's machine, at `git commit`,
+          against staged files. It is deliberately SKIPped in CI
+          (.github/workflows/hygiene.yml) because its entry is
+          `gitleaks ... --staged`, and a CI checkout has nothing staged, so
+          it would inspect nothing and pass — a green check that proves
+          nothing is worse than no check. `ci: false` below is therefore
+          accurate rather than an omission. What DOES gate every pull request
+          is detect-private-key and check-added-large-files, in the same
+          hygiene workflow; those exist because this repository keeps
+          gitignored operator notes carrying a live coordinator token, and a
+          .gitignore stops `git add .` and stops nothing else.
+        rulesets:
+          - default
+        integration:
+          adhoc: true
+          ci: false
+          release: false
+        results: {}
+
+      - name: anchore/sbom-action (Syft)
+        type: other
+        comment: |
+          .github/workflows/release.yml. Generates SPDX and CycloneDX SBOMs
+          for the built distributions and attaches both to the GitHub release.
+          Release-time only; it is not run on pull requests.
+        rulesets:
+          - default
+        integration:
+          adhoc: false
+          ci: false
+          release: true
+        results: {}

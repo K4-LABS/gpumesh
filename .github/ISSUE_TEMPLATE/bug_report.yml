@@ -52,9 +52,23 @@ body:
     attributes:
       label: gpumesh version
       description: "Output of `gpumesh --version`"
-      placeholder: gpumesh 2.0.0 (3.11.9, Windows)
+      placeholder: gpumesh 3.0.0 (3.11.9, Windows)
     validations:
       required: true
+
+  - type: textarea
+    id: doctor
+    attributes:
+      label: "`gpumesh doctor` output"
+      description: >
+        Run `gpumesh doctor` on **both** machines and paste both reports. It is
+        read-only and it prints exactly the fields that get asked for
+        otherwise — version, interpreter, torch/CUDA, cloudpickle, the saved
+        coordinator, and the addresses this machine would advertise. Pasting
+        this usually saves a whole round trip. Redact your token.
+      render: shell
+    validations:
+      required: false
 
   - type: dropdown
     id: install-method

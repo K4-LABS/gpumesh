@@ -33,6 +33,9 @@ jobs:
   audit:
     name: pip-audit (dependency CVEs)
     runs-on: ubuntu-latest
+    # pip-audit talks to the PyPI advisory API, so this job's failure mode is
+    # a hung network call rather than a slow computation. Cap it.
+    timeout-minutes: 15
     permissions:
       contents: read
     steps:

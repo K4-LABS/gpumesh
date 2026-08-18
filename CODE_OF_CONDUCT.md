@@ -45,31 +45,35 @@ Tensions can occur between community members even when they are trying their bes
 
 When an incident does occur, it is important to report it promptly. To report a
 possible violation, **email
-<!-- MAINTAINER TODO (required before launch): replace this address with one you
-     actually monitor, and confirm it is deliverable. Do not leave the default. -->
-[conduct@gpumesh.dev](mailto:conduct@gpumesh.dev)**. Include what happened, where,
-and links if the incident is public. You do not need to decide in advance whether
-something "counts" — reporting it is enough.
+[arijitkonar16@gmail.com](mailto:arijitkonar16@gmail.com)** — the maintainer
+address published in the README, so it is one that is actually read. Include
+what happened, where, and links if the incident is public. You do not need to
+decide in advance whether something "counts" — reporting it is enough.
 
 ### Who reads a report, and what to do if that is the problem
 
 Most codes of conduct describe a moderation team. gpumesh does not have one, and
 pretending otherwise would make this document less useful rather than more:
 
-- **gpumesh currently has one maintainer.** Everywhere this document says
-  *Community Moderators*, read it as *the maintainer of this repository*.
-- **If your report is about the maintainer, or you would simply rather it not go
+- **gpumesh has two maintainers**
+  ([@Samurai007AK](https://github.com/Samurai007AK) and
+  [@jinia-konar](https://github.com/jinia-konar); see
+  [GOVERNANCE.md](GOVERNANCE.md)) **and no separate moderation team.**
+  Everywhere this document says *Community Moderators*, read it as *the
+  maintainers of this repository*.
+- **If your report is about a maintainer, or you would simply rather it not go
   to them, do not use the address above.** Report it to GitHub instead, at
   <https://support.github.com/contact/report-abuse>. GitHub enforces its
   [Community Guidelines](https://docs.github.com/en/site-policy/github-terms/github-community-guidelines)
-  on this repository independently of the maintainer, and can act on accounts and
-  content that the maintainer has no power over. That is a genuinely separate
-  channel, not a formality.
+  on this repository independently of the maintainers, and can act on accounts
+  and content that the maintainers have no power over. That is a genuinely
+  separate channel, not a formality.
 - **You will not be penalised for using the independent channel.** Choosing to
-  report to GitHub rather than to the maintainer is never itself a conduct issue.
+  report to GitHub rather than to the maintainers is never itself a conduct
+  issue.
 
-If gpumesh gains additional maintainers, this section will be updated to name
-them and this caveat will shrink accordingly.
+If gpumesh gains further maintainers or an actual moderation team, this section
+will be updated to name them and this caveat will shrink accordingly.
 
 Community Moderators take reports of violations seriously and will make every effort to respond in a timely manner. They will investigate all reports of code of conduct violations, reviewing messages, logs, and recordings, or interviewing witnesses and other participants. Community Moderators will keep investigation and enforcement actions as transparent as possible while prioritizing safety and confidentiality. In order to honor these values, enforcement actions are carried out in private with the involved parties, but communicating to the whole community may be part of a mutually agreed upon resolution.
 

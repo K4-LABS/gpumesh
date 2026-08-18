@@ -21,12 +21,12 @@ class TestGetTailscaleIP:
         
         mock_result = MagicMock()
         mock_result.returncode = 0
-        mock_result.stdout = "100.67.72.79\n"
+        mock_result.stdout = "100.100.100.100\n"
         
         with patch("gpumesh.tunnel.shutil.which", return_value="/usr/bin/tailscale"), \
              patch("gpumesh.tunnel.subprocess.run", return_value=mock_result):
             result = _get_tailscale_ip()
-            assert result == "100.67.72.79"
+            assert result == "100.100.100.100"
 
     def test_tailscale_returns_non_tailscale_ip(self):
         """Returns None when tailscale returns non-Tailscale IP."""
@@ -92,9 +92,9 @@ class TestOpenTunnel:
         """mode='tailscale' returns URL when Tailscale is available."""
         from gpumesh.tunnel import open_tunnel
         
-        with patch("gpumesh.tunnel._get_tailscale_ip", return_value="100.67.72.79"):
+        with patch("gpumesh.tunnel._get_tailscale_ip", return_value="100.100.100.100"):
             result = open_tunnel(8000, mode="tailscale")
-            assert result == "http://100.67.72.79:8000"
+            assert result == "http://100.100.100.100:8000"
 
     def test_mode_tailscale_not_available(self):
         """mode='tailscale' returns None when Tailscale not installed."""
@@ -118,9 +118,9 @@ class TestOpenTunnel:
         """mode='auto' uses Tailscale when available."""
         from gpumesh.tunnel import open_tunnel
         
-        with patch("gpumesh.tunnel._get_tailscale_ip", return_value="100.67.72.79"):
+        with patch("gpumesh.tunnel._get_tailscale_ip", return_value="100.100.100.100"):
             result = open_tunnel(8000, mode="auto")
-            assert result == "http://100.67.72.79:8000"
+            assert result == "http://100.100.100.100:8000"
 
     def test_mode_auto_without_tailscale(self):
         """mode='auto' falls back to LAN-only when Tailscale not available."""
@@ -136,9 +136,9 @@ class TestOpenTunnel:
         """Port is correctly included in the URL."""
         from gpumesh.tunnel import open_tunnel
         
-        with patch("gpumesh.tunnel._get_tailscale_ip", return_value="100.67.72.79"):
+        with patch("gpumesh.tunnel._get_tailscale_ip", return_value="100.100.100.100"):
             result = open_tunnel(9000, mode="tailscale")
-            assert result == "http://100.67.72.79:9000"
+            assert result == "http://100.100.100.100:9000"
 
     def test_mode_ngrok_success(self):
         """mode='ngrok' returns URL when pyngrok is installed and working."""

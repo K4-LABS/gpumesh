@@ -24,8 +24,8 @@ tested, and it is used, but it is not settled:
   Most remaining bugs surface only across two real machines with a VPN,
   hypervisor adapter or firewall in the way — not on loopback.
 - CI runs the full suite on Linux, Windows and macOS for every pull request
-  and every push to `main` — but **please run `pytest` locally before opening
-  a PR** anyway.
+  and every push to `master` — but **please run `pytest` locally before
+  opening a PR** anyway.
   The suite is real servers and sockets, and a red local run will be a red
   CI run.
 - Some errors still tell you the wrong thing. Fixing a misleading message is a
@@ -36,6 +36,15 @@ New here? Issues labelled
 are scoped so you do not need to understand the whole codebase, and
 [`help wanted`](https://github.com/K4-LABS/gpumesh/labels/help%20wanted)
 marks the ones where input is most valuable.
+
+**Claiming one:** comment on the issue saying you are taking it. That is the
+whole process — there is no assignment queue and you do not need to wait for a
+reply before starting. It exists so that two people do not spend an evening on
+the same fix without knowing. If an issue has a claim comment older than about
+two weeks with nothing since, assume it lapsed, say so in a new comment, and
+take it. If you claim one and then decide against it, please say that too; it
+costs you nothing and it un-blocks the next person. You do not need to claim
+anything to open a PR — a small fix arriving unannounced is fine.
 
 ---
 
@@ -50,20 +59,36 @@ pip install -e ".[dev]"
 pytest
 ```
 
-You should see several hundred tests pass (Windows shows a few skips and one
-xpass, all intentional). The count grows steadily, so do not compare it against
-any number written down here — a *failure* is what matters. If anything fails,
-please open an issue with your OS and Python version before doing anything
-else.
+You should see well over a thousand tests pass (Windows shows a few skips and
+one xpass, all intentional). The count grows steadily, so do not compare it
+against any number written down here — a *failure* is what matters. If anything
+fails, please open an issue with your OS and Python version before doing
+anything else.
 
-Python 3.9 or newer. The only required runtime dependency is `cloudpickle`;
-everything else (`torch`, `psutil`, `rich`, `questionary`, `pyngrok`, `pandas`)
-is optional and guarded by a lazy import. Install the extras you need:
+Python 3.9 through 3.14 — every one of those is a cell in the CI matrix, and
+3.9 is kept deliberately (the long note on `requires-python` in
+`pyproject.toml` says why). The only required runtime dependency is
+`cloudpickle`; everything else (`torch`, `psutil`, `rich`, `questionary`,
+`pyngrok`, `pandas`) is optional and guarded by a lazy import. Install the
+extras you need:
 
 ```bash
 pip install -e ".[all]"         # everything
 pip install -e ".[ui]"          # just the setup wizard deps
 ```
+
+`dev` is deliberately small — `pytest`, `pytest-cov`, `build`, `twine` — because
+it is installed by every cell of the matrix. That does mean a bare
+`pip install -e ".[dev]"` silently *skips* the tests guarded by
+`importorskip`. To run the same set CI runs:
+
+```bash
+pip install -e ".[dev,ui,notebook]" numpy
+```
+
+`numpy` is not a gpumesh extra; several tests use it to check that a non-JSON
+return value survives the round trip through the coordinator, which is exactly
+the coverage most worth having.
 
 ---
 
@@ -87,12 +112,24 @@ gpumesh submit examples/grid_search.py --payloads examples/payloads.json --wait
 `gpumesh serve` already starts a self-worker, so terminal 2 is only needed
 when you want to watch a worker's own output.
 
+Since 2.0.0 `gpumesh serve` binds `127.0.0.1` by default, so the loopback
+recipe above works as written — but a second machine will not reach it until
+you start it with `--host 0.0.0.0` (or `GPUMESH_HOST=0.0.0.0`) and read the
+warning that prints.
+
+`gpumesh doctor` is the fastest way to see what the code thinks your machine
+looks like: the install, the interpreter, torch/CUDA, cloudpickle, the saved
+coordinator, and every address this machine would advertise. It is read-only,
+and `gpumesh doctor --json` gives the same report as a document you can diff
+between two machines.
+
 Useful environment variables while developing:
 
 | Variable | Effect |
 |---|---|
 | `GPUMESH_LOCAL=1` | Force `@mesh` / `@accelerate` to run locally, bypassing the mesh |
 | `GPUMESH_VERBOSE=1` | Log routing decisions and mesh submissions |
+| `GPUMESH_HOST=<ip>` | Bind address for `gpumesh serve`, beating the `127.0.0.1` default. Same thing as `--host`; the flag wins |
 | `GPUMESH_HOST_IP=<ip>` | Pin the address the coordinator advertises to workers. An IP literal, not a hostname — anything else is discarded with a warning |
 | `GPUMESH_CLAIM_HOST=<ip>` | Bind address for the claim port opened by `gpumesh worker` (and by `gpumesh setup` in worker mode). Defaults to all interfaces (a loopback claim server cannot be claimed, which is its entire job), so this is how you narrow it to one. Separate from `GPUMESH_HOST` on purpose — a loopback coordinator is sensible, a loopback claim port is broken |
 | `GPUMESH_COLOR=0` | Disable ANSI colour. `serve` and `join` also take `--color` / `--no-color` |
@@ -115,14 +152,20 @@ worker ── worker.py ── subprocess per task (sandbox.py / _function_subpr
 
 | File | Responsibility |
 |---|---|
+| `__init__.py` | The public surface (`__all__`), `__version__`, and `PROTOCOL_VERSION` / `MIN_PROTOCOL_VERSION` — the wire handshake, which is *not* the package version |
 | `server.py` | Coordinator HTTP API. Thin — logic belongs in `db.py` |
-| `db.py` | All persistence and the scheduler (`lease_task`) |
+| `db.py` | All persistence and the scheduler (`lease_task`), plus `_worker_can_run` — the single placement predicate shared by `lease_task` and `fail_unsatisfiable_tasks` so the two can never disagree about whether a task is runnable |
 | `worker.py` | Worker lifecycle: register, heartbeat, lease, execute, report |
 | `sandbox.py` | Script tasks — payload on stdin, JSON result on last stdout line |
 | `_function_subprocess.py` | Function tasks. **Standalone script**, cannot import gpumesh |
 | `serializer.py` | cloudpickle function transport, and the result envelope |
 | `accelerate.py` | The real decorator implementation |
 | `mesh.py` | `@mesh` — zero-config wrapper over `accelerate.py` |
+| `api.py` | `GPUMesh` — the notebook-facing class (`workers()`, `distribute()`) |
+| `client.py` | Submit / poll / render helpers shared by the CLI and `api.py` |
+| `cli.py` | Every subcommand, including `gpumesh doctor`. By far the largest module; new commands go here |
+| `connection_manager.py` | The saved coordinator in `~/.gpumesh/config.json`, so commands work without `--url` / `--token` |
+| `security.py` | Coordinator-side token hashing, rate limiting and loopback/IP checks |
 | `discovery.py` / `claimer.py` | UDP beacons and the claim handshake |
 | `capability.py` | Hardware probe and benchmark scoring |
 
@@ -189,6 +232,23 @@ ruff check .
 mypy
 ```
 
+There is also a `.pre-commit-config.yaml`, which is optional but cheap:
+
+```bash
+pip install pre-commit && pre-commit install
+pre-commit run --all-files      # to run the whole set once, on purpose
+```
+
+It is **not** a formatter either — the hooks either only touch files you are
+already committing (trailing whitespace, end-of-file) or only report. What
+earns its place is the rest: `check-yaml` over `.github/**` (a workflow that
+does not parse silently does not run, and GitHub does not tell you loudly),
+`check-toml` over `pyproject.toml`, `ruff --no-fix`, and two credential
+scanners — `detect-private-key` and `gitleaks`. That last pair matters here
+specifically: this repo has files that carry a live coordinator token, and a
+`.gitignore` protects against `git add .` but not against `git add -f`.
+Nothing in CI runs pre-commit, so it is a local convenience, not a gate.
+
 **There is still no formatter.** `ruff format` and black are deliberately not
 run over this repo, and `E501` (line-too-long) is in ruff's ignore list for that
 reason. So the old rule survives intact:
@@ -245,11 +305,58 @@ What the existing code does, so you can match it:
 
 ---
 
+## What CI does to your PR
+
+Five workflows fire on every pull request. Knowing which of them can go red for
+a reason that is not your fault saves a confusing afternoon, so here is the
+whole set — the files are in `.github/workflows/` if you want the reasoning,
+which is written in the comments.
+
+| Workflow | What it does | Red means |
+|---|---|---|
+| `tests` | `pytest` on Ubuntu × Python 3.9–3.14, plus Windows 3.11, Windows 3.13 and macOS 3.12 | A real failure. Nine cells, `fail-fast: false`, so you see all of them |
+| `tests` (lint job) | `ruff`, then `mypy` | Mostly advisory — see below |
+| `build` | Builds the sdist and wheel **twice** and compares wheel hashes, then `twine check --strict`, `check-wheel-contents`, `check-manifest`, and asserts `py.typed` shipped. Then installs the sdist on Ubuntu 3.9, Ubuntu 3.13 and Windows 3.12 and imports it from a directory that is not the repo | Usually a packaging change: a new data file that `MANIFEST.in` does not carry, or a build that is not reproducible |
+| `codeql` | GitHub's taint/data-flow analysis. This project deserializes callables off a socket, so it is the layer that catches injection-shaped bugs lint cannot | A finding to answer, not necessarily to fix — say which in the PR |
+| `pip-audit` | Builds the real wheel, installs it into a clean venv, and audits the *installed* tree for known CVEs | Almost always an upstream advisory, not your patch. Say so and it will be handled |
+| `compat` | Runs a real task between your tree and a **released** gpumesh, in both role assignments, and checks that an unsupported version is refused cleanly | You changed the wire. See `PROTOCOL_VERSION` below |
+
+**The coverage floor is 80%** — the test job runs
+`pytest --cov=gpumesh --cov-fail-under=80` and a PR that drops below it fails
+even when every test passes. The suite sits around 81%, so the floor is a
+regression guard rather than a target: it exists to stop coverage sliding, not
+to demand you push it up. If your PR adds a module with no tests, this is the
+check that will tell you.
+
+**The lint job is deliberately split, and only half of it is a gate.** The
+hard step is `ruff check --select E9,F63,F7,F82` — undefined names, syntax
+errors, the handful of checks that are never a style opinion and always a bug
+at runtime. It reports zero and must stay at zero. The full ruleset, the `S`
+security summary and `mypy` all run with `continue-on-error: true`, because
+the repo carries a lint backlog from before the config existed and a required
+check that is red on day one is a check people learn to ignore. Their
+annotations still appear inline in your diff, which is where they are useful.
+So: **do not feel obliged to burn down unrelated ruff findings to get green** —
+but do not add new ones either, and read the annotations on the lines you
+touched.
+
+To reproduce locally what actually blocks:
+
+```bash
+pytest --cov=gpumesh --cov-fail-under=80
+ruff check --select E9,F63,F7,F82 .
+python -m build          # needs pip install -e ".[dev]"
+```
+
+---
+
 ## Pull requests
 
-1. Branch from `main`: `git checkout -b fix/short-description`
+1. Branch from `master`: `git checkout -b fix/short-description`
 2. Make the change, with tests
 3. Run the full suite — `pytest` must be green — plus `ruff check .` and `mypy`
+   on the files you touched (see [what CI does](#what-ci-does-to-your-pr) for
+   which of those actually block)
 4. Update `CHANGELOG.md` under `## [Unreleased]`
 5. **If you changed the wire, bump `PROTOCOL_VERSION`** — see below
 6. Sign off your commits — `git commit -s` (see [below](#sign-your-commits-dco))
@@ -356,8 +463,8 @@ behind them. A patch that "cleans those up" costs more to review than to write.
 ### What to expect after you open it
 
 **You can expect a response within 7 days.** If a week goes by with nothing,
-ping the thread — that is the intended behaviour, not a nuisance. One person
-maintains this in their own time, so an honest slow answer is the one being
+ping the thread — that is the intended behaviour, not a nuisance. Two people
+maintain this in their own time, so an honest slow answer is the one being
 promised here rather than a fast one that is not kept.
 
 Reviews are usually a conversation rather than a verdict. A request for changes
@@ -370,7 +477,8 @@ almost always means "this is worth landing, here is what is in the way".
 Networking bugs are the hardest to diagnose remotely, so please include:
 
 - OS and Python version on **both** machines
-- `gpumesh --version`
+- `gpumesh --version` — or better, `gpumesh doctor`, which is read-only and
+  prints exactly this set of fields in one block meant for pasting
 - The exact command you ran and the full output
 - For connection failures: the output of `ipconfig` / `ip addr` on the
   coordinator, and whether `curl http://<COORDINATOR>:8000/api/workers` from

@@ -2,8 +2,16 @@
 
 ## Supported versions
 
-Only the latest release is supported. Fixes land on `main` and ship in the
-next release; please upgrade to the newest version before reporting an issue.
+| Version | Supported |
+| --- | --- |
+| 2.0.0 (latest release) | Yes |
+| < 2.0.0 | No |
+
+Only the latest release is supported. There are no backports and no long-term
+support branches: gpumesh is maintained by one person, and a second supported
+line would mean a second line that does not actually get patched. Fixes land on
+`master` — the default branch — and ship in the next release. Please upgrade to
+the newest version and reproduce there before reporting an issue.
 
 ## gpumesh executes arbitrary code by design
 
@@ -30,8 +38,8 @@ which is the normal case for real work — it is cloudpickled and base64'd. The
 the worker produced:
 
 - `gpumesh/serializer.py:520` — `cloudpickle.loads(base64.b64decode(envelope["value"]))`, inside `decode_result` (`gpumesh/serializer.py:498`)
-- `gpumesh/api.py:450` — `results.append(serializer.decode_result(raw))`, the Python API's result collection
-- `gpumesh/accelerate.py:383` — the value an `@accelerate` / `@mesh` call returns to your code
+- `gpumesh/api.py:624` — `results.append(serializer.decode_result(raw))`, the Python API's result collection
+- `gpumesh/accelerate.py:514` — the value an `@accelerate` / `@mesh` call returns to your code
 - `gpumesh/client.py:37` — `_format_result`, used by `gpumesh status` to print results
 
 `cloudpickle.loads` on attacker-controlled bytes is arbitrary code execution.
@@ -43,9 +51,9 @@ which is usually where the notebook and the SSH keys live.
 
 `--safe-mode` blocks *function distribution*, and nothing else:
 
-- `gpumesh/server.py:474` — the coordinator returns 403 for a job whose script
+- `gpumesh/server.py:766` — the coordinator returns 403 for a job whose script
   contains `__gpumesh_function__`
-- `gpumesh/worker.py:832` — the worker refuses such a task even if one reaches it
+- `gpumesh/worker.py:1034` — the worker refuses such a task even if one reaches it
 
 The result path is untouched. A safe-mode mesh still runs script-based tasks
 (`sandbox.run_task`, `gpumesh/sandbox.py:59`, which writes the submitted
@@ -60,19 +68,19 @@ Because a token is a license to execute code, the coordinator's listening
 socket is the surface that matters, and **it binds loopback by default**.
 
 `gpumesh serve` resolves its bind address through `_resolve_bind_host`
-(`gpumesh/cli.py:356`): an explicit `--host` beats `GPUMESH_HOST`, which beats
-`DEFAULT_BIND_HOST = "127.0.0.1"` (`gpumesh/cli.py:341`). `serve` then hands
-that address to `server.serve` (`gpumesh/cli.py:649`), and the socket is bound
-to exactly it (`gpumesh/server.py:590`). `GPUMesh.start_coordinator` has the
-same default in its signature — `host: str = "127.0.0.1"` (`gpumesh/api.py:103`).
+(`gpumesh/cli.py:359`): an explicit `--host` beats `GPUMESH_HOST`, which beats
+`DEFAULT_BIND_HOST = "127.0.0.1"` (`gpumesh/cli.py:344`). `serve` then hands
+that address to `server.serve` (`gpumesh/cli.py:713`), and the socket is bound
+to exactly it (`gpumesh/server.py:936`). `GPUMesh.start_coordinator` has the
+same default in its signature — `host: str = "127.0.0.1"` (`gpumesh/api.py:203`).
 
 So out of the box, a coordinator plus its self-worker is a single-machine
 system: no LAN peer can open a connection at all, with or without the token.
 Opening it up is a deliberate act — `--host 0.0.0.0` or `GPUMESH_HOST=0.0.0.0`
 — and it prints a full-width banner naming the OS user tasks will run as and
-the device they will run on (`_print_exposure_warning`, `gpumesh/cli.py:432`,
-called at `gpumesh/cli.py:707`; the Python API prints its own equivalent at
-`gpumesh/api.py:167-179`).
+the device they will run on (`_print_exposure_warning`, `gpumesh/cli.py:435`,
+called at `gpumesh/cli.py:804`; the Python API prints its own equivalent at
+`gpumesh/api.py:285-297`).
 
 ### `--public` is a second door, and it does not go through the bind
 
@@ -95,8 +103,8 @@ lived in the non-loopback branch, so `--public` on the default bind printed
 The larger exposure printed the smaller warning.
 
 It now prints its own full-width banner before the tunnel opens
-(`_print_tunnel_exposure_warning`, `gpumesh/cli.py:500`, called at
-`gpumesh/cli.py:715`), naming the public internet as the reach, the OS user
+(`_print_tunnel_exposure_warning`, `gpumesh/cli.py:503`, called at
+`gpumesh/cli.py:812`), naming the public internet as the reach, the OS user
 tasks run as, and the device — and it prints *in addition to* the bind banner
 on a wide bind, because a bind and a tunnel are two separate doors.
 
@@ -105,8 +113,8 @@ mode only shells out to `tailscale ip -4` and prints `http://100.x.y.z:PORT`
 (`gpumesh/tunnel.py:13`). Tailnet packets arrive addressed to that 100.x
 address, which a loopback-bound socket does not accept, so the advertised URL
 answers nothing. `serve --tailscale` on a loopback bind is therefore **refused**
-(`_refuse_tailscale_on_loopback`, `gpumesh/cli.py:545`, called at
-`gpumesh/cli.py:630`) with the command to bind the tailnet address instead. The
+(`_refuse_tailscale_on_loopback`, `gpumesh/cli.py:548`, called at
+`gpumesh/cli.py:683`) with the command to bind the tailnet address instead. The
 bind is not widened automatically: it is the operator's decision, and the right
 answer there is the tailnet address specifically, not `0.0.0.0`.
 
@@ -115,7 +123,7 @@ Three things still listen beyond loopback, and they are the honest caveats:
 - **The worker claim server** (`gpumesh worker`) binds every interface by
   default (`DEFAULT_CLAIM_BIND_HOST = "0.0.0.0"`, `gpumesh/claimer.py:37`,
   resolved by `_resolve_claim_bind_host`, `gpumesh/claimer.py:40`, and bound at
-  `gpumesh/claimer.py:585`). That default is deliberate and is not the
+  `gpumesh/claimer.py:645`). That default is deliberate and is not the
   coordinator's: a claim server exists solely to be reached by a coordinator on
   *another* machine, so binding loopback would not make it safer, it would make
   it a broken feature that fails as an unreachable-worker mystery. What it now
@@ -125,7 +133,7 @@ Three things still listen beyond loopback, and they are the honest caveats:
   sensible coordinator setting, and sharing it would silently make every worker
   on that box unclaimable. A non-loopback bind prints a banner naming the OS
   user that claims will run as (`_print_claim_exposure_warning`,
-  `gpumesh/claimer.py:73`, called at `gpumesh/claimer.py:597`). It is
+  `gpumesh/claimer.py:73`, called at `gpumesh/claimer.py:657`). It is
   token-gated and rate-limited — see `THREAT_MODEL.md` §5.2, which also states
   plainly what narrowing the bind does and does not buy.
 - **`gpumesh setup`**, in its "Same WiFi / LAN (auto-discover nearby devices)"
@@ -134,7 +142,7 @@ Three things still listen beyond loopback, and they are the honest caveats:
   A loopback bind would make the wizard unable to complete its own flow. It
   honours `GPUMESH_HOST` if set, and it prints the same exposure banner
   `serve` does (`_announce_bind_host`, `gpumesh/setup_wizard.py:478`, called
-  at `gpumesh/setup_wizard.py:611`).
+  at `gpumesh/setup_wizard.py:615`).
 - **The UDP discovery beacon**, which is broadcast and unauthenticated by
   design and carries no token.
 
@@ -160,8 +168,8 @@ reference here. gpumesh has four personas.
 ### Mesh operator — fully trusted
 
 Runs `gpumesh serve`. Chooses the bind address — `--host` / `GPUMESH_HOST`,
-defaulting to loopback (`gpumesh/cli.py:356`) — generates or supplies the
-token (`gpumesh/cli.py:578`, `secrets.token_urlsafe(12)`), decides who gets
+defaulting to loopback (`gpumesh/cli.py:359`) — generates or supplies the
+token (`gpumesh/cli.py:631`, `secrets.token_urlsafe(12)`), decides who gets
 it, and decides whether to expose the coordinator beyond the LAN with
 `--tailscale` or `--public`.
 
@@ -180,11 +188,11 @@ has no mechanism that could.
 
 Anyone in possession of the coordinator URL and the token, *and* able to reach
 the bind address. Presenting the token in the `X-Auth-Token` header
-(read at `gpumesh/server.py:276`, checked by `SecurityManager.verify_request`,
+(read at `gpumesh/server.py:526`, checked by `SecurityManager.verify_request`,
 `gpumesh/security.py:239`) grants:
 
 - arbitrary code execution on every worker in the mesh, as the OS user that
-  ran `gpumesh join` (`gpumesh/worker.py:145` deserializes the function,
+  ran `gpumesh join` (`gpumesh/worker.py:184` deserializes the function,
   `gpumesh/_function_subprocess.py:72` calls it)
 - that user's filesystem, including `$HOME`, SSH keys and cloud credentials
 - that machine's GPUs, CPU and memory, for as long as they like
@@ -220,9 +228,9 @@ way, and carry no token.
 
 **When they do exist, this is the only trust boundary gpumesh actually
 enforces.** Everything inside the mesh is one domain; the boundary is the
-token check at `gpumesh/server.py:273` (`_authed`) and, on the claim port,
-`gpumesh/claimer.py:478` (`hmac.compare_digest`, mirrored in the worker's
-patched handler at `gpumesh/worker.py:1029`).
+token check at `gpumesh/server.py:523` (`_authed`) and, on the claim port,
+`gpumesh/claimer.py:538` (`hmac.compare_digest`, mirrored in the worker's
+patched handler at `gpumesh/worker.py:1231`).
 
 ## Not a vulnerability
 
@@ -238,7 +246,7 @@ Reports that restate them will be closed with a link to this section.
   There are no quotas. A task timeout exists (`--timeout`, default 240s) to
   recover from hangs, not to enforce fairness.
 - **Tasks not isolated from each other or from `$HOME`.** Function tasks run
-  in a subprocess (`gpumesh/worker.py:201`) and script tasks in a temp
+  in a subprocess (`gpumesh/worker.py:240`) and script tasks in a temp
   directory (`gpumesh/sandbox.py:73`), both for crash containment and cleanup
   — not for confinement. Same user, same filesystem, no namespaces, no seccomp.
   Script tasks do get a trimmed environment (`gpumesh/sandbox.py:78-91`), which
@@ -255,10 +263,10 @@ Reports that restate them will be closed with a link to this section.
   attack your client is a report that the trust model works as written.
 - **Anything reachable only because the operator opened the port.**
   `gpumesh serve` binds `127.0.0.1` unless told otherwise
-  (`gpumesh/cli.py:341`, `gpumesh/cli.py:356`). Passing `--host 0.0.0.0`, or
+  (`gpumesh/cli.py:344`, `gpumesh/cli.py:359`). Passing `--host 0.0.0.0`, or
   setting `GPUMESH_HOST`, is an opt-in that prints a full-width banner naming
   the OS user and device that submitted code will run as
-  (`gpumesh/cli.py:432`). A consequence of an exposure the operator chose and
+  (`gpumesh/cli.py:435`). A consequence of an exposure the operator chose and
   was warned about is not a vulnerability in gpumesh.
 - **Anything reachable only because the operator opened a tunnel.**
   `--public` is a *separate* opt-in from the bind, not an additional one on
@@ -268,16 +276,16 @@ Reports that restate them will be closed with a link to this section.
   from the loopback default — see "`--public` is a second door", above. Until
   that was corrected, the combination also printed no exposure banner at all,
   which *was* a real defect and is fixed: the tunnel banner
-  (`gpumesh/cli.py:500`) now prints on every bind, before the tunnel opens.
+  (`gpumesh/cli.py:503`) now prints on every bind, before the tunnel opens.
   Running `--public` and being reachable from the internet is the feature
   working. Running it and *not being told* would be a bug — report that.
 - **The worker claim port listening on `0.0.0.0`.** `gpumesh worker` exists to
   be claimed by a coordinator on another machine, so its claim server binds
   every interface by default (`gpumesh/claimer.py:37`, bound at
-  `gpumesh/claimer.py:585`). It is token-gated (`gpumesh/claimer.py:478`),
-  rate-limited (`gpumesh/claimer.py:217`, consulted at
-  `gpumesh/claimer.py:356`), capped at 16 KB (`gpumesh/claimer.py:227`), and
-  socket-timed-out (`gpumesh/claimer.py:246`). An operator who wants a narrower
+  `gpumesh/claimer.py:645`). It is token-gated (`gpumesh/claimer.py:538`),
+  rate-limited (`gpumesh/claimer.py:228`, consulted at
+  `gpumesh/claimer.py:402`), capped at 16 KB (`gpumesh/claimer.py:238`), and
+  socket-timed-out (`gpumesh/claimer.py:257`). An operator who wants a narrower
   listener has `GPUMESH_CLAIM_HOST`, and a non-loopback bind announces itself.
   A *bypass* of any of those is a vulnerability; the listener's existence,
   and the fact that its default is wide, is not.
@@ -308,10 +316,10 @@ used.
   `--token` on the command line puts it in the process table for every local
   user, and `gpumesh serve` prints it to stdout. Use `GPUMESH_TOKEN` where
   local users are a concern, and note that `gpumesh serve` also prints the
-  token to stdout (`gpumesh/cli.py:669`). `~/.gpumesh/config.json` holds the
+  token to stdout (`gpumesh/cli.py:766`). `~/.gpumesh/config.json` holds the
   token in plaintext at 0600; when gpumesh cannot restrict it, or finds it
-  group/other-readable on load, it says so (`gpumesh/connection_manager.py:44`
-  and `:135`). A *new* leak — into a traceback, an HTTP error body, the SQLite
+  group/other-readable on load, it says so (`gpumesh/connection_manager.py:64`
+  and `:155`). A *new* leak — into a traceback, an HTTP error body, the SQLite
   database, or a world-readable file that is written silently — is a bug we
   will fix.
 - **gpumesh binding an interface beyond what the documented default and the
@@ -330,7 +338,7 @@ used.
   bind. Its being ignored is a bug, not a security issue.)
 - **A tunnel opening without its banner, or a banner that understates it.**
   `--public` reaches further than any bind can, so `serve` must print the
-  tunnel banner (`gpumesh/cli.py:500`) *before* `open_tunnel` runs, on every
+  tunnel banner (`gpumesh/cli.py:503`) *before* `open_tunnel` runs, on every
   bind, and no other line printed in that run may claim the coordinator is
   unreachable. A build where `--public` is quiet, or where the tunnel banner
   is skipped on some bind addresses, is a vulnerability on the same reasoning
@@ -340,7 +348,7 @@ used.
   Job names, task IDs and payload keys must never reach a filesystem path.
 - **Deserialization of an attacker payload before authentication is verified.**
   On the coordinator, `_authed` runs before `_read_json` on every route
-  (`gpumesh/server.py:292` for GET, `gpumesh/server.py:339` for POST). If a
+  (`gpumesh/server.py:542` for GET, `gpumesh/server.py:591` for POST). If a
   coordinator route ever unpickles, or even parses, an unauthenticated body,
   that is critical. The claim port is the one place that *must* parse before
   it can authenticate, because the claim protocol carries the token in the
@@ -348,7 +356,7 @@ used.
   `THREAT_MODEL.md` §5.2. Widening it is a vulnerability.
 - **SSRF from a worker or coordinator to an attacker-chosen URL.** The claim
   flow takes a URL from the network and fetches it
-  (`find_reachable_coordinator`, called at `gpumesh/claimer.py:504`) — it is gated on
+  (`find_reachable_coordinator`, called at `gpumesh/claimer.py:564`) — it is gated on
   the worker's own token, and a way to trigger it without that token is a
   vulnerability.
 
@@ -391,7 +399,7 @@ a different address. An exempt IP is never even *counted*
 therefore get a fourth message, saying plainly that retrying is fine.
 
 The same `RateLimiter` class, with the same defaults and the same loopback
-exemption, guards the worker claim port (`gpumesh/claimer.py:217`).
+exemption, guards the worker claim port (`gpumesh/claimer.py:228`).
 
 ## A note on token hashing
 
@@ -427,6 +435,15 @@ Use GitHub's private vulnerability reporting:
 1. Open the **Security** tab on this repository.
 2. Click **Report a vulnerability**.
 3. Describe the problem and follow up privately from there.
+
+Direct link: <https://github.com/K4-LABS/gpumesh/security/advisories/new>
+
+**If that page does not offer you a report form**, private reporting is not
+enabled on the repository and you should not fall back to a public issue.
+Email the maintainer instead: **arijitkonar16@gmail.com**, subject line
+starting `gpumesh security:`. Plain email is not encrypted, so send the
+"there is a problem in X, may I have a private channel" version rather than
+the full proof of concept, and wait for a reply.
 
 Please include:
 
@@ -464,7 +481,7 @@ In scope:
 
 - This repository (`github.com/K4-LABS/gpumesh`)
 - The `gpumesh` package on PyPI
-- The `samurai007ak/gpumesh` container image
+- The `k4-labs/gpumesh` container image
 
 Out of scope:
 
