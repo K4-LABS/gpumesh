@@ -74,6 +74,20 @@
 
 ---
 
+## 🆕 What's New in 3.0.0
+
+- **Job queue persistence** — submitted jobs survive coordinator restarts (SQLite-backed)
+- **AGPL-3.0-or-later license** — proper open-source copyleft
+- **Loopback by default** — coordinator binds `127.0.0.1` unless you opt in
+- **Tailored startup errors** — clear messages for port conflicts, bad `--host-ip`, unwritable DB
+- **Radar token via getpass** — interactive claim tokens never echoed to terminal
+- **CI hardening** — compat tests verify version skew, pip-audit retries, scorecard stops re-scoring on push
+- **Threat model + SECURITY-INSIGHTS** — machine-readable security docs
+
+See [CHANGELOG](https://github.com/K4-LABS/gpumesh/blob/master/CHANGELOG.md) for full details.
+
+---
+
 ## ⚡ Quick Start (30 seconds)
 
 ### 0️⃣ Generate a Token
@@ -145,18 +159,15 @@ results = train.map([{"lr": 0.01}, {"lr": 0.05}, {"lr": 0.1}])
 
 | Tag | Description |
 |-----|-------------|
-| `latest` | Latest stable release |
-| `3.0.0` | Version 3.0.0 (AGPL-licensed, loopback-default release) |
-| `2.0.0` | Version 2.0.0 (loopback-default release) |
+| `latest` | Latest stable release (currently 3.0.0) |
+| `3.0.0` | AGPL-licensed release with queue persistence, loopback default, and all security hardening |
 
-### Pull Commands
+### Pull
 
 ```bash
-# Latest version
 docker pull samurai007ak/gpumesh:3.0.0
-
-# Specific version
-docker pull samurai007ak/gpumesh:3.0.0
+# or
+docker pull samurai007ak/gpumesh:latest
 ```
 
 ---
