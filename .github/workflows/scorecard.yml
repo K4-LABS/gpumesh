@@ -21,14 +21,19 @@ name: scorecard
 on:
   # Re-scored weekly. Scorecard's answer changes when GitHub changes settings,
   # when a dependency picks up an advisory, or when someone edits a workflow —
-  # none of which are events this repo emits.
+  # none of which are events this repo emits, so per-commit re-scoring buys
+  # nothing.
+  #
+  # There is deliberately NO `push` trigger. Scorecard scores repository
+  # state, not commits, and running it on every push to master used to cancel
+  # the previous run mid-flight (concurrency below), which surfaced as a
+  # stream of red "cancelled" entries in the Actions tab that looked like
+  # failures. Weekly + settings-change is the full answer.
   schedule:
     - cron: "43 5 * * 1"
   # Branch protection is one of the highest-weighted checks, so a change to it
   # should re-score immediately rather than wait up to a week.
   branch_protection_rule:
-  push:
-    branches: [master]
   workflow_dispatch:
 
 permissions: {}
