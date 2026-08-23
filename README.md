@@ -13,7 +13,7 @@ across machines on your network — with one decorator, one CLI command, or a Py
 [![Tests](https://img.shields.io/github/actions/workflow/status/K4-LABS/gpumesh/tests.yml?branch=master&label=tests&style=for-the-badge)](https://github.com/K4-LABS/gpumesh/actions/workflows/tests.yml)
 [![PyPI](https://img.shields.io/pypi/v/gpumesh?style=for-the-badge)](https://pypi.org/project/gpumesh/)
 [![Python](https://img.shields.io/pypi/pyversions/gpumesh?style=for-the-badge)](https://pypi.org/project/gpumesh/)
-[![License](https://img.shields.io/badge/License-AGPL--3.0-blue.svg?style=for-the-badge)](https://github.com/K4-LABS/gpumesh/blob/master/LICENSE)
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg?style=for-the-badge)](https://github.com/K4-LABS/gpumesh/blob/master/LICENSE)
 [![Contributors](https://img.shields.io/github/contributors/K4-LABS/gpumesh?style=for-the-badge)](https://github.com/K4-LABS/gpumesh/graphs/contributors)
 
 [Quickstart](#quickstart) ·
@@ -727,8 +727,8 @@ requirements on the decorator rather than in a separate config.
 [**burla**](https://github.com/Burla-Cloud/burla) contributed the
 `remote_parallel_map` batch pattern behind `.map()` and the `func_gpu="A100"`
 hardware-selection idea; note that burla is licensed **FSL-1.1-Apache-2.0**,
-which is *source-available, not OSI open source*, and reads back to Apache-2.0
-after two years. Two smaller influences round it out: **distry**, for the
+which is *source-available, not OSI open source*. Two smaller influences round
+it out: **distry**, for the
 plain single-function decorator, and **ezpz**, for `setup_torch()`-style
 automatic backend detection.
 
@@ -769,40 +769,29 @@ corrected.
 
 ## License
 
-GNU AGPL-3.0-or-later. See
+Apache License 2.0. See
 [LICENSE](https://github.com/K4-LABS/gpumesh/blob/master/LICENSE) for details.
 
 ```
-gpumesh — a distributed compute mesh
-Copyright (C) 2026 K4-LABS
+Copyright 2026 K4-LABS
 
-This program is free software: you can redistribute it and/or modify
-it under the terms of the GNU Affero General Public License as published
-by the Free Software Foundation, either version 3 of the License, or
-(at your option) any later version.
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
 
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU Affero General Public License for more details.
+    http://www.apache.org/licenses/LICENSE-2.0
 
-You should have received a copy of the GNU Affero General Public License
-along with this program.  If not, see <https://www.gnu.org/licenses/>.
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
 ```
 
-That notice lives here rather than at the top of `LICENSE` on purpose. GitHub
-detects a project's license by matching the whole `LICENSE` file against the
-known texts, and a prepended notice pushes the match below its threshold — the
-repository then reports its license as "Other", which is exactly the wrong
-signal for a copyleft project. `LICENSE` is now the unmodified AGPL-3.0 text,
-and the "or (at your option) any later version" grant above is what the
-`AGPL-3.0-or-later` in `pyproject.toml` reports.
-
-gpumesh was MIT-licensed through 2.0.0 and moves to the AGPL in the next
-release. That change is not retroactive: every release published up to and
-including 2.0.0 remains available under the MIT terms it was published
-under. If you run a modified gpumesh as a network service, AGPL section 13
-requires you to offer your modified source to its users.
+gpumesh was MIT-licensed through 2.0.0, then AGPL-3.0 from 3.0.0, and moves
+to Apache-2.0 starting with 3.1.0. The change is not retroactive: every
+release published under a previous license remains available under those
+terms.
 
 ---
 
