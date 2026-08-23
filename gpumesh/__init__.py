@@ -2,7 +2,7 @@ from __future__ import annotations
 
 """gpumesh - distributed compute sharing over a mesh of volunteer machines."""
 
-__version__ = "3.0.0"
+__version__ = "3.1.0"
 
 # ── Wire protocol version ────────────────────────────────────────────────
 #
