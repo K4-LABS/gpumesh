@@ -39,7 +39,7 @@ FROM ${PYTHON_IMAGE}
 
 # Version for image labels. Kept in sync with pyproject.toml by
 # scripts/bump_version.py; override with --build-arg VERSION=x.y.z.
-ARG VERSION=3.0.0
+ARG VERSION=3.1.0
 
 # Labels for Docker Hub
 LABEL maintainer="samurai007ak"
@@ -57,9 +57,8 @@ LABEL org.opencontainers.image.documentation="https://github.com/K4-LABS/gpumesh
 # Must match the `license` field in pyproject.toml and the notice at the top
 # of LICENSE. This label is what SBOM and container-scanning tools report as
 # the image's license, so a stale value here is how a downstream consumer
-# concludes gpumesh is permissively licensed when it is copyleft. It said
-# "MIT" through the 2.0.0 relicensing.
-LABEL org.opencontainers.image.licenses="AGPL-3.0-or-later"
+# concludes gpumesh has a different license than it actually does.
+LABEL org.opencontainers.image.licenses="Apache-2.0"
 LABEL org.opencontainers.image.title="gpumesh"
 LABEL org.opencontainers.image.version="${VERSION}"
 

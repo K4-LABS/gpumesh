@@ -194,13 +194,11 @@ repository:
   license:
     url: https://github.com/K4-LABS/gpumesh/blob/master/LICENSE
     # The repository's license. LICENSE, pyproject.toml's `license` field and
-    # CITATION.cff all say AGPL-3.0-or-later; this field said MIT and was a
-    # structured false statement in the one place tooling reads rather than
-    # a human. `release.license` is deliberately NOT set here: the artifact
-    # currently on PyPI was published under a different license than the tree
-    # now carries, and asserting the tree's license as the release's would be
-    # the same mistake pointed the other way.
-    expression: AGPL-3.0-or-later
+    # CITATION.cff all say Apache-2.0. `release.license` is deliberately NOT
+    # set here: the artifact currently on PyPI was published under a different
+    # license than the tree now carries, and asserting the tree's license as
+    # the release's would be the same mistake pointed the other way.
+    expression: Apache-2.0
   release:
     changelog: https://github.com/K4-LABS/gpumesh/blob/master/CHANGELOG.md
     # .github/workflows/release.yml builds, verifies and publishes to PyPI via

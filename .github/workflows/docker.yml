@@ -144,9 +144,9 @@ jobs:
 
       - name: Report the labels the image will publish
         # The OCI labels are what SBOM tooling, Docker Scout and Docker Hub
-        # read. This repo shipped an image labelled `licenses=MIT` while
-        # containing AGPL code, so the labels are printed into the log where a
-        # reviewer can actually see them.
+        # read. This repo historically shipped an image with mismatched license
+        # labels, so the labels are printed into the log where a reviewer can
+        # actually see them.
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |

@@ -517,9 +517,9 @@ worker execute code from an unauthenticated source, certainly is.
 ## License
 
 By contributing you agree that your contributions are licensed under the
-[GNU AGPL-3.0](LICENSE) that covers this project.
+[Apache License 2.0](LICENSE) that covers this project.
 
 The `Signed-off-by:` line on each commit ([DCO](#sign-your-commits-dco)) is the
 record of that agreement. There is no CLA and no copyright assignment — you keep
-the copyright in what you write, and it is licensed out under the same AGPL-3.0
+the copyright in what you write, and it is licensed out under the same Apache-2.0
 terms as everything else here.

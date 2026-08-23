@@ -10,7 +10,7 @@ Like Bluetooth — but for your compute. Share GPU power between machines on you
 
 [![PyPI](https://img.shields.io/pypi/v/gpumesh?style=flat-square&logo=pypi&logoColor=white)](https://pypi.org/project/gpumesh/)
 [![Python](https://img.shields.io/pypi/pyversions/gpumesh?style=flat-square)](https://pypi.org/project/gpumesh/)
-[![License](https://img.shields.io/badge/License-AGPL--3.0-blue?style=flat-square)](https://github.com/K4-LABS/gpumesh/blob/master/LICENSE)
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue?style=flat-square)](https://github.com/K4-LABS/gpumesh/blob/master/LICENSE)
 [![Tests](https://img.shields.io/github/actions/workflow/status/K4-LABS/gpumesh/tests.yml?style=flat-square&label=tests)](https://github.com/K4-LABS/gpumesh/actions/workflows/tests.yml)
 [![Docker](https://img.shields.io/badge/docker-ready-2496ED?style=flat-square&logo=docker&logoColor=white)](https://hub.docker.com/r/samurai007ak/gpumesh)
 
@@ -63,7 +63,7 @@ Like Bluetooth — but for your compute. Share GPU power between machines on you
 ## 🆕 What's New in 3.0.0
 
 - **Job queue persistence** — submitted jobs survive coordinator restarts (SQLite-backed)
-- **AGPL-3.0-or-later license** — proper open-source copyleft
+- **AGPL-3.0 license** — proper open-source copyleft (relicensed to Apache-2.0 from 3.1.0)
 - **Loopback by default** — coordinator binds `127.0.0.1` unless you opt in
 - **Tailored startup errors** — clear messages for port conflicts, bad `--host-ip`, unwritable DB
 - **Radar token via getpass** — interactive claim tokens never echoed to terminal
@@ -133,6 +133,7 @@ results = train.map([
 | Tag | Description |
 |-----|-------------|
 | `latest` | Latest stable release (currently 3.0.0) |
+| `3.1.0` | Apache-2.0 licensed — same feature set as 3.0.0 |
 | `3.0.0` | AGPL-licensed with queue persistence, loopback default, security hardening |
 
 ```bash
@@ -385,7 +386,7 @@ Contributions welcome! See [CONTRIBUTING.md](https://github.com/K4-LABS/gpumesh/
 
 ## 📄 License
 
-GNU AGPL-3.0 — see [LICENSE](https://github.com/K4-LABS/gpumesh/blob/master/LICENSE) for details.
+Apache License 2.0 — see [LICENSE](https://github.com/K4-LABS/gpumesh/blob/master/LICENSE) for details.
 
 ---
 
