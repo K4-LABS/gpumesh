@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.1.0] — 2026-08-23
+
+### Changed
+- **The project is now licensed under the Apache License 2.0** (previously
+  AGPL-3.0-or-later at 3.0.0, MIT before that). Apache-2.0 is permissive,
+  carries an explicit patent grant, and keeps gpumesh maximally easy to
+  embed in downstream projects regardless of their license. The change is
+  not retroactive — every release remains available under the terms it was
+  published under (2.0.0 and earlier under MIT, 3.0.0 under AGPL-3.0-or-later).
+- **Every license statement in the repository now reports Apache-2.0**:
+  `pyproject.toml`'s SPDX `license` field, `LICENSE`, `CITATION.cff`, the
+  Dockerfile OCI label, README and Docker Hub badges/notices,
+  CONTRIBUTING/GOVERNANCE contribution terms, and SECURITY-INSIGHTS.yml.
+  SECURITY-INSIGHTS.yml still deliberately leaves `release.license` unset
+  until an Apache-licensed artifact is actually published to PyPI.
+
 ## [3.0.0] — 2026-08-18
 
 > **Why 3.0.0 and not 2.1.0:** under the project's stability policy
