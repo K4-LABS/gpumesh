@@ -6,9 +6,87 @@ Provides token hashing, rate limiting, and IP-based protection.
 import hashlib
 import hmac
 import ipaddress
+import os
+import secrets
 import time
 import threading
-from collections import defaultdict
+from collections import defaultdict, OrderedDict
+
+
+# --- Key derivation -------------------------------------------------------
+#
+# The coordinator holds one bearer token in memory and compares every request
+# against it. Two schemes exist:
+#
+#   "pbkdf2_sha256"  (default)  PBKDF2-HMAC-SHA256, random per-token salt,
+#                               configurable iteration count. Stored as
+#                               "pbkdf2_sha256$<iterations>$<salt>$<hash>".
+#   "sha256"         (legacy)   One SHA-256 round with a salt derived from the
+#                               token itself. Stored as "<salt>:<hash>".
+#
+# The legacy scheme stays *verifiable* forever so that a hash written by an
+# older gpumesh, or pinned in a config file, keeps working. It is no longer
+# what `hash_token` produces unless it is asked for.
+#
+# Override with GPUMESH_AUTH_KDF=sha256 (or pass scheme=) if a deployment
+# needs the old, fast, weak derivation back.
+KDF_PBKDF2 = "pbkdf2_sha256"
+KDF_LEGACY_SHA256 = "sha256"
+DEFAULT_KDF = KDF_PBKDF2
+
+# 200k rounds is ~80ms on a 2020-era laptop core. The number is a compromise
+# nobody should have to guess at: high enough that offline cracking of a
+# hand-chosen token costs real money, low enough that an unauthenticated
+# request cannot be used to pin a coordinator CPU. Successful verifications
+# are memoised (see _VerifyCache) so the steady-state cost of a busy mesh is
+# one HMAC per request, not one PBKDF2.
+DEFAULT_KDF_ITERATIONS = 200_000
+MIN_KDF_ITERATIONS = 1_000
+
+_PBKDF2_PREFIX = KDF_PBKDF2 + "$"
+
+
+def _resolve_kdf(scheme: str = None) -> str:
+    """Pick the derivation scheme: explicit argument, then env, then default."""
+    if scheme:
+        return scheme
+    env = (os.environ.get("GPUMESH_AUTH_KDF") or "").strip().lower()
+    if env in (KDF_PBKDF2, "pbkdf2"):
+        return KDF_PBKDF2
+    if env in (KDF_LEGACY_SHA256, "legacy"):
+        return KDF_LEGACY_SHA256
+    if env:
+        raise ValueError(
+            f"GPUMESH_AUTH_KDF={env!r} is not a known scheme. "
+            f"Use {KDF_PBKDF2!r} (default) or {KDF_LEGACY_SHA256!r} (legacy)."
+        )
+    return DEFAULT_KDF
+
+
+def _resolve_iterations(iterations: int = None) -> int:
+    """Pick the PBKDF2 cost factor: explicit argument, then env, then default.
+
+    Clamped at MIN_KDF_ITERATIONS. A cost factor set to 1 by a typo'd
+    environment variable would silently turn the KDF back into a single round,
+    which is the exact failure this function exists to prevent.
+    """
+    if iterations is None:
+        raw = (os.environ.get("GPUMESH_AUTH_KDF_ITERATIONS") or "").strip()
+        if raw:
+            try:
+                iterations = int(raw)
+            except ValueError:
+                raise ValueError(
+                    f"GPUMESH_AUTH_KDF_ITERATIONS={raw!r} is not an integer."
+                )
+        else:
+            iterations = DEFAULT_KDF_ITERATIONS
+    if iterations < MIN_KDF_ITERATIONS:
+        raise ValueError(
+            f"PBKDF2 iterations must be at least {MIN_KDF_ITERATIONS}, "
+            f"got {iterations}."
+        )
+    return iterations
 
 
 def is_loopback(ip: str) -> bool:
@@ -35,47 +113,159 @@ def is_loopback(ip: str) -> bool:
     return addr.is_loopback
 
 
-def hash_token(token: str, salt: str = None) -> str:
-    """Hash a token using SHA-256 with a salt.
+def _hash_legacy_sha256(token: str, salt: str = None) -> str:
+    """The pre-3.2 derivation: one SHA-256 round, salt derived from the token.
 
-    Returns format: "salt:hash" so salt is stored alongside the hash.
-    This keeps the plain token out of the coordinator's stored state.
-
-    When no salt is provided, a deterministic salt is derived from the token
-    itself so that the same token always produces the same hash across
-    coordinator restarts.  This is critical: workers persist the plain token
-    and expect it to keep working after the coordinator is restarted.
-
-    Be honest about what that buys.  A salt that is a pure function of its
-    input is not a salt in the sense that matters: it cannot make two hashes
-    of the same token differ, so it gives no protection against precomputation.
-    Together with a single SHA-256 round (no KDF, no iteration count), this is
-    fast to brute-force offline.  It is fine for the tokens gpumesh generates —
-    ``secrets.token_urlsafe(12)`` is ~72 bits of entropy, which no rainbow
-    table or GPU cracker will reach — and it is *not* fine for a short or
-    guessable ``--token`` the user chose by hand.  The defence against a weak
-    token is the token's entropy, not this function.
+    Kept so that a hash produced by an older gpumesh still verifies, and so
+    that a deployment that has measured the PBKDF2 cost and does not want it
+    can ask for this by name. Be honest about what it buys: a salt that is a
+    pure function of its input cannot make two hashes of the same token
+    differ, so it gives no protection against precomputation, and a single
+    SHA-256 round is fast to brute-force offline. It is fine for the tokens
+    gpumesh generates -- ``secrets.token_urlsafe(12)`` is ~72 bits, which no
+    rainbow table or GPU cracker will reach -- and it is *not* fine for a
+    short or guessable ``--token`` the user chose by hand.
     """
     if salt is None:
-        # Deterministic salt: hash of the token ensures the same token always
-        # produces the same salt, while different tokens get different salts.
         salt = hashlib.sha256(token.encode()).hexdigest()[:16]
     hash_val = hashlib.sha256(f"{salt}{token}".encode()).hexdigest()
     return f"{salt}:{hash_val}"
 
 
-def verify_token(token: str, stored: str) -> bool:
-    """Verify a token against its stored hash.
-    
-    The stored format is "salt:hash".
+def _hash_pbkdf2(token: str, salt: str = None, iterations: int = None) -> str:
+    """Derive a token hash with PBKDF2-HMAC-SHA256.
+
+    Returns ``"pbkdf2_sha256$<iterations>$<salt>$<hash>"``. The salt is 16
+    random bytes (32 hex chars) unless one is supplied, so two coordinators
+    started with the same token hold different hashes -- which is the property
+    the legacy deterministic salt could never have.
+
+    A supplied salt makes the call deterministic; that exists for tests and
+    for re-deriving against a stored hash, not as a mode to run in.
     """
+    iterations = _resolve_iterations(iterations)
+    if salt is None:
+        salt = secrets.token_hex(16)
+    derived = hashlib.pbkdf2_hmac(
+        "sha256", token.encode(), salt.encode(), iterations
+    ).hex()
+    return f"{_PBKDF2_PREFIX}{iterations}${salt}${derived}"
+
+
+def hash_token(token: str, salt: str = None, *, scheme: str = None,
+               iterations: int = None) -> str:
+    """Hash a token for in-memory comparison by the coordinator.
+
+    Defaults to PBKDF2-HMAC-SHA256 with a random per-token salt and a
+    configurable cost factor (``GPUMESH_AUTH_KDF_ITERATIONS``, default
+    200000). Pass ``scheme="sha256"`` -- or set ``GPUMESH_AUTH_KDF=sha256`` --
+    for the legacy single-round derivation.
+
+    The result is never written to the database. The coordinator derives it
+    once at startup from the token it was given and keeps it in memory; see
+    :class:`SecurityManager`. Workers persist the *plain* token, which is why
+    a random salt is safe here: nothing has to re-derive the same hash after a
+    restart.
+    """
+    if _resolve_kdf(scheme) == KDF_LEGACY_SHA256:
+        return _hash_legacy_sha256(token, salt)
+    return _hash_pbkdf2(token, salt, iterations)
+
+
+def verify_token(token: str, stored: str) -> bool:
+    """Verify a token against its stored hash, in any of the three formats.
+
+    Format is detected from the string, not from configuration, so a
+    coordinator running with ``GPUMESH_AUTH_KDF=sha256`` still verifies a
+    PBKDF2 hash and the other way round. All three comparisons go through
+    ``hmac.compare_digest``.
+
+      * ``pbkdf2_sha256$<iterations>$<salt>$<hash>`` -- current
+      * ``<salt>:<hash>``                            -- legacy salted SHA-256
+      * ``<hash>``                                   -- legacy unsalted SHA-256
+
+    A malformed PBKDF2 string returns False rather than raising: this runs on
+    the request path, and an exception there is a 500 that tells an
+    unauthenticated caller something about the coordinator's state.
+    """
+    if not isinstance(stored, str):
+        return False
+
+    if stored.startswith(_PBKDF2_PREFIX):
+        parts = stored.split("$")
+        if len(parts) != 4:
+            return False
+        _, iter_text, salt, hash_val = parts
+        try:
+            iterations = int(iter_text)
+        except ValueError:
+            return False
+        if iterations < 1:
+            return False
+        computed = hashlib.pbkdf2_hmac(
+            "sha256", token.encode(), salt.encode(), iterations
+        ).hex()
+        return hmac.compare_digest(computed, hash_val)
+
     if ":" not in stored:
         # Legacy format without salt
         raw_hash = hashlib.sha256(token.encode()).hexdigest()
         return hmac.compare_digest(raw_hash, stored)
+
     salt, hash_val = stored.split(":", 1)
     computed = hashlib.sha256(f"{salt}{token}".encode()).hexdigest()
     return hmac.compare_digest(computed, hash_val)
+
+
+class _VerifyCache:
+    """Memoise successful token verifications so PBKDF2 is paid once.
+
+    Without this, raising the KDF cost would hand anyone who can reach the
+    port a CPU amplifier: every unauthenticated request would cost the
+    coordinator 200000 SHA-256 rounds, and a worker polling for tasks would
+    pay it several times a second for a token that has not changed.
+
+    What is cached is a keyed digest of the token, never the token itself:
+    ``HMAC-SHA256(process_key, token)``, where ``process_key`` is 32 random
+    bytes generated at construction and never leaves the process. A heap dump
+    of the cache therefore yields nothing an attacker can replay against
+    another coordinator, or against this one after a restart.
+
+    Only *successes* are cached. Caching failures would let a brute-forcer
+    replay a wrong guess for free, and would sit in front of the rate limiter,
+    which is the thing that is supposed to be counting those guesses.
+    """
+
+    def __init__(self, maxsize: int = 64):
+        self._key = secrets.token_bytes(32)
+        self._maxsize = maxsize
+        self._entries = OrderedDict()
+        self._lock = threading.Lock()
+
+    def _digest(self, token: str) -> str:
+        return hmac.new(self._key, token.encode(), hashlib.sha256).hexdigest()
+
+    def check(self, token: str, stored: str) -> bool:
+        """Return True if ``token`` previously verified against ``stored``."""
+        digest = self._digest(token)
+        with self._lock:
+            hit = self._entries.get(digest)
+            if hit is None or not hmac.compare_digest(hit, stored):
+                return False
+            self._entries.move_to_end(digest)
+            return True
+
+    def remember(self, token: str, stored: str) -> None:
+        digest = self._digest(token)
+        with self._lock:
+            self._entries[digest] = stored
+            self._entries.move_to_end(digest)
+            while len(self._entries) > self._maxsize:
+                self._entries.popitem(last=False)
+
+    def clear(self) -> None:
+        with self._lock:
+            self._entries.clear()
 
 
 class RateLimiter:
@@ -230,11 +420,28 @@ class IPAllowlist:
 class SecurityManager:
     """Combined security manager for the coordinator."""
     
-    def __init__(self, token: str, max_attempts: int = 5, 
-                 allowed_ips: list = None):
-        self.token_hash = hash_token(token)
+    def __init__(self, token: str, max_attempts: int = 5,
+                 allowed_ips: list = None, *, kdf: str = None,
+                 kdf_iterations: int = None):
+        """
+        Args:
+            token: The mesh bearer token, hashed once here and then dropped.
+            max_attempts: Failed attempts per IP before lockout.
+            allowed_ips: Optional IP allowlist.
+            kdf: Derivation scheme -- ``"pbkdf2_sha256"`` (default) or
+                ``"sha256"`` (legacy). Falls back to ``GPUMESH_AUTH_KDF``.
+            kdf_iterations: PBKDF2 cost factor. Falls back to
+                ``GPUMESH_AUTH_KDF_ITERATIONS``, then 200000.
+        """
+        self.kdf = _resolve_kdf(kdf)
+        self.token_hash = hash_token(token, scheme=self.kdf,
+                                     iterations=kdf_iterations)
         self.rate_limiter = RateLimiter(max_attempts=max_attempts)
         self.ip_allowlist = IPAllowlist(allowed_ips)
+        # See _VerifyCache: the KDF cost is paid on the first request bearing
+        # a given token and never again, so a polling worker does not turn the
+        # cost factor into a self-inflicted denial of service.
+        self._verify_cache = _VerifyCache()
     
     def verify_request(self, token: str, ip: str) -> tuple[bool, str]:
         """Verify a request. Returns (allowed, error_message).
@@ -281,8 +488,11 @@ class SecurityManager:
                 f"retry with the same token."
             )
 
-        # Verify token
-        if not verify_token(token, self.token_hash):
+        # Verify token. The cache short-circuits the KDF for a token that has
+        # already verified against this exact hash; a miss falls through to
+        # the full derivation.
+        if not (self._verify_cache.check(token, self.token_hash)
+                or verify_token(token, self.token_hash)):
             locked_out = self.rate_limiter.record_failure(ip)
             if self.rate_limiter.is_exempt(ip):
                 # The operator's own machine. Never locked out, so do not
@@ -306,5 +516,6 @@ class SecurityManager:
             )
 
         # Success - clear failure history
+        self._verify_cache.remember(token, self.token_hash)
         self.rate_limiter.record_success(ip)
         return True, ""
