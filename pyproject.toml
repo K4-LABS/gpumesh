@@ -243,8 +243,6 @@ ignore = [
     # Docker Hub's own README, published to Docker Hub rather than PyPI.
     "DOCKER_HUB_README.md",
     ".env.example",
-    # Local AI-tooling state, gitignored but listed defensively.
-    "skills-lock.json",
     # Maintainer release tooling, excluded from the wheel by
     # [tool.setuptools.packages.find] as well.
     "scripts/**",
@@ -322,10 +320,6 @@ target-version = "py39"
 
 extend-exclude = [
     "examples",
-    ".agents",
-    ".claude",
-    ".continue",
-    ".forge",
 ]
 
 [tool.ruff.lint]

@@ -22,11 +22,6 @@ default_language_version:
 # Generated/vendored paths that no hook should touch.
 exclude: |
   (?x)^(
-      \.agents/|
-      \.claude/|
-      \.continue/|
-      \.forge/|
-      skills-lock\.json|
       .*\.egg-info/
   )
 

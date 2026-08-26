@@ -73,4 +73,3 @@ py.typed        text eol=lf
 # Vendored/generated content should not skew GitHub's language bar or clutter
 # `git diff` output.
 *.lock          -diff
-skills-lock.json linguist-generated=true
