@@ -417,3 +417,92 @@ class TestSafePrint:
         safe_print("\u2713 \u2717 \u2588", file=buf)
         output = buf.getvalue()
         assert len(output) > 0
+
+
+class TestFormatResultStrictMode:
+    """Under strict mode the display shows the refusal, not the blob.
+
+    ``_format_result`` unwraps the serializer envelope so the user sees the
+    value their function returned. Strict mode makes that unwrap raise, and
+    the tempting fallback — print ``raw`` — would dump a screenful of base64
+    onto the terminal. That reads as a rendering bug rather than as a security
+    decision, and it buries the one line worth reading, so the refusal has to
+    be what gets rendered.
+    """
+
+    @staticmethod
+    def _pickled_envelope():
+        """A cloudpickle envelope as it arrives from the coordinator."""
+        pytest.importorskip("cloudpickle")
+        np = pytest.importorskip("numpy")
+        from gpumesh.serializer import encode_result
+
+        return json.loads(json.dumps(encode_result({"arr": np.arange(3)})))
+
+    def test_strict_marker_replaces_the_base64_envelope(self, monkeypatch):
+        from gpumesh.client import _format_result
+        from gpumesh.serializer import RESULT_ENVELOPE_KEY
+
+        envelope = self._pickled_envelope()
+        blob = envelope[RESULT_ENVELOPE_KEY]["value"]
+        monkeypatch.setenv("GPUMESH_STRICT_RESULTS", "1")
+
+        text = _format_result(envelope)
+        assert "_gpumesh_strict" in text
+        assert blob not in text
+        assert RESULT_ENVELOPE_KEY not in text
+        # The line has to say which switch produced it, or the user cannot
+        # tell a refusal from a broken task.
+        assert "--strict" in text or "GPUMESH_STRICT_RESULTS" in text
+
+    def test_strict_marker_survives_compact_rendering(self, monkeypatch):
+        """The one-line progress view renders the same refusal, not the blob."""
+        from gpumesh.client import _format_result
+        from gpumesh.serializer import RESULT_ENVELOPE_KEY
+
+        envelope = self._pickled_envelope()
+        blob = envelope[RESULT_ENVELOPE_KEY]["value"]
+        monkeypatch.setenv("GPUMESH_STRICT_RESULTS", "1")
+
+        text = _format_result(envelope, compact=True)
+        assert "_gpumesh_strict" in text
+        assert blob not in text
+
+    def test_non_strict_still_shows_the_value(self, monkeypatch):
+        """Without the flag nothing changes: the decoded value is displayed."""
+        pytest.importorskip("cloudpickle")
+        from gpumesh.client import _format_result
+
+        monkeypatch.delenv("GPUMESH_STRICT_RESULTS", raising=False)
+        text = _format_result(self._pickled_envelope())
+        assert "_gpumesh_strict" not in text
+        # numpy arrays are not JSON-encodable, so this falls through to repr().
+        assert "arr" in text
+
+    def test_json_results_are_untouched_by_strict_mode(self, monkeypatch):
+        """Strict mode only refuses pickled results, never plain JSON ones."""
+        from gpumesh.client import _format_result
+        from gpumesh.serializer import encode_result
+
+        monkeypatch.setenv("GPUMESH_STRICT_RESULTS", "1")
+        assert _format_result(encode_result({"acc": 0.9})) == '{"acc": 0.9}'
+        assert _format_result({"rows": 10}) == '{"rows": 10}'
+
+    def test_print_job_does_not_leak_the_blob(self, monkeypatch, capsys):
+        """The end-to-end display path, since that is where a user meets it."""
+        from gpumesh.client import print_job
+        from gpumesh.serializer import RESULT_ENVELOPE_KEY
+
+        envelope = self._pickled_envelope()
+        blob = envelope[RESULT_ENVELOPE_KEY]["value"]
+        monkeypatch.setenv("GPUMESH_STRICT_RESULTS", "1")
+
+        print_job({
+            "id": "j1", "name": "strict_job", "finished": True,
+            "counts": {"done": 1},
+            "tasks": [{"id": "t1", "status": "done", "cost": 1.0,
+                       "worker_id": "w1", "result": envelope, "error": None}],
+        })
+        out = capsys.readouterr().out
+        assert "_gpumesh_strict" in out
+        assert blob not in out
