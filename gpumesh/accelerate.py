@@ -511,6 +511,14 @@ class AcceleratedFunction:
                             raw.pop("_task_index", None)
                         # Unwrap the envelope so a mesh call returns exactly
                         # what a local call would have returned.
+                        #
+                        # Under strict mode this raises UntrustedResultError
+                        # out of the decorated call, on purpose. A decorated
+                        # function is supposed to be indistinguishable from
+                        # the local one, so the honest failure is an exception
+                        # at the call site rather than a placeholder object
+                        # that the caller's next line would silently compute
+                        # with.
                         result = {} if raw is None else serializer.decode_result(raw)
                         if os.environ.get("GPUMESH_VERBOSE") == "1":
                             safe_print(green(f"[accelerate] mesh result: {result}"))
