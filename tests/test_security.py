@@ -1,7 +1,9 @@
 """Tests for gpumesh.security module."""
 
+import ast
 import hashlib
 import inspect
+import textwrap
 import time
 import pytest
 
@@ -20,13 +22,57 @@ from gpumesh.security import (
 class TestTokenHashing:
     """Tests for token hashing and verification."""
     
-    def test_hash_token_returns_salt_and_hash(self):
-        """Hash should return format 'salt:hash'."""
+    def test_hash_token_defaults_to_pbkdf2(self):
+        """The default derivation is PBKDF2, tagged with its own cost factor."""
         result = hash_token("secret123")
+        scheme, iterations, salt, hash_val = result.split("$")
+        assert scheme == "pbkdf2_sha256"
+        assert int(iterations) == gpumesh.security.DEFAULT_KDF_ITERATIONS
+        assert len(salt) == 32  # 16 random bytes, hex
+        assert len(hash_val) == 64  # SHA-256 output, hex
+
+    def test_pbkdf2_salt_is_random_per_call(self):
+        """Two hashes of the same token must differ -- the whole point of #16."""
+        assert hash_token("secret123") != hash_token("secret123")
+
+    def test_pbkdf2_cost_factor_is_configurable(self):
+        """The iteration count is a knob, and it is recorded in the hash."""
+        result = hash_token("secret123", iterations=5000)
+        assert result.split("$")[1] == "5000"
+        assert verify_token("secret123", result) is True
+
+    def test_pbkdf2_rejects_a_cost_factor_that_would_disable_the_kdf(self):
+        with pytest.raises(ValueError):
+            hash_token("secret123", iterations=1)
+
+    def test_hash_token_legacy_scheme_returns_salt_and_hash(self):
+        """The legacy scheme still produces 'salt:hash' when asked for."""
+        result = hash_token("secret123", scheme="sha256")
         assert ":" in result
         salt, hash_val = result.split(":", 1)
         assert len(salt) == 16  # Deterministic salt: 16 hex chars
         assert len(hash_val) == 64  # SHA-256 = 64 hex chars
+
+    def test_legacy_hashes_still_verify(self):
+        """A hash written by an older gpumesh keeps working. No flag day."""
+        salted = hash_token("secret123", scheme="sha256")
+        assert verify_token("secret123", salted) is True
+        assert verify_token("wrong", salted) is False
+        unsalted = hashlib.sha256(b"secret123").hexdigest()
+        assert verify_token("secret123", unsalted) is True
+
+    def test_malformed_pbkdf2_hash_is_a_denial_not_a_crash(self):
+        """verify_token runs on the request path; it must never raise there."""
+        assert verify_token("secret123", "pbkdf2_sha256$notanint$aa$bb") is False
+        assert verify_token("secret123", "pbkdf2_sha256$1000$aa") is False
+        assert verify_token("secret123", None) is False
+
+    def test_env_var_selects_the_legacy_scheme(self, monkeypatch):
+        monkeypatch.setenv("GPUMESH_AUTH_KDF", "sha256")
+        assert ":" in hash_token("secret123")
+        monkeypatch.setenv("GPUMESH_AUTH_KDF", "nonsense")
+        with pytest.raises(ValueError):
+            hash_token("secret123")
     
     def test_hash_token_with_custom_salt(self):
         """Hash with custom salt should be deterministic."""
@@ -432,21 +478,60 @@ class TestRejectionMessagesAreDistinguishable:
 
 
 class TestTokenHashingLimits:
-    """The deterministic salt is a documented trade-off, not a secret one."""
+    """The legacy scheme's weaknesses are documented, not secret."""
 
-    def test_salt_is_a_pure_function_of_the_token(self):
-        """Same token -> same salt -> same hash, across coordinator restarts.
+    def test_legacy_salt_is_a_pure_function_of_the_token(self):
+        """Legacy only: same token -> same salt -> same hash.
 
-        This is what lets a worker keep its persisted plain token working after
-        the coordinator restarts. It also means the salt adds no precomputation
-        resistance, which SECURITY.md states outright.
+        This is what let a worker's persisted plain token keep working after
+        the coordinator restarted. It also means the legacy salt adds no
+        precomputation resistance, which is why it is no longer the default.
+        The current scheme does not need the property: the hash lives in the
+        coordinator's memory and is re-derived from the token at every start.
         """
-        assert hash_token("secret123") == hash_token("secret123")
-        salt = hash_token("secret123").split(":", 1)[0]
+        assert (hash_token("secret123", scheme="sha256")
+                == hash_token("secret123", scheme="sha256"))
+        salt = hash_token("secret123", scheme="sha256").split(":", 1)[0]
         assert salt == hashlib.sha256(b"secret123").hexdigest()[:16]
 
     def test_verification_is_timing_safe(self):
         """verify_token must go through hmac.compare_digest, not ==."""
         source = inspect.getsource(gpumesh.security.verify_token)
-        assert "hmac.compare_digest" in source
-        assert source.count("hmac.compare_digest") == 2  # legacy + salted paths
+        # Count the code, not the docstring -- the docstring names the
+        # function too, and a prose edit must not be able to fail this test.
+        #
+        # Strip it through the AST rather than by subtracting __doc__ from the
+        # source text. Python 3.13 dedents docstrings at compile time
+        # (gh-81283), so from 3.13 on __doc__ no longer appears verbatim in
+        # the source and a str.replace() silently removes nothing -- which is
+        # how this test passed on 3.9-3.12 and failed on 3.13/3.14 counting
+        # the docstring's own mention of the function.
+        module = ast.parse(textwrap.dedent(source))
+        func = module.body[0]
+        if (func.body and isinstance(func.body[0], ast.Expr)
+                and isinstance(func.body[0].value, ast.Constant)
+                and isinstance(func.body[0].value.value, str)):
+            func.body = func.body[1:]
+        body = ast.unparse(func)
+        assert "hmac.compare_digest" in body
+        # pbkdf2 + legacy salted + legacy unsalted, and no bare == on a digest.
+        assert body.count("hmac.compare_digest") == 3
+        assert "== hash_val" not in body
+
+    def test_verify_cache_is_keyed_not_plaintext(self):
+        """A cached verification must not leave the token in the cache."""
+        manager = SecurityManager("secret123", kdf_iterations=1000)
+        ok, _ = manager.verify_request("secret123", "203.0.113.9")
+        assert ok is True
+        stored = list(manager._verify_cache._entries.keys())
+        assert stored and "secret123" not in stored[0]
+
+    def test_verify_cache_does_not_admit_a_wrong_token(self):
+        manager = SecurityManager("secret123", kdf_iterations=1000)
+        assert manager.verify_request("secret123", "203.0.113.9")[0] is True
+        assert manager.verify_request("wrong", "203.0.113.9")[0] is False
+
+    def test_manager_accepts_the_legacy_scheme(self):
+        manager = SecurityManager("secret123", kdf="sha256")
+        assert ":" in manager.token_hash
+        assert manager.verify_request("secret123", "203.0.113.9")[0] is True

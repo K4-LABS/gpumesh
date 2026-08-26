@@ -25,18 +25,35 @@ the code wins and the difference is noted.
 
 | | |
 |---|---|
-| Base URL | `http://<coordinator-host>:<port>` — 8000 for `gpumesh serve`, 8732 in the Docker image |
-| Transport | Plain HTTP/1.1. **No TLS.** Put the mesh on Tailscale or an ngrok tunnel if it crosses a network you do not control |
+| Base URL | `http://<coordinator-host>:<port>` — or `https://` when the coordinator was started with `--tls`. 8000 for `gpumesh serve`, 8732 in the Docker image |
+| Transport | HTTP/1.1. **Unencrypted by default.** `gpumesh serve --tls` wraps the listener in TLS 1.2+ with a self-signed certificate, which is enough to keep the token out of a LAN packet capture. Put the mesh on Tailscale or an ngrok tunnel if it crosses a network you do not control |
 | Auth header | `X-Auth-Token: <token>` on **every** request, including `GET` |
 | Content type | `application/json; charset=utf-8` both ways |
 | Max request body | 10 MB (`CoordinatorHandler.MAX_CONTENT_LENGTH`). Oversized bodies are drained and answered `413` so the connection stays usable |
 | Server | `ThreadingHTTPServer`; one thread per request, no keep-alive assumptions |
 
-The token is compared with `hmac.compare_digest` against a salted SHA-256
-hash held in memory only — it is never written to the database. Failed
-attempts from non-loopback addresses are rate limited per IP, and loopback is
-exempt, because anyone who can open a socket from `127.0.0.1` can already
-read the token out of the process and the config file rather than guess it.
+The token is compared with `hmac.compare_digest` against a
+PBKDF2-HMAC-SHA256 hash (random per-token salt, 200 000 iterations by
+default) held in memory only — it is never written to the database, and it is
+re-derived from the token every time the coordinator starts. Hashes in the
+older `salt:hash` single-round format still verify, so a pinned or persisted
+hash keeps working; set `GPUMESH_AUTH_KDF=sha256` to go back to producing
+them.
+
+A successful verification is memoised in memory, keyed by an HMAC of the
+token under a random per-process key, so a worker polling several times a
+second pays the derivation once rather than on every request. Failures are
+never cached — caching them would let a brute-forcer replay a wrong guess for
+free, in front of the rate limiter that exists to count those guesses.
+
+Failed attempts from non-loopback addresses are rate limited per IP, and
+loopback is exempt, because anyone who can open a socket from `127.0.0.1` can
+already read the token out of the process and the config file rather than
+guess it.
+
+Clients talking to a `--tls` coordinator need to trust its certificate:
+point `GPUMESH_TLS_CA` at a copy of it (verified), or set
+`GPUMESH_TLS_INSECURE=1` (encrypted, but nothing checks who answered).
 
 ### Status codes
 

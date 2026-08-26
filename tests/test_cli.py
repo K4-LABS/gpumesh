@@ -740,7 +740,11 @@ class TestCLIArgumentParsing:
             # Verify port was passed correctly. The default DB path is the
             # stable per-user location, not the working directory.
             from gpumesh.connection_manager import default_db_path
-            mock_serve.assert_called_once_with("127.0.0.1", 9000, default_db_path(), "test123", discovery=True, safe_mode=False)
+            mock_serve.assert_called_once_with(
+                "127.0.0.1", 9000, default_db_path(), "test123",
+                discovery=True, safe_mode=False,
+                tls=False, tls_cert=None, tls_key=None,
+            )
 
     def test_serve_token_argument(self):
         """--token argument is correctly parsed."""
@@ -758,7 +762,11 @@ class TestCLIArgumentParsing:
 
             # Verify token was passed correctly
             from gpumesh.connection_manager import default_db_path
-            mock_serve.assert_called_once_with("127.0.0.1", 8000, default_db_path(), "mysecrettoken", discovery=True, safe_mode=False)
+            mock_serve.assert_called_once_with(
+                "127.0.0.1", 8000, default_db_path(), "mysecrettoken",
+                discovery=True, safe_mode=False,
+                tls=False, tls_cert=None, tls_key=None,
+            )
 
     def test_serve_default_token_generated(self):
         """Token is generated when not provided."""
@@ -777,7 +785,11 @@ class TestCLIArgumentParsing:
 
             # Verify generated token was used
             from gpumesh.connection_manager import default_db_path
-            mock_serve.assert_called_once_with("127.0.0.1", 8000, default_db_path(), "generatedtoken123", discovery=True, safe_mode=False)
+            mock_serve.assert_called_once_with(
+                "127.0.0.1", 8000, default_db_path(), "generatedtoken123",
+                discovery=True, safe_mode=False,
+                tls=False, tls_cert=None, tls_key=None,
+            )
 
     def test_serve_reads_token_from_environment(self, monkeypatch):
         """GPUMESH_TOKEN is honoured, matching `join`.
@@ -804,6 +816,7 @@ class TestCLIArgumentParsing:
             mock_serve.assert_called_once_with(
                 "127.0.0.1", 8000, default_db_path(), "token-from-env",
                 discovery=True, safe_mode=False,
+                tls=False, tls_cert=None, tls_key=None,
             )
 
     def test_serve_explicit_token_beats_environment(self, monkeypatch):
@@ -825,6 +838,7 @@ class TestCLIArgumentParsing:
             mock_serve.assert_called_once_with(
                 "127.0.0.1", 8000, default_db_path(), "explicit",
                 discovery=True, safe_mode=False,
+                tls=False, tls_cert=None, tls_key=None,
             )
 
     def test_quickjoin_token_required(self):
