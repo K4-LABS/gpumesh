@@ -446,8 +446,8 @@ line of code came from has a recorded answer.
 AI-assisted contributions are welcome. Two conditions:
 
 - **Say so in the PR description.** One line is enough — which tool, and roughly
-  what it did ("Claude wrote the first draft of the retry test"). If you prefer a
-  trailer, `Assisted-by: <tool>` in the commit message works.
+  what it did ("the first draft of the retry test was model-generated"). If you
+  prefer a trailer, `Assisted-by: <tool>` in the commit message works.
 - **Confirm you have read and run the code yourself.** You are the author for
   every purpose that matters here: you sign it off, you answer review comments on
   it, and you are the one who understands why it works.

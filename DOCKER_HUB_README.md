@@ -89,7 +89,7 @@ docker run -d \
   --name gpumesh-coordinator \
   -p 127.0.0.1:8732:8732 \
   -e GPUMESH_TOKEN \
-  samurai007ak/gpumesh:3.0.0 \
+  samurai007ak/gpumesh:3.2.0 \
   serve --host 0.0.0.0 --port 8732
 ```
 
@@ -101,7 +101,7 @@ docker run -d \
 docker run -d \
   --name gpumesh-worker \
   -e GPUMESH_TOKEN \
-  samurai007ak/gpumesh:3.0.0 \
+  samurai007ak/gpumesh:3.2.0 \
   join http://coordinator-ip:8732
 ```
 
@@ -137,7 +137,7 @@ results = train.map([
 | `3.0.0` | AGPL-licensed with queue persistence, loopback default, security hardening |
 
 ```bash
-docker pull samurai007ak/gpumesh:3.0.0
+docker pull samurai007ak/gpumesh:3.2.0
 # or
 docker pull samurai007ak/gpumesh:latest
 ```
@@ -145,10 +145,10 @@ docker pull samurai007ak/gpumesh:latest
 ### Verify
 
 ```bash
-docker run --rm samurai007ak/gpumesh:3.0.0 --version
-# gpumesh 3.0.0 (3.11.9, linux)
+docker run --rm samurai007ak/gpumesh:3.2.0 --version
+# gpumesh 3.2.0 (3.11.9, linux)
 
-docker run --rm samurai007ak/gpumesh:3.0.0 doctor --json
+docker run --rm samurai007ak/gpumesh:3.2.0 doctor --json
 # {"version": "3.0.0", "python": "3.11.9", "status": "ok"}
 ```
 
@@ -161,7 +161,7 @@ Create a `docker-compose.yml`:
 ```yaml
 services:
   coordinator:
-    image: samurai007ak/gpumesh:3.0.0
+    image: samurai007ak/gpumesh:3.2.0
     ports:
       - "${GPUMESH_BIND:-127.0.0.1}:${GPUMESH_PORT:-8732}:8732"
       - "${GPUMESH_BIND:-127.0.0.1}:48900:48900/udp"
@@ -184,7 +184,7 @@ services:
       - ALL
 
   worker:
-    image: samurai007ak/gpumesh:3.0.0
+    image: samurai007ak/gpumesh:3.2.0
     depends_on:
       coordinator:
         condition: service_healthy
