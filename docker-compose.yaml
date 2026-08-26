@@ -56,7 +56,7 @@ services:
     # wire format is pickled Python, a version skew between coordinator and
     # worker is a real failure, not a cosmetic one. Bump this line with the
     # release.
-    image: samurai007ak/gpumesh:3.1.0
+    image: samurai007ak/gpumesh:3.2.0
     ports:
       # host-side bind : container port. See the note above.
       - "${GPUMESH_BIND:-127.0.0.1}:${GPUMESH_PORT:-8732}:8732"
@@ -113,7 +113,7 @@ services:
       - ALL
 
   worker:
-    image: samurai007ak/gpumesh:3.1.0
+    image: samurai007ak/gpumesh:3.2.0
     depends_on:
       coordinator:
         condition: service_healthy
