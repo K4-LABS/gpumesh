@@ -1,14 +1,15 @@
 # CLI reference
 
-Two flags are global and go *before* the subcommand: `-v` / `--verbose` for
-debug-level logging, and `--json-logs` to emit logs as JSON lines (for Docker).
+Three flags are global and go *before* the subcommand: `-v` / `--verbose` for
+debug-level logging, `--json-logs` to emit logs as JSON lines (for Docker), and
+`--strict` to refuse pickled results (see [Strict results](#strict-results)).
 
 ## Server & connection
 
 | Command | Description |
 |---------|-------------|
 | `gpumesh setup` | Interactive setup wizard (coordinator or worker) |
-| `gpumesh serve` | Start the coordinator (`--host`, `--port`, `--token`, `--db`, `--host-ip`, `--public`, `--tailscale`, `--no-discovery`, `--safe-mode`, `--no-self-worker`, `--color`/`--no-color`) |
+| `gpumesh serve` | Start the coordinator (`--host`, `--port`, `--token`, `--db`, `--host-ip`, `--public`, `--tailscale`, `--no-discovery`, `--safe-mode`, `--tls`, `--tls-cert`, `--tls-key`, `--no-self-worker`, `--color`/`--no-color`) |
 | `gpumesh join URL` | Join a mesh as a worker (`--token`, `--timeout`, `--safe-mode`, `--color`/`--no-color`) |
 | `gpumesh quickjoin [URL]` | One-click: install, detect GPU, join (`--token`, `--tailscale`, `--port`, `--timeout`, `--safe-mode`) |
 | `gpumesh worker` | Broadcast presence and wait to be claimed (`--token`, `--claim-port`, `--timeout`, `--safe-mode`) |
@@ -45,6 +46,102 @@ Setting `--host-ip` alone never opens the port up. Use `--host 0.0.0.0` for
 that, and read the banner it prints. `--host-ip` is for when auto-detection
 picks a VPN or hypervisor adapter and remote workers time out against an
 address only your machine can route to.
+
+## TLS
+
+The mesh speaks plain HTTP by default. `gpumesh serve --tls` makes *that one
+coordinator* speak HTTPS instead; every URL it prints, saves to the connection
+file, or self-checks switches to `https://` to match.
+
+| Flag | Effect |
+|------|--------|
+| `--tls` | Serve HTTPS. With no `--tls-cert`/`--tls-key`, generate a self-signed pair under `~/.gpumesh/tls/` on first use and reuse it on every later start |
+| `--tls-cert PATH` | Serve this certificate instead of a generated one |
+| `--tls-key PATH` | The private key for `--tls-cert` |
+
+**`--tls-cert` and `--tls-key` must be given together.** One without the other
+is a startup error, raised deliberately after the socket is created but before
+it starts serving, so the operator sees it on screen immediately rather than
+discovering it as a per-connection failure on a worker an hour later.
+
+The generated certificate is valid for 825 days, is regenerated once it is
+within 30 days of expiry, and its key is written 0600 in a 0700 directory. Its
+SAN covers `localhost`, this machine's hostname, and every local address the
+machine can see, so workers can dial it by any of them. Generation uses the
+`cryptography` library if it is installed (`pip install gpumesh[tls]`) and the
+`openssl` binary otherwise; with neither, `serve` refuses to start and names
+both plus `--tls-cert` as the fixes. At startup the coordinator prints the
+certificate path and its SHA-256 fingerprint.
+
+On the worker side, three ways to trust it:
+
+| Setting | Result |
+|---------|--------|
+| `GPUMESH_TLS_CA=/path/to/coordinator-cert.pem` | Encrypted and **verified** against the certificate you copied over. Check it against the fingerprint the coordinator printed |
+| A certificate from a real CA passed to `--tls-cert` | Encrypted and verified with nothing to set on the worker. An internal CA counts, and so does `tailscale cert` |
+| `GPUMESH_TLS_INSECURE=1` | Encrypted, **unauthenticated**. An active on-path attacker can still substitute a certificate. Better than plain HTTP, worse than either row above |
+
+With none of them set, the system trust store is used, which correctly refuses
+a self-signed certificate. That failure is rewritten into an instruction naming
+`GPUMESH_TLS_CA` and `GPUMESH_TLS_INSECURE`, because "certificate verify
+failed" on its own sends people to the wrong fix.
+
+**What `--tls` is worth.** It closes passive eavesdropping on a LAN: the token
+stops travelling in cleartext and pickled payloads cannot be rewritten in
+flight. It does not authenticate the coordinator unless you moved the
+certificate by hand, and it does not make gpumesh safe to face the internet.
+Cross-network use still wants a tunnel — `--tailscale` or `--public`.
+
+A coordinator and one worker, end to end:
+
+```bash
+# On the coordinator. Prints the certificate path and its SHA-256 fingerprint.
+gpumesh serve --host 0.0.0.0 --tls --token SHARED_TOKEN
+#   [mesh] TLS enabled, certificate /home/you/.gpumesh/tls/coordinator-cert.pem
+#   [mesh] self-signed SHA-256 3A:7F:...
+#   Workers: gpumesh join https://192.168.1.10:8000 --token SHARED_TOKEN
+
+# Copy the certificate to the worker (scp, a USB stick, anything you trust).
+scp you@192.168.1.10:~/.gpumesh/tls/coordinator-cert.pem ./coordinator-cert.pem
+
+# On the worker. Verify the fingerprint matches what the coordinator printed.
+openssl x509 -in coordinator-cert.pem -noout -fingerprint -sha256
+
+export GPUMESH_TLS_CA=$PWD/coordinator-cert.pem
+gpumesh join https://192.168.1.10:8000 --token SHARED_TOKEN
+```
+
+The URL must say `https://`. A worker dialling `http://` at a TLS listener gets
+a connection reset and no explanation.
+
+## Strict results
+
+A result comes back either as JSON or, for anything JSON cannot carry, as
+cloudpickled bytes. Decoding the second kind runs the worker's code on the
+machine that submitted the job.
+
+`gpumesh --strict` refuses to do that: a pickled result raises instead of being
+unpickled, and the job output shows a `_gpumesh_strict` marker where the value
+would be. JSON-encodable results still work.
+
+It is a **top-level flag**, so it goes before the subcommand:
+
+```bash
+gpumesh --strict status JOB_ID      # correct
+gpumesh status --strict JOB_ID      # error: unrecognized argument
+```
+
+`GPUMESH_STRICT_RESULTS=1` is equivalent and works anywhere, including in the
+environment of a script that never types the flag.
+
+The cost is not hypothetical: under `--strict`, a task that returns a tensor, a
+numpy array or a DataFrame stops working. That is the trade. With strict mode
+off, the first pickled decode in a process emits a one-time `RuntimeWarning`.
+
+`--strict` and `--safe-mode` point in opposite directions and are not
+substitutes for each other. `--safe-mode` is set on the coordinator and stops
+functions going *out* to workers; `--strict` is set on the submitting client
+and stops pickled results coming *back*.
 
 ## Jobs
 
@@ -96,6 +193,11 @@ Job and monitoring commands (`submit`, `status`, `cancel`, `retry`, `workers`, `
 | `GPUMESH_LOCAL=1` | `@mesh` / `@accelerate` | Force local execution, never touch the mesh |
 | `GPUMESH_VERBOSE=1` | `@mesh` / `@accelerate` | Print which device handled each task |
 | `GPUMESH_COLOR` | All output | `1` forces colour, `0` disables it, `auto` (default) checks whether stdout is a TTY |
+| `GPUMESH_TLS_CA` | Anything that dials a coordinator | Path to the coordinator's certificate (or a CA bundle). Verification is on, against that file. A path that does not exist is refused at startup rather than silently ignored |
+| `GPUMESH_TLS_INSECURE=1` | Anything that dials a coordinator | Encrypt but do not verify. An active on-path attacker can still impersonate the coordinator |
+| `GPUMESH_STRICT_RESULTS=1` | Anything that decodes a result | Refuse to unpickle results; same as the top-level `--strict` |
+| `GPUMESH_AUTH_KDF` | `serve` | Token hashing scheme: `pbkdf2_sha256` (default) or `sha256` (legacy single round). An unknown value is an error, not a fallback |
+| `GPUMESH_AUTH_KDF_ITERATIONS` | `serve` | PBKDF2 cost factor. Default `200000`; anything below `1000` is refused rather than clamped, so a typo cannot quietly turn the KDF back into one round. Ignored under `GPUMESH_AUTH_KDF=sha256` |
 
 **`GPUMESH_CLAIM_HOST` is deliberately not `GPUMESH_HOST`.** The two answer
 different questions and are routinely set on the same machine:
@@ -116,3 +218,13 @@ written to **stderr**. For the uncommon shape where only stderr is redirected
 (`gpumesh serve 2> run.log` from a terminal), the detection says "terminal" and
 the log file gets escape sequences. `--no-color` or `GPUMESH_COLOR=0` is the
 escape hatch.
+
+**The two `GPUMESH_AUTH_KDF*` variables are for compatibility and tuning, not
+for turning security on.** The coordinator derives a PBKDF2-HMAC-SHA256 hash of
+the token at every start, keeps it in memory, and never writes it to the
+database — that is the default and needs no configuration. `sha256` exists
+because tokens hashed by an older gpumesh must keep verifying; it is a
+downgrade to a single round, so set it only if something outside gpumesh reads
+the hash format. Raising the iteration count does not slow a busy mesh down:
+a successful verification is memoised in memory, so a polling worker pays the
+derivation once rather than on every request.
