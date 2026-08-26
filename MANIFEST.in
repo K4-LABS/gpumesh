@@ -18,6 +18,7 @@ include SECURITY.md
 # safe to leave a line here for a file that has not landed yet.
 include CODE_OF_CONDUCT.md
 include GOVERNANCE.md
+include MAINTAINERS.md
 include SUPPORT.md
 include THREAT_MODEL.md
 include CITATION.cff
