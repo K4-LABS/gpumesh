@@ -10,11 +10,13 @@
 **Borrow your friends' GPUs.** A distributed compute mesh that lets you share GPU power
 across machines on your network — with one decorator, one CLI command, or a Python API.
 
-[![Tests](https://img.shields.io/github/actions/workflow/status/K4-LABS/gpumesh/tests.yml?branch=master&label=tests&style=for-the-badge)](https://github.com/K4-LABS/gpumesh/actions/workflows/tests.yml)
-[![PyPI](https://img.shields.io/pypi/v/gpumesh?style=for-the-badge)](https://pypi.org/project/gpumesh/)
-[![Python](https://img.shields.io/pypi/pyversions/gpumesh?style=for-the-badge)](https://pypi.org/project/gpumesh/)
-[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg?style=for-the-badge)](https://github.com/K4-LABS/gpumesh/blob/master/LICENSE)
-[![Contributors](https://img.shields.io/github/contributors/K4-LABS/gpumesh?style=for-the-badge)](https://github.com/K4-LABS/gpumesh/graphs/contributors)
+[![Tests](https://img.shields.io/github/actions/workflow/status/K4-LABS/gpumesh/tests.yml?branch=master&label=tests&style=for-the-badge&logo=githubactions&logoColor=white)](https://github.com/K4-LABS/gpumesh/actions/workflows/tests.yml)
+[![PyPI](https://img.shields.io/pypi/v/gpumesh?style=for-the-badge&logo=pypi&logoColor=white)](https://pypi.org/project/gpumesh/)
+[![Python](https://img.shields.io/pypi/pyversions/gpumesh?style=for-the-badge&logo=python&logoColor=white)](https://pypi.org/project/gpumesh/)
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg?style=for-the-badge&logo=apache&logoColor=white)](https://github.com/K4-LABS/gpumesh/blob/master/LICENSE)
+
+[![OpenSSF Best Practices](https://img.shields.io/cii/level/14248?style=for-the-badge&label=OpenSSF%20Best%20Practices&logo=linuxfoundation&logoColor=white)](https://www.bestpractices.dev/projects/14248)
+[![Contributors](https://img.shields.io/github/contributors/K4-LABS/gpumesh?style=for-the-badge&logo=github&logoColor=white)](https://github.com/K4-LABS/gpumesh/graphs/contributors)
 
 [Quickstart](#quickstart) ·
 [Docs](https://github.com/K4-LABS/gpumesh/tree/master/docs) ·
