@@ -8,8 +8,8 @@
 
 header:
   schema-version: 2.2.0
-  last-updated: '2026-08-18'
-  last-reviewed: '2026-08-18'
+  last-updated: '2026-08-26'
+  last-reviewed: '2026-08-26'
   # The default branch is `master`, not `main`. A `main` URL here 404s, which
   # is worse than no URL: the field exists so tooling can fetch the canonical
   # copy, and a broken canonical copy is indistinguishable from an absent one.
@@ -121,14 +121,26 @@ project:
         trimmed environment given to script tasks is a convenience, not a
         control.
       - >-
-        Cleartext HTTP traffic on a network the operator chose. Use --tailscale
-        or --public when the network is not one you control.
+        Cleartext HTTP traffic on a network the operator chose. Encryption is
+        opt-in: "gpumesh serve --tls" wraps the listener in TLS with a
+        self-signed certificate, which closes passive eavesdropping on a LAN,
+        and --tailscale or --public are the answer when the network is not one
+        you control. A default that does not encrypt is a documented default,
+        not a flaw. Something that DOES fall in scope: --tls failing to
+        actually encrypt, negotiating below TLS 1.2, or a client verifying a
+        certificate it should have rejected.
       - >-
         A worker returning a malicious result to a client that trusts it. The
         client deserializes worker-produced bytes with cloudpickle, and
-        --safe-mode does not cover that path. This is documented in
-        SECURITY.md and THREAT_MODEL.md section 5.4: a mesh is a single trust
-        domain and every member is as trusted as the least trustworthy member.
+        --safe-mode does not cover that path -- it gates function distribution
+        on the coordinator, not the result path on the client. This is
+        documented in SECURITY.md and THREAT_MODEL.md section 5.4: a mesh is a
+        single trust domain and every member is as trusted as the least
+        trustworthy member. The mitigation, for an operator who wants it, is
+        strict mode -- "gpumesh --strict" or GPUMESH_STRICT_RESULTS=1 -- which
+        refuses to unpickle a result at all, at the cost of not being able to
+        return a tensor, array or DataFrame. Strict mode unpickling anyway is
+        in scope; the default not being strict is not.
       - >-
         Exposure that follows from an operator deliberately opening the
         coordinator's port. "gpumesh serve" binds 127.0.0.1 unless --host or
@@ -221,7 +233,9 @@ repository:
         comment: |
           Maintainer-authored threat model written against commit 96eee91
           plus the working tree of that date, and reconciled against the code
-          on 2026-08-15. Covers the system context and data flow, trust
+          on 2026-08-15, and re-verified on 2026-08-26 for the 3.2.0
+          security work: PBKDF2 token derivation, opt-in TLS, and strict
+          result deserialization. Covers the system context and data flow, trust
           domains, assets, actors, entry points and trust boundaries
           (including the deserialization boundary in both directions), a
           STRIDE table, accepted residual risk, and out-of-scope items. Every

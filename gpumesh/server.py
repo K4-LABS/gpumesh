@@ -924,7 +924,18 @@ def _discovery_printer(listener, stop: threading.Event):
 
 
 def serve(host: str, port: int, db_path: str, token: str,
-          discovery: bool = False, safe_mode: bool = False) -> ThreadingHTTPServer:
+          discovery: bool = False, safe_mode: bool = False,
+          tls: bool = False, tls_cert: str = None,
+          tls_key: str = None) -> ThreadingHTTPServer:
+    """Start the coordinator's HTTP(S) listener.
+
+    ``tls=True`` wraps the socket in TLS. With no ``tls_cert``/``tls_key`` a
+    self-signed pair is generated under ``~/.gpumesh/tls`` and reused on
+    subsequent starts, so a worker that pinned the fingerprint keeps working.
+    See ``gpumesh/tls.py`` for what a self-signed certificate does and does
+    not buy -- in short: confidentiality on a LAN, not an identity, and not a
+    licence to face the internet.
+    """
     handler = type("Handler", (CoordinatorHandler,),
                    {"db": Database(db_path), "token": token,
                     "safe_mode": safe_mode,
@@ -934,6 +945,38 @@ def serve(host: str, port: int, db_path: str, token: str,
     # Per-coordinator, not shared with the class default — see _InFlight.
     handler._inflight = _InFlight()
     httpd = _FastBindHTTPServer((host, port), handler)
+
+    # TLS is wrapped after bind and before serve_forever, so a certificate
+    # problem is a startup failure the operator sees immediately rather than
+    # a per-connection error nobody is watching for.
+    httpd.gpumesh_tls = False
+    if tls or tls_cert or tls_key:
+        from . import tls as tls_mod
+        if bool(tls_cert) != bool(tls_key):
+            httpd.server_close()
+            raise tls_mod.TLSError(
+                "--tls-cert and --tls-key must be given together. Pass "
+                "neither to have gpumesh generate a self-signed pair."
+            )
+        try:
+            if tls_cert:
+                certfile, keyfile = tls_cert, tls_key
+            else:
+                certfile, keyfile = tls_mod.ensure_self_signed_cert()
+            tls_mod.wrap_server(httpd, certfile, keyfile)
+        except Exception:
+            httpd.server_close()
+            raise
+        httpd.gpumesh_tls = True
+        status.log(f"{bold(cyan('[mesh]'))} TLS enabled, certificate "
+                   f"{green(str(certfile))}")
+        if not tls_cert:
+            status.log(f"{bold(cyan('[mesh]'))} self-signed SHA-256 "
+                       f"{tls_mod.fingerprint(certfile)}")
+            status.log(f"{bold(cyan('[mesh]'))} workers must set "
+                       f"GPUMESH_TLS_CA to a copy of that certificate, or "
+                       f"GPUMESH_TLS_INSECURE=1 to skip verification")
+
     stop = threading.Event()
     # Named so that a test — or an operator with a stack dump — can tell
     # whether the reaper is still alive without reaching into Thread._target.

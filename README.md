@@ -48,7 +48,8 @@ gpumesh turns multiple machines into a **single, unified compute pool**. Start a
 - **Memory-aware scheduling** — VRAM is tracked; a payload's `gpu_memory_mb` hint keeps a task off a busy worker
 - **Live radar** — `gpumesh radar` discovers nearby devices on your network; no config needed
 - **Isolated execution** — every task runs in its own subprocess; a crashing task can't take down a worker
-- **Token security** — all API calls require a token; rate-limited, timing-safe verification
+- **Token security** — all API calls require a token; rate-limited, timing-safe verification, PBKDF2-derived hash held in memory only
+- **Opt-in TLS** — `gpumesh serve --tls` encrypts LAN traffic with a certificate it generates once and reuses
 - **Jupyter support** — `%%mesh` cell magic wraps every function in a cell automatically
 
 ---
@@ -130,9 +131,10 @@ python -c "import secrets; print(secrets.token_urlsafe(32))"
 
 Do this once and reuse the value. It is not decoration: the token is the only
 thing standing between anyone who can reach the port and code execution as
-you. Short, memorable tokens are guessable, and the coordinator's hash is a
-single SHA-256 round with no KDF — the entropy of the token is the whole
-defence.
+you. The coordinator derives its in-memory hash with PBKDF2 now, so a short
+token is no longer instantly crackable offline — but no KDF helps against a
+token guessed at the door, and a short, memorable one is still guessable.
+Entropy is still the defence that matters.
 
 ### 2. Start a coordinator
 
@@ -526,11 +528,12 @@ compose file mounts a named volume there.
 
 | Method | Setup | Best for | Encrypted |
 |--------|-------|----------|-----------|
-| **LAN** | None | Same Wi-Fi, fastest | No |
+| **LAN** | None | Same Wi-Fi, fastest | No by default; `--tls` opt-in |
 | **Tailscale** | Install Tailscale | Remote teams | Yes |
 | **ngrok** | `pip install gpumesh[tunnel]` | Public access, demos | Yes |
 
 - **LAN:** `gpumesh serve --host 0.0.0.0` + `gpumesh join http://192.0.2.10:8000 --token $TOKEN`. UDP broadcast helps workers *find* a coordinator, but joining still needs the token and a coordinator that is actually bound beyond loopback.
+- **LAN with `--tls`:** `gpumesh serve --host 0.0.0.0 --port 8000 --tls`. A self-signed certificate is generated under `~/.gpumesh/tls/` on first use and reused afterwards, so a pinned fingerprint keeps working across restarts; the certificate path and its SHA-256 fingerprint are printed at startup, and every URL the coordinator prints, saves or self-checks switches to `https://`. A worker trusts it in one of three ways, in descending order of worth: **(a)** copy `~/.gpumesh/tls/coordinator-cert.pem` from the coordinator to the worker and set `GPUMESH_TLS_CA=/path/to/coordinator-cert.pem` — encrypted *and* authenticated; **(b)** pass `--tls-cert`/`--tls-key` with a certificate from a CA the workers already trust, including an internal one or `tailscale cert`, and there is nothing to copy at all; **(c)** set `GPUMESH_TLS_INSECURE=1`, which is encrypted but unauthenticated, so an active attacker on the path can still substitute their own certificate and read everything. This closes passive capture on a LAN; it is not a substitute for a tunnel across a network you do not control.
 - **Tailscale:** `gpumesh serve --host 0.0.0.0 --port 8000 --tailscale`, then join via the Tailscale IP. This is the option to reach for if the mesh crosses any network you do not control — the tunnel, not the token, becomes the boundary.
 - **ngrok:** `gpumesh serve --host 0.0.0.0 --port 8000 --public` prints a public `https://...` URL that workers anywhere can join. "Anywhere" includes people you did not invite; the token is the only thing keeping them out.
 
@@ -559,7 +562,9 @@ scheduler assigns heavier tasks to stronger workers. Diagram and job flow:
 | Rate limiting | 5 failures -> 15 min IP lockout (loopback exempt — see below) |
 | Process isolation | Tasks in subprocesses |
 | File permissions | 0o600 on the saved config (`~/.gpumesh/config.json`) |
-| Token hashing | SHA-256, in memory only — the token is never written to the database |
+| Token hashing | PBKDF2-HMAC-SHA256, random 16-byte salt per token, 200,000 iterations by default (`GPUMESH_AUTH_KDF_ITERATIONS`) — in memory only, never written to the database |
+| Transport encryption | Off by default. `gpumesh serve --tls` is opt-in, self-signed, and LAN-scoped — read the caveats below before trusting it |
+| Result deserialization | `gpumesh --strict` (or `GPUMESH_STRICT_RESULTS=1`) refuses a pickled result instead of unpickling it; JSON results are unaffected |
 
 Read that table as "what raises the cost of an attack", not as "what makes
 this safe". None of it is a sandbox.
@@ -572,26 +577,83 @@ this safe". None of it is a sandbox.
 > labs, lab benches, your own machines, a team you know.
 >
 > Use a real token: `python -c "import secrets; print(secrets.token_urlsafe(32))"`.
-> The coordinator hashes it with a single SHA-256 round and a deterministic
-> salt, which is fine for 250 bits of entropy and useless for a token you
-> chose by hand. Entropy is the whole defence.
+> The coordinator derives its hash with PBKDF2-HMAC-SHA256 — a random 16-byte
+> salt per token, 200,000 iterations by default, tunable with
+> `GPUMESH_AUTH_KDF_ITERATIONS`. So a hash lifted out of coordinator memory is
+> no longer instantly crackable offline, and a weak token costs an attacker
+> real time per guess instead of none. That is a floor, not a substitute:
+> PBKDF2 does nothing about a token guessed over the wire, and a token you
+> chose by hand is still a token you chose by hand. A strong token is still
+> the primary defence — the KDF only means a weaker one is no longer free to
+> break. Hashes stored in the old single-round format still verify, and
+> `GPUMESH_AUTH_KDF=sha256` restores that derivation if you need it back.
 >
 > Run the coordinator with `--safe-mode` to refuse function distribution and
 > accept submitted scripts only. That closes the pickle path; it does not stop
 > a submitted script from doing anything a script can do.
+>
+> `--strict` is the mitigation pointing the other way, and the two are not
+> alternatives. `--safe-mode` is set on the **coordinator** and stops pickled
+> functions going *out* to workers. `gpumesh --strict <command>` — or
+> `GPUMESH_STRICT_RESULTS=1` — is set on the **submitting client** and stops
+> pickled results coming *back*: a result that arrives cloudpickled raises
+> `UntrustedResultError` instead of being unpickled on your machine, which is
+> the step that lets a hostile worker execute code on you. This is a real
+> restriction and not transparent hardening. A function that returns a tensor,
+> a numpy array or a DataFrame stops working under `--strict`, because those
+> are exactly the values that travel as pickles; JSON-encodable results are
+> unaffected. That is the trade being offered — rich return values for a
+> closed execution path — and you have to pick one. With strict mode off, the
+> first pickled result decoded in a process prints a one-time `RuntimeWarning`,
+> so the path is at least visible.
 >
 > Rate limiting exempts loopback deliberately. Anyone who can open a socket
 > from `127.0.0.1` can read the token out of the process and the config file
 > rather than guess it, so a lockout there costs an attacker nothing and costs
 > you your own mesh.
 >
-> Traffic is **not encrypted** on a plain LAN. Use `--tailscale` or `--public`
-> (ngrok) when the mesh crosses a network you do not control.
+> Traffic is **not encrypted** on a plain LAN unless you ask for it, and a
+> plain `http://` mesh should be read as LAN-only. `gpumesh serve --tls` is
+> the LAN-local option: a self-signed certificate generated once under
+> `~/.gpumesh/tls/` and reused afterwards, TLS 1.2 as the floor, with the
+> certificate path and its SHA-256 fingerprint printed at startup. Be clear
+> about what that buys. It closes the passive-eavesdropper hole — the shared
+> token stops travelling in cleartext where anyone on the same Wi-Fi can pull
+> it out of a capture, and a pickled payload can no longer be rewritten in
+> flight. It does **not** authenticate the coordinator unless you copy
+> `coordinator-cert.pem` to each worker by hand and point `GPUMESH_TLS_CA` at
+> it, and it does **not** make gpumesh safe to expose to the internet. Use
+> `--tailscale` or `--public` (ngrok) when the mesh crosses a network you do
+> not control, and let the tunnel be the boundary.
 
 Full detail: **[SECURITY.md](https://github.com/K4-LABS/gpumesh/blob/master/SECURITY.md)**
 (what a token grants, how to report a vulnerability) and
 **[THREAT_MODEL.md](https://github.com/K4-LABS/gpumesh/blob/master/THREAT_MODEL.md)**
 (the same flow traced through the code, file and line).
+
+---
+
+## Isolation and security roadmap
+
+**Where this stands today.** A worker runs submitted code as the OS user that
+started it, in a subprocess, with that user's files, GPUs, network access and
+credentials. That subprocess is a **crash boundary, not a security boundary**:
+it stops a segfaulting task from taking the worker down with it, and it stops
+nothing else. Every stage below is about moving that line, and until the
+second row ships, the caution at the top of this page is the whole story — run
+gpumesh with machines and people you trust.
+
+| Stage | What it buys | Status |
+|-------|--------------|--------|
+| **Shipped — v3.2 (2026)** | Subprocess isolation per task; opt-in TLS (`--tls`); PBKDF2 token derivation; `--safe-mode` on the coordinator; `--strict` result refusal on the client | Shipped |
+| **Next — OS-level isolation** | User namespaces / `unshare` on Linux, a seccomp syscall filter, and a read-only filesystem view for the task subprocess. The first stage at which a task stops being able to read your SSH keys | Not started |
+| **Then — Firecracker microVM** | One microVM per task: a kernel boundary rather than a filtered syscall table. Linux-only, and a real per-task startup cost | Not started |
+| **Eventually — WASM** | A WASM runtime for the pure-compute subset, portable across Linux, macOS and Windows. The price is the thing gpumesh exists for — arbitrary PyTorch does not run inside it | Not started |
+
+This is a plan as of **2026-08-26**, not a promise. Only the first row exists.
+The other three are not started, and none of them carries a date, because a
+quarter written next to work nobody has begun is how a roadmap becomes
+fiction. "Next" means next in order, not next month.
 
 ---
 
@@ -690,7 +752,7 @@ typo fix counts.
 - No distributed data structures — no shared arrays, dataframes or object store. If your data does not fit on one machine, gpumesh will not help
 - Built and tested for meshes of roughly 2–20 machines. Nobody has run it at hundreds of workers
 - Single coordinator — single point of failure (use Tailscale for reliability)
-- No built-in encryption — use Tailscale for encrypted tunnels
+- Encryption is opt-in and LAN-scoped — `--tls` is self-signed by default and only authenticates the coordinator if you copy the certificate to each worker by hand; use Tailscale or ngrok when the mesh crosses a network you do not control
 - Trusted networks only — workers run whatever code the coordinator sends, and submitters deserialize whatever workers return
 
 If several of those are dealbreakers, read
