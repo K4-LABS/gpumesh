@@ -634,7 +634,12 @@ def cmd_serve(args):
     bind_host = _resolve_bind_host(args)
     loopback = _is_loopback_bind(bind_host)
     local_host = _url_host(_local_probe_host(bind_host))
-    local_url = f"http://{local_host}:{args.port}"
+    # Every URL this command prints, saves or probes has to carry the scheme
+    # the socket is actually speaking. An https listener advertised as http://
+    # fails on the worker with a connection reset and no clue why.
+    tls_on = bool(getattr(args, "tls", False) or getattr(args, "tls_cert", ""))
+    scheme = "https" if tls_on else "http"
+    local_url = f"{scheme}://{local_host}:{args.port}"
     tunnel_mode = _tunnel_mode(args)
 
     # ---- the tunnel flags versus the bind address -------------------------
@@ -712,7 +717,10 @@ def cmd_serve(args):
     try:
         httpd = server.serve(bind_host, args.port, db_path, token,
                              discovery=not args.no_discovery,
-                             safe_mode=args.safe_mode)
+                             safe_mode=args.safe_mode,
+                             tls=getattr(args, "tls", False),
+                             tls_cert=getattr(args, "tls_cert", "") or None,
+                             tls_key=getattr(args, "tls_key", "") or None)
     except sqlite3.Error as exc:
         # An unwritable --db path surfaces as sqlite3.OperationalError, which
         # is NOT an OSError — the port-in-use handler below never saw it, so
@@ -760,7 +768,7 @@ def cmd_serve(args):
     # loopback that address answers nothing, so saving it would break `gpumesh
     # submit` on this very machine.
     connection_manager.save_connection(
-        local_url if loopback else f"http://{ip}:{args.port}", token
+        local_url if loopback else f"{scheme}://{ip}:{args.port}", token
     )
     print(green(f"[OK] Coordinator listening on {bind_host}:{args.port}"))
     print(dim(f"   Token: {token}"))
@@ -796,7 +804,7 @@ def cmd_serve(args):
                   "before you do."))
     else:
         print(f"   Join from ANOTHER machine: "
-              f"{cyan(f'gpumesh join http://{ip}:{args.port} --token {token}')}")
+              f"{cyan(f'gpumesh join {scheme}://{ip}:{args.port} --token {token}')}")
         print(dim("   (127.0.0.1 always works locally; the LAN IP is for "
               "other machines)"))
         if not getattr(args, "host_ip", ""):
@@ -846,9 +854,19 @@ def cmd_serve(args):
     # between here and there, which only the worker can observe. Say what was
     # tested so a green line is not read as a promise that remote workers will
     # connect.
+    _selfcheck_ctx = None
+    if tls_on:
+        # The self-check talks to our own listener over our own certificate.
+        # Verifying it here would fail on the hostname the probe happens to
+        # use and would prove nothing about the thing being tested, which is
+        # "did the socket come up".
+        import ssl as _ssl
+        _selfcheck_ctx = _ssl.SSLContext(_ssl.PROTOCOL_TLS_CLIENT)
+        _selfcheck_ctx.check_hostname = False
+        _selfcheck_ctx.verify_mode = _ssl.CERT_NONE
     try:
         with urllib.request.urlopen(
-            f"{local_url}/api/workers", timeout=5
+            f"{local_url}/api/workers", timeout=5, context=_selfcheck_ctx
         ) as _resp:
             _ = _resp.status
         print(green(f"[OK] Self-check: server is up (tested on {local_host} only)"))
@@ -859,7 +877,7 @@ def cmd_serve(args):
         print(yellow(f"[!] WARNING: coordinator self-check failed on {local_host}: {exc}"))
         print(dim("   The server may not have started correctly."))
     if not loopback:
-        print(dim(f"   Reachability of http://{ip}:{args.port} from other machines "
+        print(dim(f"   Reachability of {scheme}://{ip}:{args.port} from other machines "
                   f"is not tested here — a worker joining confirms it."))
 
     # Self-worker: this machine joins its own pool so its CPU/GPU is used
@@ -2200,6 +2218,17 @@ def main():
                     help="enable debug-level logging")
     ap.add_argument("--json-logs", action="store_true",
                     help="output logs as JSON lines (for Docker)")
+    ap.add_argument("--strict", action="store_true",
+                    help="refuse to unpickle results sent by workers. "
+                         "Unpickling a result runs the worker's code on THIS "
+                         "machine; --strict trades that away, so JSON-encodable "
+                         "results still work and anything else (tensors, numpy "
+                         "arrays, DataFrames) raises instead of executing. "
+                         "This is a TOP-LEVEL flag, so it goes before the "
+                         "subcommand: 'gpumesh --strict status JOB_ID', not "
+                         "'gpumesh status --strict JOB_ID' (which is a parse "
+                         "error). GPUMESH_STRICT_RESULTS=1 works anywhere and "
+                         "is equivalent")
     sub = ap.add_subparsers(dest="cmd")
 
     p = sub.add_parser(
@@ -2267,6 +2296,18 @@ def main():
                    help="disable UDP broadcast discovery")
     p.add_argument("--safe-mode", action="store_true",
                    help="disable function distribution; scripts only")
+    p.add_argument("--tls", action="store_true",
+                   help="serve HTTPS instead of HTTP, generating a self-signed "
+                        "certificate under ~/.gpumesh/tls on first use. This "
+                        "encrypts the token and the pickled payloads on the "
+                        "wire; it does NOT authenticate the coordinator unless "
+                        "workers set GPUMESH_TLS_CA to a copy of the "
+                        "certificate. LAN-grade, not internet-grade")
+    p.add_argument("--tls-cert", default="",
+                   help="use this certificate instead of a generated one "
+                        "(requires --tls-key)")
+    p.add_argument("--tls-key", default="",
+                   help="private key for --tls-cert")
     p.add_argument("--self-worker", action="store_true", default=True,
                    help="join this machine's CPU/GPU to its own pool (default: on)")
     p.add_argument("--no-self-worker", action="store_false", dest="self_worker",
@@ -2427,6 +2468,13 @@ def main():
     # decision, which reads ansi._SUPPORTS_COLOR when it builds a handler.
     _apply_color_choice(getattr(args, "color", "auto"))
     setup_logging(verbose=args.verbose, json_logs=args.json_logs)
+    # Exported rather than threaded through every call: results are decoded in
+    # three places (api.py, accelerate.py, client.py) and in worker subprocesses
+    # this command spawns. An environment variable reaches all of them; a
+    # keyword argument would have to be re-plumbed at each one and would miss
+    # the subprocess entirely.
+    if getattr(args, "strict", False):
+        os.environ["GPUMESH_STRICT_RESULTS"] = "1"
     if not args.cmd:
         ap.print_help()
         sys.exit(1)
