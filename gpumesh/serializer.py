@@ -11,10 +11,12 @@ from __future__ import annotations
 import base64
 import importlib
 import inspect
+import os
 import re
 import sys
 import textwrap
 import types
+import warnings
 
 
 def serialize_function(func) -> str:
@@ -495,12 +497,93 @@ def encode_result(value) -> dict:
     }
 
 
-def decode_result(payload):
+class UntrustedResultError(RuntimeError):
+    """A pickled result arrived while strict mode was on.
+
+    Carries the job/task identifiers when the caller knows them, so the
+    operator can find the worker that sent it.
+    """
+
+
+# ===========================================================================
+# WARNING -- ARBITRARY CODE EXECUTION ON THE *CLIENT*
+# ===========================================================================
+# decode_result() below calls cloudpickle.loads() on bytes produced by a
+# worker. Unpickling is code execution: a malicious or compromised worker
+# gets to run whatever it likes on the machine that collects the result --
+# which is normally the operator's own laptop, the one with the notebook and
+# the SSH keys on it. Nothing in gpumesh's auth stops this. A valid token
+# makes a worker trusted; it does not make it honest.
+#
+# This is not a bug that can be fixed inside this function. Pickle has no
+# safe subset, and the whole point of the envelope is to move objects that
+# JSON cannot represent (numpy arrays, torch tensors, DataFrames). The two
+# real mitigations are:
+#
+#   1. Only join workers run by people you trust with a shell on your box.
+#   2. Turn on strict mode -- GPUMESH_STRICT_RESULTS=1, or --strict on the
+#      client commands -- which refuses to unpickle at all. JSON-encodable
+#      results still come back; anything else raises UntrustedResultError
+#      instead of executing.
+#
+# Strict mode is a real restriction, not a transparent hardening: a function
+# that returns a tensor stops working under it. That is the trade being
+# offered, stated plainly rather than defaulted into.
+# ===========================================================================
+
+_STRICT_ENV = "GPUMESH_STRICT_RESULTS"
+_pickle_warning_shown = False
+
+
+def strict_results_enabled(strict: bool = None) -> bool:
+    """Resolve strict mode: explicit argument, then env, then off."""
+    if strict is not None:
+        return bool(strict)
+    value = (os.environ.get(_STRICT_ENV) or "").strip().lower()
+    return value in ("1", "true", "yes", "on")
+
+
+def _warn_once_about_pickle() -> None:
+    """Say it once per process, on the first pickled result actually decoded.
+
+    Once, because a 500-task job would otherwise print 500 identical lines
+    and teach the reader to filter them out. On the first *decode* rather
+    than at import, because a mesh whose results are all JSON never runs this
+    risk and should not be told that it does.
+    """
+    global _pickle_warning_shown
+    if _pickle_warning_shown:
+        return
+    _pickle_warning_shown = True
+    warnings.warn(
+        "gpumesh is about to unpickle a result produced by a worker. "
+        "Unpickling runs arbitrary code on THIS machine, so a hostile worker "
+        "can execute code on you -- a valid token makes a worker trusted, "
+        "not honest. Only join workers you trust with a shell here. To "
+        "refuse pickled results instead, set GPUMESH_STRICT_RESULTS=1 (or "
+        "pass --strict); JSON-encodable results keep working, anything else "
+        "raises rather than executing.",
+        RuntimeWarning,
+        stacklevel=3,
+    )
+
+
+def decode_result(payload, *, strict: bool = None):
     """Unwrap a result envelope back into the original return value.
 
     Anything that is not an envelope is returned unchanged, so script-based
     tasks (which emit plain JSON) and results produced by older workers keep
     working untouched.
+
+    **This deserializes worker-controlled bytes with cloudpickle.** See the
+    warning block above this function; in one line: decoding a pickled result
+    is arbitrary code execution on the machine doing the decoding.
+
+    Args:
+        strict: Refuse pickled results. ``None`` (default) reads
+            ``GPUMESH_STRICT_RESULTS``. Under strict mode a cloudpickle
+            envelope raises :class:`UntrustedResultError` and JSON envelopes
+            are returned as normal.
     """
     if not isinstance(payload, dict):
         return payload
@@ -509,6 +592,18 @@ def decode_result(payload):
         return payload
 
     if envelope.get("encoding") == "cloudpickle":
+        if strict_results_enabled(strict):
+            raise UntrustedResultError(
+                "Refusing to unpickle a worker's result: strict mode is on "
+                "(GPUMESH_STRICT_RESULTS / --strict). Unpickling would run "
+                "the worker's bytes as code on this machine.\n"
+                "  * If you trust the worker, drop strict mode for this run.\n"
+                "  * To keep strict mode, have the task return something "
+                "JSON-encodable (a list/dict of numbers, or an array written "
+                "to shared storage and referenced by path) instead of a "
+                "tensor or array."
+            )
+        _warn_once_about_pickle()
         try:
             import cloudpickle
         except ImportError:

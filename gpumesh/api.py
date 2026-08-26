@@ -621,6 +621,14 @@ class GPUMesh:
                     continue
                 if isinstance(raw, dict):
                     raw.pop("_task_index", None)
+                # Under strict mode this raises UntrustedResultError rather
+                # than returning a placeholder, and that is deliberate. This
+                # is the library path: the caller assigned the return value to
+                # a variable and is about to compute with it, so a stand-in
+                # object would turn a refused result into wrong arithmetic.
+                # gpumesh/client.py substitutes a marker instead, because that
+                # path only formats results for a terminal, where raising
+                # would abort the listing over one bad task.
                 results.append(serializer.decode_result(raw))
             elif task["status"] == "failed":
                 results.append({"_error": task.get("error", "unknown")})
