@@ -1,7 +1,9 @@
 """Tests for gpumesh.security module."""
 
+import ast
 import hashlib
 import inspect
+import textwrap
 import time
 import pytest
 
@@ -497,7 +499,20 @@ class TestTokenHashingLimits:
         source = inspect.getsource(gpumesh.security.verify_token)
         # Count the code, not the docstring -- the docstring names the
         # function too, and a prose edit must not be able to fail this test.
-        body = source.replace(gpumesh.security.verify_token.__doc__ or "", "")
+        #
+        # Strip it through the AST rather than by subtracting __doc__ from the
+        # source text. Python 3.13 dedents docstrings at compile time
+        # (gh-81283), so from 3.13 on __doc__ no longer appears verbatim in
+        # the source and a str.replace() silently removes nothing -- which is
+        # how this test passed on 3.9-3.12 and failed on 3.13/3.14 counting
+        # the docstring's own mention of the function.
+        module = ast.parse(textwrap.dedent(source))
+        func = module.body[0]
+        if (func.body and isinstance(func.body[0], ast.Expr)
+                and isinstance(func.body[0].value, ast.Constant)
+                and isinstance(func.body[0].value.value, str)):
+            func.body = func.body[1:]
+        body = ast.unparse(func)
         assert "hmac.compare_digest" in body
         # pbkdf2 + legacy salted + legacy unsalted, and no bare == on a digest.
         assert body.count("hmac.compare_digest") == 3
