@@ -102,9 +102,24 @@ _task_id_lock = threading.Lock()  # protects _current_task_id[0] across heartbea
 
 
 class MeshClient:
+    """Every gpumesh client request goes through here.
+
+    That includes the Python API (``api.py``), the CLI's job commands
+    (``client.py``) and ``@accelerate``. Keeping it the single chokepoint is
+    what makes the TLS context below a one-place change rather than a hunt
+    through every call site.
+    """
+
     def __init__(self, base_url: str, token: str):
         self.base_url = base_url.rstrip("/")
         self.token = token
+        # None for http:// URLs -- urlopen ignores the argument there, and
+        # building a context for a plain-HTTP mesh would cost every client
+        # an import of ssl for nothing.
+        self._ssl_context = None
+        if self.base_url.lower().startswith("https://"):
+            from . import tls as tls_mod
+            self._ssl_context = tls_mod.client_context(self.base_url)
 
     def call(self, method: str, path: str, body=None, timeout: float = 30.0):
         data = json.dumps(body).encode() if body is not None else None
@@ -117,11 +132,25 @@ class MeshClient:
                 "X-Auth-Token": self.token,
             },
         )
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            if resp.status == 204:
-                return None
-            raw = resp.read()
-            return json.loads(raw) if raw else None
+        try:
+            with urllib.request.urlopen(req, timeout=timeout,
+                                        context=self._ssl_context) as resp:
+                if resp.status == 204:
+                    return None
+                raw = resp.read()
+                return json.loads(raw) if raw else None
+        except urllib.error.URLError as exc:
+            # "certificate verify failed" is technically accurate and tells
+            # nobody what to do about it. Re-raise the same class of error
+            # with the two lines that actually fix it.
+            from . import tls as tls_mod
+            hint = tls_mod.explain_verify_failure(exc.reason if
+                                                  hasattr(exc, "reason")
+                                                  else exc)
+            if hint:
+                raise urllib.error.URLError(
+                    str(exc.reason) + "\n\n" + hint) from exc
+            raise
 
 
 # Probing several candidate addresses must stay well inside the claim

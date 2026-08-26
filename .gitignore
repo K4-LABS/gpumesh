@@ -53,3 +53,16 @@ worker_fix.bat
 # Internal operational notes (not for the repo)
 WORK_LOG.md
 .rel.json
+
+# TLS material. `gpumesh serve --tls` keeps its generated pair under
+# ~/.gpumesh/tls/, well outside the repo, so nothing here is produced by the
+# tool itself. This block exists for the other case: an operator copying a
+# certificate and its key into the working directory to test with, and then
+# committing the key by reflex. A private key in git history is a rewrite,
+# not a revert.
+*.pem
+*.key
+*.pfx
+*.p12
+coordinator-cert.pem
+coordinator-key.pem
