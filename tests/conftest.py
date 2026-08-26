@@ -98,6 +98,14 @@ ISOLATED_GPUMESH_ENV_VARS = (
     "GPUMESH_TOKEN", "GPUMESH_URL", "GPUMESH_HOST", "GPUMESH_HOST_IP",
     "GPUMESH_CLAIM_HOST", "GPUMESH_LOCAL", "GPUMESH_VERBOSE", "GPUMESH_COLOR",
     "GPUMESH_DEVICE", "GPUMESH_PORT",
+    # Security switches. Each of these changes behaviour the suite asserts on:
+    # GPUMESH_STRICT_RESULTS makes decode_result refuse pickled results,
+    # GPUMESH_AUTH_KDF / GPUMESH_AUTH_KDF_ITERATIONS change the hash format
+    # and cost token hashing produces, and the TLS pair redirects or disarms
+    # certificate verification.
+    "GPUMESH_STRICT_RESULTS",
+    "GPUMESH_AUTH_KDF", "GPUMESH_AUTH_KDF_ITERATIONS",
+    "GPUMESH_TLS_CA", "GPUMESH_TLS_INSECURE",
 )
 
 
