@@ -44,9 +44,14 @@ ROLE_TYPES = {
 def get_broadcast_address() -> str:
     """Determine the subnet broadcast address.
 
-    Tries to compute it from the local interface IP and netmask.
-    Falls back to 255.255.255.255 if detection fails.
+    Uses the local interface address and netmask when available so non-/24
+    networks are handled correctly. Falls back to 255.255.255.255 when the
+    netmask cannot be determined (preferred over guessing .255 on a /24).
     """
+    import ipaddress
+    import platform
+    import subprocess
+
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
         s.connect(("8.8.8.8", 80))
@@ -56,14 +61,79 @@ def get_broadcast_address() -> str:
     finally:
         s.close()
 
-    # Common /24 assumption — works for most home/office networks.
-    # For /16 or other netmasks the broadcast would be wrong but the
-    # fallback broadcast address (255.255.255.255) still reaches the
-    # local subnet in practice on most OSes.
-    parts = local_ip.split(".")
-    if len(parts) == 4:
-        return f"{parts[0]}.{parts[1]}.{parts[2]}.255"
+    # Try to resolve netmask via the OS routing table / interface list.
+    netmask = _guess_netmask(local_ip)
+    if netmask:
+        try:
+            iface = ipaddress.IPv4Interface(f"{local_ip}/{netmask}")
+            return str(iface.network.broadcast_address)
+        except ValueError:
+            pass
+
     return BROADCAST_ADDR_FALLBACK
+
+
+def _guess_netmask(local_ip: str) -> str | None:
+    """Best-effort IPv4 netmask for *local_ip*, or None if unknown."""
+    system = platform.system().lower()
+    try:
+        if system == "windows":
+            out = subprocess.check_output(["ipconfig"], text=True, errors="replace", timeout=5)
+            blocks = out.split("\n\n")
+            for block in blocks:
+                if local_ip not in block:
+                    continue
+                for line in block.splitlines():
+                    if "subnet mask" in line.lower() or "máscara" in line.lower():
+                        parts = line.split(":")
+                        if len(parts) >= 2:
+                            mask = parts[-1].strip()
+                            if mask.count(".") == 3:
+                                return mask
+        else:
+            # Linux/macOS: `ip -4 -o addr show` or ifconfig
+            try:
+                out = subprocess.check_output(
+                    ["ip", "-4", "-o", "addr", "show"],
+                    text=True,
+                    errors="replace",
+                    timeout=5,
+                )
+                for line in out.splitlines():
+                    if local_ip not in line:
+                        continue
+                    # ... inet 192.168.1.10/24 ...
+                    for tok in line.split():
+                        if "/" in tok and tok.split("/")[0] == local_ip:
+                            prefix = int(tok.split("/")[1])
+                            return str(ipaddress.IPv4Network(f"0.0.0.0/{prefix}").netmask)
+            except (FileNotFoundError, subprocess.CalledProcessError, ValueError):
+                pass
+            try:
+                out = subprocess.check_output(["ifconfig"], text=True, errors="replace", timeout=5)
+                # crude: find block with local_ip then netmask
+                cur = []
+                for line in out.splitlines() + [""]:
+                    if line and not line[0].isspace() and cur:
+                        block = "\n".join(cur)
+                        if local_ip in block:
+                            import re as _re
+                            m = _re.search(r"netmask\s+(0x[0-9a-fA-F]+|\d+\.\d+\.\d+\.\d+)", block)
+                            if m:
+                                raw = m.group(1)
+                                if raw.startswith("0x"):
+                                    val = int(raw, 16)
+                                    return str(ipaddress.IPv4Address(val))
+                                return raw
+                        cur = [line]
+                    else:
+                        cur.append(line)
+            except (FileNotFoundError, subprocess.CalledProcessError, ValueError):
+                pass
+    except Exception:
+        return None
+    return None
+
 
 
 def get_ephemeral_port() -> int:
