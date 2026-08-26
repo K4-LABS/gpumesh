@@ -19,12 +19,6 @@ DOCKER_HUB_README.md
 CHANGELOG.md
 .env.example
 
-# Local AI-assistant tooling — nothing the image needs
-.agents/
-.claude/
-.continue/
-.forge/
-skills-lock.json
 
 # Local operator notes and scratch scripts. These are gitignored for the same
 # reason: they describe one particular two-laptop setup and carry its live
