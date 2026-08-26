@@ -836,3 +836,207 @@ class TestResultEnvelope:
         assert helper.RESULT_ENVELOPE_KEY == RESULT_ENVELOPE_KEY
         for value in (5, None, {"a": 1}, [1, 2]):
             assert decode_result(helper._encode_result(value)) == value
+
+
+class TestStrictResultMode:
+    """Strict mode refuses to unpickle a worker's result (issue #15).
+
+    decode_result() hands cloudpickle bytes the *worker* chose to
+    cloudpickle.loads(), which is arbitrary code execution on whichever
+    machine collects the result — normally the operator's own laptop, the one
+    with the SSH keys on it. A valid token makes a worker trusted, not honest,
+    so an operator has to be able to say "never execute what a worker sent".
+    That is a real restriction rather than transparent hardening (a task
+    returning a tensor stops working), so what these tests pin down is that
+    the refusal is total, that JSON results keep working untouched, and that
+    the error says which switch to reach for.
+    """
+
+    @staticmethod
+    def _pickled_envelope():
+        """A cloudpickle envelope, built and shipped the way a worker's is.
+
+        The value is deliberately one JSON cannot express, so encode_result
+        takes the pickled branch; the json round-trip mimics the hop through
+        the coordinator's store, which is where a real client's envelope comes
+        from.
+        """
+        pytest.importorskip("cloudpickle")
+        np = pytest.importorskip("numpy")
+        import json
+        from gpumesh.serializer import encode_result, RESULT_ENVELOPE_KEY
+
+        envelope = encode_result({"arr": np.arange(3)})
+        assert envelope[RESULT_ENVELOPE_KEY]["encoding"] == "cloudpickle"
+        return json.loads(json.dumps(envelope))
+
+    def test_json_results_decode_identically_either_way(self):
+        """Strict mode must cost nothing for results that were never pickled.
+
+        This is the whole bargain: turning it on may only break tasks that
+        return objects JSON cannot express. If a plain dict or an int decoded
+        differently under strict mode, the flag would be unusable in practice.
+        """
+        from gpumesh.serializer import encode_result, decode_result
+
+        for value in (5, None, "text", [1, 2], {"accuracy": 0.95}):
+            envelope = encode_result(value)
+            assert decode_result(envelope, strict=False) == value
+            assert decode_result(envelope, strict=True) == value
+
+    def test_pickled_result_decodes_when_strict_is_off(self):
+        """The default stays permissive — nothing is refused unless asked."""
+        from gpumesh.serializer import decode_result
+
+        decoded = decode_result(self._pickled_envelope(), strict=False)
+        assert list(decoded["arr"]) == [0, 1, 2]
+
+    def test_pickled_result_is_refused_when_strict_is_on(self):
+        """The point of the flag: the bytes never reach cloudpickle.loads()."""
+        from gpumesh.serializer import decode_result, UntrustedResultError
+
+        with pytest.raises(UntrustedResultError):
+            decode_result(self._pickled_envelope(), strict=True)
+
+    def test_environment_variable_turns_strict_on(self, monkeypatch):
+        """GPUMESH_STRICT_RESULTS=1 reaches decode_result with no argument.
+
+        The variable is how an operator turns this on for a whole shell or a
+        systemd unit, so the default ``strict=None`` has to consult it rather
+        than only honouring an explicit keyword at each call site.
+        """
+        from gpumesh.serializer import decode_result, UntrustedResultError
+
+        monkeypatch.setenv("GPUMESH_STRICT_RESULTS", "1")
+        with pytest.raises(UntrustedResultError):
+            decode_result(self._pickled_envelope())
+
+    def test_explicit_false_overrides_the_environment(self, monkeypatch):
+        """A caller that says strict=False means it, exported variable or not.
+
+        Precedence has to run argument-then-environment so a single call site
+        — a notebook cell that knows its own worker — can opt out without the
+        operator unsetting a variable for the whole session.
+        """
+        from gpumesh.serializer import decode_result
+
+        monkeypatch.setenv("GPUMESH_STRICT_RESULTS", "1")
+        decoded = decode_result(self._pickled_envelope(), strict=False)
+        assert list(decoded["arr"]) == [0, 1, 2]
+
+    @pytest.mark.parametrize("value", ["1", "true", "TRUE", "True", "yes",
+                                       "YES", "on", "On", " 1 "])
+    def test_strict_results_enabled_accepts_truthy_spellings(self, value,
+                                                             monkeypatch):
+        """Operators type ``true`` and ``yes`` as readily as ``1``."""
+        from gpumesh.serializer import strict_results_enabled
+
+        monkeypatch.setenv("GPUMESH_STRICT_RESULTS", value)
+        assert strict_results_enabled() is True
+
+    @pytest.mark.parametrize("value", ["", "0", "false", "no", "off", "maybe"])
+    def test_strict_results_enabled_rejects_falsy_spellings(self, value,
+                                                            monkeypatch):
+        """Anything that is not an affirmative leaves strict mode off.
+
+        ``0`` and ``false`` especially: a variable set to ``0`` reads as
+        "explicitly disabled", and treating any non-empty value as true would
+        silently break every task that returns a tensor.
+        """
+        from gpumesh.serializer import strict_results_enabled
+
+        monkeypatch.setenv("GPUMESH_STRICT_RESULTS", value)
+        assert strict_results_enabled() is False
+
+    def test_strict_results_enabled_defaults_off(self, monkeypatch):
+        """With nothing set at all, results decode as they always have."""
+        from gpumesh.serializer import strict_results_enabled
+
+        monkeypatch.delenv("GPUMESH_STRICT_RESULTS", raising=False)
+        assert strict_results_enabled() is False
+        assert strict_results_enabled(True) is True
+        assert strict_results_enabled(False) is False
+
+    def test_non_envelope_payloads_pass_through_under_strict(self, monkeypatch):
+        """Script tasks emit bare JSON; strict mode has nothing to refuse there.
+
+        Nothing was pickled, so nothing would be executed, and refusing these
+        would turn strict mode into "script tasks stop reporting results".
+        """
+        from gpumesh.serializer import decode_result
+
+        monkeypatch.setenv("GPUMESH_STRICT_RESULTS", "1")
+        assert decode_result({"rows": 10}) == {"rows": 10}
+        assert decode_result(None) is None
+        assert decode_result(42) == 42
+        assert decode_result([1, 2, 3]) == [1, 2, 3]
+        # A dict whose envelope key holds something that is not an envelope is
+        # still just a dict.
+        assert decode_result({"__gpumesh_result__": "nope"}) == {
+            "__gpumesh_result__": "nope"
+        }
+
+    def test_first_pickled_decode_warns_once(self):
+        """Non-strict decoding says, once, that it is executing worker bytes.
+
+        Once per process: a 500-task job that printed 500 identical lines
+        would teach the reader to filter them out, which is the same as not
+        warning at all. On the first decode rather than at import, so a mesh
+        whose results are all JSON is never told it runs a risk it does not.
+        """
+        import warnings
+        import gpumesh.serializer as serializer
+
+        envelope = self._pickled_envelope()
+        serializer._pickle_warning_shown = False
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            serializer.decode_result(envelope, strict=False)
+            serializer.decode_result(envelope, strict=False)
+
+        runtime = [w for w in caught if issubclass(w.category, RuntimeWarning)]
+        assert len(runtime) == 1
+        assert "unpickle" in str(runtime[0].message)
+        assert "GPUMESH_STRICT_RESULTS" in str(runtime[0].message)
+
+    def test_strict_mode_does_not_warn(self):
+        """Nothing is unpickled, so there is no risk to announce."""
+        import warnings
+        import gpumesh.serializer as serializer
+        from gpumesh.serializer import UntrustedResultError
+
+        envelope = self._pickled_envelope()
+        serializer._pickle_warning_shown = False
+        try:
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                with pytest.raises(UntrustedResultError):
+                    serializer.decode_result(envelope, strict=True)
+            assert not [w for w in caught
+                        if issubclass(w.category, RuntimeWarning)]
+        finally:
+            # The refusal left the one-time warning unspent; other tests in
+            # this process should not inherit a primed flag from this one.
+            serializer._pickle_warning_shown = True
+
+    def test_refusal_names_both_switches(self):
+        """An operator reading the error must be able to find the flag.
+
+        The refusal is the only place a surprised user meets this feature, so
+        it has to name both spellings — the variable they may have inherited
+        from a unit file, and the CLI flag they can drop for a single run.
+        """
+        from gpumesh.serializer import decode_result, UntrustedResultError
+
+        with pytest.raises(UntrustedResultError) as excinfo:
+            decode_result(self._pickled_envelope(), strict=True)
+
+        message = str(excinfo.value)
+        assert "GPUMESH_STRICT_RESULTS" in message
+        assert "--strict" in message
+
+    def test_untrusted_result_error_is_a_runtime_error(self):
+        """Callers that already catch RuntimeError keep catching this."""
+        from gpumesh.serializer import UntrustedResultError
+
+        assert issubclass(UntrustedResultError, RuntimeError)

@@ -35,6 +35,15 @@ def _format_result(raw, compact: bool = False) -> str:
         raw.pop("_task_index", None)
     try:
         value = serializer.decode_result(raw)
+    except serializer.UntrustedResultError:
+        # Strict mode refused to unpickle. Do not fall through to printing the
+        # raw envelope: a base64 blob on the terminal reads as a display bug,
+        # and the refusal is the thing worth reporting.
+        value = {
+            "_gpumesh_strict": "pickled result not decoded (--strict / "
+                               "GPUMESH_STRICT_RESULTS=1). Decoding it would "
+                               "run the worker's code on this machine."
+        }
     except Exception:
         value = raw
     separators = (",", ":") if compact else None
