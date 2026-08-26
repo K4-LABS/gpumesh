@@ -7,6 +7,97 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.2.0] — 2026-08-26
+
+> **Upgrade note: `hash_token()` returns a different format by default.** A
+> token hash is now `pbkdf2_sha256$<iterations>$<salt>$<hash>` rather than a
+> bare SHA-256 hex digest. Nothing needs migrating — the hash lives only in
+> coordinator memory and has never been written to the database, so it is
+> re-derived from the plain token every time the coordinator starts. Old
+> single-round hashes still verify, forever: verification dispatches on the
+> stored prefix, so an unprefixed digest is recognised as the legacy format
+> and checked the old way. Set `GPUMESH_AUTH_KDF=sha256` to restore the
+> previous derivation if you compare hash strings directly or need the old
+> output shape.
+
+### Added
+- **Opt-in TLS for the coordinator: `gpumesh serve --tls`, `--tls-cert`,
+  `--tls-key`.** `--tls` alone generates a self-signed certificate under
+  `~/.gpumesh/tls/` on first use and reuses it on every later start, so a
+  fingerprint a worker has pinned keeps working across restarts. The key file
+  is written 0600 in a 0700 directory; the certificate's SAN covers
+  `localhost`, the hostname and every local address the machine can see; TLS
+  1.2 is the floor. The coordinator prints the certificate path and its
+  SHA-256 fingerprint at startup, and every URL `serve` prints, saves or
+  self-checks switches to the `https://` scheme. Certificate generation uses
+  `cryptography` when it is installed and falls back to the `openssl` binary.
+
+  A worker has three ways to trust it, in descending order of worth: copy the
+  coordinator's `coordinator-cert.pem` across and set `GPUMESH_TLS_CA` to it
+  (encrypted *and* authenticated); supply `--tls-cert`/`--tls-key` from a CA
+  the workers already trust, including an internal CA or `tailscale cert`
+  (nothing to copy); or set `GPUMESH_TLS_INSECURE=1`, which is encrypted but
+  unauthenticated and leaves an active attacker on the path free to present
+  their own certificate. A verification failure from a gpumesh client no
+  longer surfaces as a bare `certificate verify failed` — it names both
+  environment variables and says what each one costs.
+
+  The scope is deliberately narrow and is documented that way. `--tls` closes
+  the passive-eavesdropper hole on a LAN: the shared token stops travelling in
+  cleartext where anyone on the same Wi-Fi can lift it out of a capture, and a
+  pickled payload can no longer be rewritten in flight. It does **not**
+  authenticate the coordinator unless the operator moves the certificate by
+  hand, and it does **not** make gpumesh safe to expose to the internet.
+  Cross-network use should still tunnel over Tailscale or ngrok and let the
+  tunnel be the boundary; plain HTTP should be read as LAN-only. (#28)
+- **Strict result deserialization: `gpumesh --strict <command>` and
+  `GPUMESH_STRICT_RESULTS=1`.** Results are deserialized on the *submitting*
+  machine, which is why trust in gpumesh runs both ways — a hostile worker
+  returning a crafted pickle executes code on you. `--strict` is the switch
+  that closes that path: a result that comes back cloudpickled raises
+  `UntrustedResultError` instead of being unpickled, while JSON-encodable
+  results keep working normally.
+
+  This is a real restriction, not transparent hardening, and it is offered as
+  a trade rather than a default. A function that returns a torch tensor, a
+  numpy array or a DataFrame stops working under `--strict`, because those are
+  exactly the values that travel as pickles. With strict mode off the
+  behaviour is unchanged except for a one-time `RuntimeWarning` on the first
+  pickled result decoded in a process, and a warning block above
+  `decode_result` in the source saying the same thing to anyone reading it
+  there. (#15)
+
+### Changed
+- **Token hashing now uses PBKDF2 instead of a single SHA-256 round.** The
+  default derivation is PBKDF2-HMAC-SHA256 with a random 16-byte hex salt per
+  token and 200,000 iterations, stored as
+  `pbkdf2_sha256$<iterations>$<salt>$<hash>`; `GPUMESH_AUTH_KDF_ITERATIONS`
+  moves the cost factor. As before, the hash exists only in coordinator memory
+  and is never written to the database. The old single-round SHA-256 with its
+  token-derived deterministic salt remains verifiable indefinitely and is no
+  longer produced unless asked for with `GPUMESH_AUTH_KDF=sha256`.
+
+  A random salt is safe here precisely because nothing has to re-derive the
+  same hash after a restart: workers persist the plain token, and the
+  coordinator derives afresh at every start. Successful verifications are
+  memoised in memory, keyed by an HMAC of the token under a random
+  per-process key rather than by the token itself, so a polling worker pays
+  the KDF once instead of on every request — without that, raising the cost
+  factor would have handed anyone who can reach the port a CPU amplifier,
+  turning a hardening change into a denial-of-service one. (#16)
+
+### Security
+- The three changes above raise the cost of the attacks gpumesh can price and
+  leave the one it cannot untouched. PBKDF2 makes an offline crack of a
+  captured hash expensive; `--tls` takes the token off the wire in cleartext;
+  `--strict` closes the return path. None of them is a sandbox: a worker still
+  runs submitted code as the OS user that started it, with that user's files,
+  GPUs, network and credentials, and subprocess isolation is a crash boundary
+  rather than a security one. The README's new **Isolation and security
+  roadmap** section states that position and the staged plan past it — OS-level
+  isolation, then Firecracker microVMs, then WASM — with honest statuses
+  attached.
+
 ## [3.1.0] — 2026-08-23
 
 ### Changed
@@ -908,7 +999,9 @@ version get a real diff link:
 then replace the PyPI links below with compare/ links.
 -->
 
-[Unreleased]: https://github.com/K4-LABS/gpumesh/compare/v3.0.0...HEAD
+[Unreleased]: https://github.com/K4-LABS/gpumesh/compare/v3.2.0...HEAD
+[3.2.0]: https://github.com/K4-LABS/gpumesh/compare/v3.1.0...v3.2.0
+[3.1.0]: https://github.com/K4-LABS/gpumesh/compare/v3.0.0...v3.1.0
 [3.0.0]: https://github.com/K4-LABS/gpumesh/compare/v2.0.0...v3.0.0
 [2.0.0]: https://github.com/K4-LABS/gpumesh/compare/v1.3.0...v2.0.0
 [1.3.0]: https://github.com/K4-LABS/gpumesh/compare/v1.2.0...v1.3.0
