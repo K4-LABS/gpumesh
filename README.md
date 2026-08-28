@@ -29,7 +29,7 @@ across machines on your network — with one decorator, one CLI command, or a Py
 
 ## What is gpumesh?
 
-gpumesh turns multiple machines into a **single, unified compute pool**. Start a **coordinator** on one machine, join **workers** from other machines (laptops, desktops, servers — anything with Python), and run code across all of them as if they were one device.
+gpumesh turns multiple machines into a **single, unified compute pool**. Start a **coordinator** on one machine, join **workers** from other machines (laptops, desktops, servers  anything with Python), and run code across all of them as if they were one device.
 
 **Use cases:**
 
