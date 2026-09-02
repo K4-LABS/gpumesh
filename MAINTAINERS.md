@@ -25,9 +25,9 @@ Concretely, and no more than this:
 - **Write access** to the repository, so they can merge.
 - **Review authority** on any pull request. A change lands when a maintainer
   who did not write it approves it and CI is green.
-- **Release authority** — tagging, publishing to PyPI, and pushing the
+- **Release authority.** Tagging, publishing to PyPI, and pushing the
   container image are done from CI, triggered by a maintainer.
-- **Security response** — receiving and triaging private reports, and deciding
+- **Security response.** Receiving and triaging private reports, and deciding
   when an advisory is published. See `SECURITY.md`.
 
 gpumesh is a BDFL project. Where two maintainers disagree and cannot settle it
@@ -36,7 +36,7 @@ and explains why the honest description is that one rather than a committee.
 
 ## Contact
 
-- **Bugs, features, questions:** open an issue. Public by default — that is
+- **Bugs, features, questions:** open an issue. Public by default, and that is
   where decisions are supposed to be made, and a question answered in a DM
   helps exactly one person.
 - **Security vulnerabilities:** do **not** open an issue. Use
@@ -59,5 +59,5 @@ are also welcome to ask directly.
 ## Emeritus
 
 None yet. When a maintainer steps back, their name moves here rather than
-disappearing — the commit history is public either way, and quietly deleting
+disappearing. The commit history is public either way, and quietly deleting
 people from a roster is a bad habit for a project to acquire.

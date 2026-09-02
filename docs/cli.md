@@ -21,7 +21,7 @@ debug-level logging, `--json-logs` to emit logs as JSON lines (for Docker), and
 `serve` and `join` also take `--color` / `--no-color`. They are the two
 commands that keep printing for hours into a Docker log or a systemd journal,
 which is exactly where `isatty()` says "no terminal" and you may still want
-colour — or emphatically not want it.
+colour, or emphatically not want it.
 
 **`gpumesh doctor`** is read-only: it adds no firewall rules, saves no
 connection, installs nothing, and never prints the token. It reports which
@@ -29,7 +29,7 @@ gpumesh is imported and from where, the Python interpreter, torch/CUDA (and
 whether `nvidia-smi` disagrees with it), the cloudpickle version, the saved
 coordinator and its workers, the addresses this machine would bind and
 advertise, and on Windows whether a firewall rule for the port exists. It
-exits `1` only for a fault on *this* machine — no coordinator configured, or
+exits `1` only for a fault on *this* machine: no coordinator configured, or
 an unreachable one, is a warning and still exits `0`, so it works as a
 pre-flight check in a script. `--json` emits the same report as a document
 (warnings are diverted to stderr so the stdout stays parseable).
@@ -39,8 +39,8 @@ hour of firewall debugging:
 
 | Flag | Controls | Default |
 |------|----------|---------|
-| `--host` | **The bind address** — who can open a connection at all. A security boundary | `127.0.0.1` (this machine only) |
-| `--host-ip` | **The advertised address** — which address is printed for workers to dial. Cosmetic | auto-detected LAN IP |
+| `--host` | **The bind address**, meaning who can open a connection at all. A security boundary | `127.0.0.1` (this machine only) |
+| `--host-ip` | **The advertised address**, meaning which address is printed for workers to dial. Cosmetic | auto-detected LAN IP |
 
 Setting `--host-ip` alone never opens the port up. Use `--host 0.0.0.0` for
 that, and read the banner it prints. `--host-ip` is for when auto-detection
@@ -90,7 +90,7 @@ failed" on its own sends people to the wrong fix.
 stops travelling in cleartext and pickled payloads cannot be rewritten in
 flight. It does not authenticate the coordinator unless you moved the
 certificate by hand, and it does not make gpumesh safe to face the internet.
-Cross-network use still wants a tunnel — `--tailscale` or `--public`.
+Cross-network use still wants a tunnel, `--tailscale` or `--public`.
 
 A coordinator and one worker, end to end:
 
@@ -188,8 +188,8 @@ Job and monitoring commands (`submit`, `status`, `cancel`, `retry`, `workers`, `
 | `GPUMESH_URL` | Job/monitoring commands | Coordinator URL when `--url` is omitted |
 | `GPUMESH_TOKEN` | Job/monitoring commands, `serve`, `join` | Auth token when `--token` is omitted (`quickjoin` and `worker` always require the flag) |
 | `GPUMESH_HOST` | `serve` | Bind address when `--host` is omitted. `0.0.0.0` opens the port to other machines |
-| `GPUMESH_HOST_IP` | `serve` | Pin the address advertised to workers (same as `--host-ip`) — does **not** change the bind. Must be an IP literal; a hostname is rejected with a warning and auto-detection is used instead |
-| `GPUMESH_CLAIM_HOST` | `worker`, and `setup` in worker mode | Bind address for the **claim** port. Defaults to all interfaces, unlike the coordinator — a claim server exists to be reached by another machine, so loopback would not make it safer, only broken. Narrow it to one address (your tailnet, say) if you do not need all of them |
+| `GPUMESH_HOST_IP` | `serve` | Pin the address advertised to workers (same as `--host-ip`). Does **not** change the bind. Must be an IP literal; a hostname is rejected with a warning and auto-detection is used instead |
+| `GPUMESH_CLAIM_HOST` | `worker`, and `setup` in worker mode | Bind address for the **claim** port. Defaults to all interfaces, unlike the coordinator, because a claim server exists to be reached by another machine, so loopback would not make it safer, only broken. Narrow it to one address (your tailnet, say) if you do not need all of them |
 | `GPUMESH_LOCAL=1` | `@mesh` / `@accelerate` | Force local execution, never touch the mesh |
 | `GPUMESH_VERBOSE=1` | `@mesh` / `@accelerate` | Print which device handled each task |
 | `GPUMESH_COLOR` | All output | `1` forces colour, `0` disables it, `auto` (default) checks whether stdout is a TTY |
@@ -222,7 +222,7 @@ escape hatch.
 **The two `GPUMESH_AUTH_KDF*` variables are for compatibility and tuning, not
 for turning security on.** The coordinator derives a PBKDF2-HMAC-SHA256 hash of
 the token at every start, keeps it in memory, and never writes it to the
-database — that is the default and needs no configuration. `sha256` exists
+database, which is the default and needs no configuration. `sha256` exists
 because tokens hashed by an older gpumesh must keep verifying; it is a
 downgrade to a single round, so set it only if something outside gpumesh reads
 the hash format. Raising the iteration count does not slow a busy mesh down:

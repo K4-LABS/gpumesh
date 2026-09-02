@@ -1,4 +1,4 @@
-# Good first issues — drafts to paste
+# Good first issues: drafts to paste
 
 This file is a staging area for the maintainer, not documentation for users.
 
@@ -7,11 +7,11 @@ personalised "contribute" recommendations, and third-party sites that scrape
 them) only see *issues*. A repository with a welcoming CONTRIBUTING.md and an
 empty issue tracker is invisible to all of them. The five drafts below take the
 "Good places to start" bullets in [CONTRIBUTING.md](../CONTRIBUTING.md) and make
-them concrete enough to open as-is — each names the file and function to change,
+them concrete enough to open as-is. Each names the file and function to change,
 how to verify it, and where to ask for help.
 
 **How to use this file:** paste each block into a new issue, apply the labels
-listed, then delete the block from here — or leave it, and this becomes the
+listed, then delete the block from here, or leave it, and this becomes the
 record of what was seeded.
 
 ---
@@ -28,22 +28,22 @@ record of what was seeded.
 > [ERROR] Could not reach coordinator: <urlopen error [WinError 10061] ...>
 > ```
 >
-> The one fact that would let you fix it yourself — *which address and port were
-> actually tried* — is missing. If you have joined a mesh before, the URL comes
+> The one fact that would let you fix it yourself, *which address and port were
+> actually tried*, is missing. If you have joined a mesh before, the URL comes
 > from the saved connection rather than from anything you typed, so "which
 > coordinator?" is a real question and the message does not answer it.
 >
 > ### Where
 >
 > `gpumesh/cli.py`. The affected handlers are `cmd_status`, `cmd_cancel`,
-> `cmd_retry`, `cmd_workers`, `cmd_devices` and `cmd_kill` — each has an
+> `cmd_retry`, `cmd_workers`, `cmd_devices` and `cmd_kill`. Each has an
 > `except (urllib.error.URLError, OSError) as exc:` branch printing either
 > "Could not reach coordinator" or "Could not communicate with coordinator".
 > Each of them already has `url` in scope from `_resolve_conn(args)`.
 >
 > ### What to change
 >
-> Include the URL in the message, and follow it with a hint on the next line —
+> Include the URL in the message, and follow it with a hint on the next line.
 > the existing `dim()` helper is used for hints elsewhere in the same file:
 >
 > ```
@@ -59,14 +59,14 @@ record of what was seeded.
 > ### How to verify
 >
 > `tests/test_cli.py` already exercises these handlers. Add a test that points a
-> command at an address that cannot route — use `192.0.2.1` (reserved by
+> command at an address that cannot route. Use `192.0.2.1` (reserved by
 > RFC 5737 and guaranteed not to route; the test suite uses `192.0.2.x` for
-> exactly this) — and assert the printed output contains that address. Then run
+> exactly this), and assert the printed output contains that address. Then run
 > `pytest tests/test_cli.py -v`.
 >
 > ### Help
 >
-> Comment here if any part is unclear and I will walk you through it — including
+> Comment here if any part is unclear and I will walk you through it, including
 > where the tests capture stdout. This one touches no networking logic, so it is
 > a safe first change.
 
@@ -92,13 +92,13 @@ record of what was seeded.
 > mean a dead coordinator, a dropped Wi-Fi link, or a coordinator restarted with
 > a fresh database.
 >
-> Compare the 404 and 401 branches a few lines above — those messages are good,
+> Compare the 404 and 401 branches a few lines above. Those messages are good,
 > and say what to do next. This one should match them.
 >
 > ### What to change
 >
 > Keep the last exception seen during polling and include it in the final
-> `RuntimeError` — including how long the wait went on for, since `start_time`
+> `RuntimeError`, including how long the wait went on for, since `start_time`
 > is already in scope. Something like:
 >
 > ```
@@ -119,13 +119,13 @@ record of what was seeded.
 > ### Help
 >
 > Ask here if the "bind to port 0 and shut it down mid-test" pattern is new to
-> you — it is the standard shape in this suite and worth learning once.
+> you. It is the standard shape in this suite and worth learning once.
 
 ---
 
 ## 3. Add a test that the version number agrees in every place it is written
 
-**Labels:** `good first issue`, `bug` (no `area:` — this one spans the repo)
+**Labels:** `good first issue`, `bug` (no `area:`, since this one spans the repo)
 
 > ### What is wrong
 >
@@ -134,32 +134,32 @@ record of what was seeded.
 >
 > | File | Field |
 > |---|---|
-> | `gpumesh/__init__.py` | `__version__ = "3.0.0"` — what `gpumesh --version` prints |
-> | `pyproject.toml` | `version = "3.0.0"` — what PyPI and `pip` see |
-> | `CITATION.cff` | `version: 3.0.0` — what GitHub's "Cite this repository" renders |
-> | `Dockerfile` | `ARG VERSION=3.0.0` — what the image's `version` and `org.opencontainers.image.version` labels report |
+> | `gpumesh/__init__.py` | `__version__ = "3.0.0"`, what `gpumesh --version` prints |
+> | `pyproject.toml` | `version = "3.0.0"`, what PyPI and `pip` see |
+> | `CITATION.cff` | `version: 3.0.0`, what GitHub's "Cite this repository" renders |
+> | `Dockerfile` | `ARG VERSION=3.0.0`, what the image's `version` and `org.opencontainers.image.version` labels report |
 >
 > There *is* a writer: `scripts/bump_version.py` rewrites all four in one go.
-> What is missing is the reader — nothing fails if the four drift, and they can
+> What is missing is the reader. Nothing fails if the four drift, and they can
 > drift the moment someone edits one by hand, resolves a merge conflict in one
 > of them, or bumps a release without using the script.
 >
 > A release that bumps three of the four ships a package whose installed version
 > disagrees with the version it reports about itself. That is a nasty one to
-> notice, because everything still works — it only shows up in bug reports,
+> notice, because everything still works. It only shows up in bug reports,
 > where `gpumesh --version` is the field being used to decide whether a reporter
 > is on the release that contains the fix. The bug report form asks for that
 > value specifically, so it needs to be true.
 >
 > ### What to add
 >
-> A small test — `tests/test_version_consistency.py` — that reads all four and
+> A small test, `tests/test_version_consistency.py`, that reads all four and
 > asserts they match. Give it a docstring saying which failure it prevents, per
 > the testing conventions in CONTRIBUTING.md.
 >
 > **Already fixed in 3.0.0 (keep the reader part):** `docker-compose.yaml`
 > pins the image in two places and used to be missing from
-> `bump_version.py`'s file list — the one version most likely to go stale.
+> `bump_version.py`'s file list, the one version most likely to go stale.
 > The script now rewrites the compose tag too (and respects the
 > `LABEL version="${VERSION}"` indirection in the Dockerfile), so the only
 > remaining piece of this issue is the consistency test itself.
@@ -170,7 +170,7 @@ record of what was seeded.
 > - Read the `version = "..."` line out of `pyproject.toml` with a regex. Boring,
 >   dependency-free, works everywhere, and this is a three-line file section that
 >   is not going to grow a complicated grammar.
-> - Use `importlib.metadata.version("gpumesh")` — but note this reads the
+> - Use `importlib.metadata.version("gpumesh")`, but note this reads the
 >   *installed* metadata, which in an editable install can lag behind the file
 >   you just edited. That makes it a weaker check than reading the file.
 >
@@ -186,7 +186,7 @@ record of what was seeded.
 >
 > ### Help
 >
-> Ask here if you would rather do it a different way — there is no single right
+> Ask here if you would rather do it a different way. There is no single right
 > answer and I am happy to talk through the tradeoff.
 
 ---
@@ -200,9 +200,9 @@ record of what was seeded.
 > An open invitation rather than a specific defect. The README is written by
 > someone who already knows how gpumesh works, which makes it structurally
 > unable to notice its own gaps. If you followed it and something did not
-> happen the way it said — a command that needed a flag the README omits, a step
+> happen the way it said: a command that needed a flag the README omits, a step
 > that assumed both machines were already on the same subnet, an output sample
-> that no longer matches — that is the bug.
+> that no longer matches. That is the bug.
 >
 > ### What to change
 >
@@ -215,8 +215,8 @@ record of what was seeded.
 >
 > ### How to verify
 >
-> Follow your own corrected instructions from a clean shell — ideally a fresh
-> virtualenv — and confirm they work start to finish.
+> Follow your own corrected instructions from a clean shell, ideally a fresh
+> virtualenv, and confirm they work start to finish.
 >
 > ### Help
 >
@@ -231,7 +231,7 @@ record of what was seeded.
 
 > ### Why this is worth a whole issue
 >
-> Not a beginner code task — this needs two machines rather than any particular
+> Not a beginner code task. This needs two machines rather than any particular
 > skill, which is precisely why it is unfilled. The maintainer has a limited set
 > of hardware and one network, and CI runs everything on loopback within a single
 > runner. Nearly every remaining rough edge in gpumesh lives in the gap between
@@ -239,12 +239,12 @@ record of what was seeded.
 >
 > The setups most likely to surface something new:
 >
-> - A machine with a **VPN** running — Tailscale, WireGuard, corporate
-> - A machine with **hypervisor or container adapters** — VirtualBox, VMware,
+> - A machine with a **VPN** running: Tailscale, WireGuard, corporate
+> - A machine with **hypervisor or container adapters**: VirtualBox, VMware,
 >   Hyper-V, Docker Desktop, WSL. These add local addresses that only the host
 >   itself can route to
 > - Two machines on **different subnets**, or on Wi-Fi with client isolation
-> - **Mixed operating systems** — Windows coordinator with a Linux or macOS
+> - **Mixed operating systems**: a Windows coordinator with a Linux or macOS
 >   worker, or the reverse
 > - **Different Python versions on each machine.** This is the single most common
 >   real-world failure, because `@mesh` ships your function across
@@ -261,7 +261,7 @@ record of what was seeded.
 >   timeout
 > - `ipconfig` / `ip addr` from the coordinator, so the adapter set is visible
 >
-> **A report that it worked fine is also useful** — comment here with the two
+> **A report that it worked fine is also useful**. Comment here with the two
 > setups. Knowing which combinations are clean is how the broken ones get
 > isolated.
 >
@@ -278,16 +278,16 @@ record of what was seeded.
 Create these before opening the issues above. Nothing here is exotic; the value
 is in using a fixed set consistently, so that a filter is trustworthy.
 
-## Type — exactly one per issue
+## Type: exactly one per issue
 
 | Label | Meaning | Notes |
 |---|---|---|
 | `bug` | Does not behave the way the docs say | Applied automatically by `bug_report.yml` |
-| `enhancement` | A capability that does not exist yet | Applied automatically by `feature_request.yml`. **Use `enhancement`, not `feature-request`** — it is a GitHub default label that already exists, and an issue form referencing a label that does not exist silently drops it |
+| `enhancement` | A capability that does not exist yet | Applied automatically by `feature_request.yml`. **Use `enhancement`, not `feature-request`**. It is a GitHub default label that already exists, and an issue form referencing a label that does not exist silently drops it |
 | `documentation` | README, CONTRIBUTING, docstrings, examples | |
 | `question` | Should probably have been a Discussion | Answer it, link [SUPPORT.md](../SUPPORT.md), convert to a Discussion |
 
-## Status — added and removed as an issue moves
+## Status: added and removed as an issue moves
 
 | Label | Meaning |
 |---|---|
@@ -297,26 +297,26 @@ is in using a fixed set consistently, so that a filter is trustworthy.
 | `wontfix` | Deliberate design boundary. Say which one, in the closing comment |
 | `duplicate` | Link the original |
 
-## Contribution signals — spelling matters
+## Contribution signals: spelling matters
 
 | Label | Meaning |
 |---|---|
 | `good first issue` | Scoped so it can be done without understanding the whole codebase |
-| `help wanted` | Input is wanted from outside — including things that are not beginner-friendly |
+| `help wanted` | Input is wanted from outside, including things that are not beginner-friendly |
 
 These two are the exact strings GitHub matches for its global
 contribution-discovery feeds: the repository's own "Contribute" panel, the
 personalised recommendations at <https://github.com/contribute>, and the
 `good-first-issue` topic feeds that most "find an open source project" sites
 scrape. **Lowercase, spaces not hyphens, singular `issue`.** `good-first-issue`,
-`Good First Issue` and `good first issues` are all invisible to those feeds — the
+`Good First Issue` and `good first issues` are all invisible to those feeds. The
 issue still exists, it just never gets recommended to anyone, which defeats the
 point of labelling it.
 
 They are also the two labels [CONTRIBUTING.md](../CONTRIBUTING.md) links to by
 name, so the links break if the spelling drifts.
 
-## Area — zero or one per issue
+## Area: zero or one per issue
 
 Matched to this codebase's actual modules, so that an area label points at
 files rather than at a vibe.
@@ -325,9 +325,9 @@ files rather than at a vibe.
 |---|---|
 | `area:networking` | `discovery.py`, `claimer.py`, `connection_manager.py`, `tunnel.py`, `utils.py` |
 | `area:coordinator` | `server.py`, `db.py` (routes, persistence, the reaper thread), `security.py` (token hashing, rate limiting) |
-| `area:scheduling` | `db.py` (`lease_task`, `_worker_can_run`), `capability.py` — which worker gets which task, and which tasks nobody can run |
+| `area:scheduling` | `db.py` (`lease_task`, `_worker_can_run`), `capability.py`, covering which worker gets which task, and which tasks nobody can run |
 | `area:worker` | `worker.py`, `sandbox.py`, `_function_subprocess.py` |
-| `area:serialization` | `serializer.py`, `_function_subprocess.py` — the cross-version function transport, which is where the most common real-world failures land |
+| `area:serialization` | `serializer.py`, `_function_subprocess.py`, the cross-version function transport, which is where the most common real-world failures land |
 | `area:protocol` | `gpumesh/__init__.py` (`PROTOCOL_VERSION` / `MIN_PROTOCOL_VERSION`) and the registration handshake in `server.py` / `worker.py`. Anything labelled here has to be checked against `.github/workflows/compat.yml`, which runs a real task between the current tree and a released gpumesh in both role assignments |
 | `area:api` | `api.py`, `accelerate.py`, `mesh.py`, `client.py`, `jupyter_magic.py`, `torch.py` |
 | `area:cli` | `cli.py`, `status.py`, `radar.py`, `setup_wizard.py`, `ansi.py`, `logging_config.py` |
@@ -335,11 +335,11 @@ files rather than at a vibe.
 | `area:docs` | `README.md`, `CONTRIBUTING.md`, `docs/`, `examples/`, docstrings |
 
 `area:serialization` and `area:worker` overlap on `_function_subprocess.py`
-because that file genuinely belongs to both — it duplicates the encoding half of
+because that file genuinely belongs to both. It duplicates the encoding half of
 `serializer.py` on purpose, since it runs as a standalone script with no gpumesh
 package on its path. Pick whichever half the issue is about.
 
-## Platform — only when a problem is OS-specific
+## Platform: only when a problem is OS-specific
 
 `os:windows`, `os:macos`, `os:linux`. gpumesh supports all three and CI tests all
 three, so "only on Windows" is a genuinely useful filter and not an excuse.
