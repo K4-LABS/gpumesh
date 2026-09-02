@@ -1,52 +1,36 @@
-# 2-Node Docker Compose Example
+# Two-node Docker Compose example
 
-This directory contains a self-contained, working example of a two-node `gpumesh` cluster (one coordinator and one worker) running in Docker.
+A self-contained two-node `gpumesh` cluster, one coordinator and one worker, running in Docker.
 
-## 🚀 Starting the Cluster
+## Starting the cluster
 
-Start the cluster in detached mode from this directory:
+The compose file requires a token and refuses to start without one. Generate a real one rather than inventing a memorable string. The token is the only thing between anyone who can reach the port and code execution as you.
 
 ```bash
+export GPUMESH_TOKEN=$(python -c "import secrets; print(secrets.token_urlsafe(32))")
 docker compose up -d
 ```
 
-(Wait a few seconds for the worker to connect to the coordinator).
+Give the worker a few seconds to connect.
 
-## 🛠️ Submitting a Job
+The coordinator publishes on `127.0.0.1` only, so nothing outside this machine can reach it. To let other machines join, set `GPUMESH_BIND=0.0.0.0`, and read the warning the coordinator prints before you do.
 
-Once the cluster is running, you can submit the `grid_search.py` example to the containerized coordinator.
+## Submitting a job
 
-Run this command from the root of the repository:
+Submit the `grid_search.py` example to the containerized coordinator. Run this from the root of the repository, in the same shell that has `GPUMESH_TOKEN` set:
 
 ```bash
 export GPUMESH_URL=http://127.0.0.1:8732
-export GPUMESH_TOKEN=my-secret-mesh-token
 
-# If gpumesh is not in your PATH, use `python -m gpumesh`
+# If gpumesh is not on your PATH, `python -m gpumesh` works the same way
 python -m gpumesh submit examples/grid_search.py --payloads examples/payloads.json --wait
 ```
 
-## ✅ Expected Output
+## Expected output
 
-A successful run will indicate that the tasks were distributed and completed across the mesh. You should see output exactly like this:
+Six tasks, spread across the mesh and finishing:
 
 ```plaintext
-============================================================
-  gpumesh installed successfully!
-  version 2.0.0
-============================================================
-
-  Get started in one command:
-
-    gpumesh setup
-
-  This will detect your hardware and guide you
-  through choosing coordinator or worker role.
-  Or start a coordinator directly:
-    gpumesh serve --token your-secret-token
-
-============================================================
-
 [OK] Submitted job dd72a3c2a1cf
 Job: examples/grid_search.py (dd72a3c2a1cf)
   Status: finished
@@ -66,16 +50,20 @@ Job: examples/grid_search.py (dd72a3c2a1cf)
     result: {"lr": 0.3, "epochs": 1000, "l2": 0.01, "val_accuracy": 0.952, "weights": [2.1907, -2.9448, 0.0191]}
 ```
 
-## ⚠️ Important Note on Ports
+Task and worker ids will differ on your run. The `val_accuracy` figures will not, because `grid_search.py` is deterministic.
 
-If you are writing your own client scripts, please note the port configuration differences:
+## A note on ports
 
-- This Docker image defaults to port 8732.
-- Running the coordinator locally on your host via `gpumesh serve` defaults to port 8000.
+The two defaults differ, and it catches people out when they write their own client scripts.
 
-## 🛑 Teardown
+- The Docker image listens on **8732**.
+- `gpumesh serve` on the host defaults to **8000**.
 
-To stop and remove the containers, run this from the `examples/docker-2node/` directory:
+Both are only defaults. Pass `--port` to use whatever you like, and point workers at the same number the coordinator is listening on.
+
+## Teardown
+
+From this directory:
 
 ```bash
 docker compose down

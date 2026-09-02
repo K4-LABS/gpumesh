@@ -56,9 +56,9 @@ def update_version_in_file(filepath: Path, new_version: str) -> bool:
     """Update version in a file. Returns True if updated."""
     if not filepath.exists():
         return False
-    
+
     content = filepath.read_text()
-    
+
     # Update __version__ in Python files
     if filepath.suffix == ".py":
         new_content = re.sub(
@@ -124,7 +124,7 @@ def update_version_in_file(filepath: Path, new_version: str) -> bool:
         )
     else:
         return False
-    
+
     if new_content != content:
         filepath.write_text(new_content)
         return True
@@ -135,15 +135,15 @@ def main():
     if len(sys.argv) != 2:
         print(__doc__)
         sys.exit(1)
-    
+
     bump_type = sys.argv[1]
     current = get_current_version()
-    
+
     print(f"Current version: {current}")
-    
+
     new_version = bump_version(current, bump_type)
     print(f"New version:     {new_version}")
-    
+
     # Update files
     project_root = Path(__file__).parent.parent
     files_to_update = [
@@ -152,14 +152,21 @@ def main():
         project_root / "Dockerfile",
         project_root / "CITATION.cff",
         project_root / "docker-compose.yaml",
+        # The example compose file pins the same image and was missing from
+        # this list, so it sat on 3.0.0 while the tree moved to 3.2.0 — two
+        # releases of drift, pointing a newcomer at an image that is not the
+        # one the docs around it describe. It needs no new branch in
+        # update_version_in_file(): that function dispatches on the file's
+        # *name*, and this one is also called docker-compose.yaml.
+        project_root / "examples" / "docker-2node" / "docker-compose.yaml",
     ]
-    
+
     for filepath in files_to_update:
         if update_version_in_file(filepath, new_version):
             print(f"  [OK] Updated {filepath.relative_to(project_root)}")
         else:
             print(f"  [--] Skipped {filepath.relative_to(project_root)}")
-    
+
     print(f"\nVersion bumped to {new_version}")
     print("Next steps:")
     print("  1. Run tests: python -m pytest tests/ -v")

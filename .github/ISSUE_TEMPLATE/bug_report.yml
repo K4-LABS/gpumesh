@@ -52,7 +52,7 @@ body:
     attributes:
       label: gpumesh version
       description: "Output of `gpumesh --version`"
-      placeholder: gpumesh 3.0.0 (3.11.9, Windows)
+      placeholder: gpumesh 3.2.0 (3.11.9, Windows)
     validations:
       required: true
 
