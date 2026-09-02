@@ -28,7 +28,7 @@ unless the operator passes `--host` or sets `GPUMESH_HOST`
 (`DEFAULT_BIND_HOST`, `cli.py:344`; `_resolve_bind_host`, `cli.py:359`;
 `GPUMesh.start_coordinator(host="127.0.0.1")`, `api.py:203`). Everything below
 that involves a network attacker presumes the operator opted out of that
-default — an opt-in that prints a full-width banner naming the OS user and
+default. Opening it up is an opt-in that prints a full-width banner naming the OS user and
 device that submitted code will run as (`cli.py:435`, called at `cli.py:812`;
 the API equivalent at `api.py:285-297`).
 
@@ -102,8 +102,8 @@ Two steps changed in 3.2.0 and neither changed the shape of the flow.
 
 **Step 4, the transport.** The hop is cleartext unless the coordinator was
 started with `--tls` *and* the client dialled an `https://` URL. `MeshClient`
-is the single chokepoint for every client request — the Python API, the CLI's
-job commands and `@accelerate` all go through it — which is what makes the
+is the single chokepoint for every client request. The Python API, the CLI's
+job commands and `@accelerate` all go through it, which is what makes the
 TLS context one construction (`worker.py:119-122`) rather than a hunt through
 call sites. A verification failure is rewritten into an instruction naming
 both `GPUMESH_TLS_CA` and `GPUMESH_TLS_INSECURE` (`tls.explain_verify_failure`,
@@ -113,7 +113,7 @@ both `GPUMESH_TLS_CA` and `GPUMESH_TLS_INSECURE` (`tls.explain_verify_failure`,
 random 16-byte salt and 200000 iterations by default. It is derived once at
 coordinator start (`SecurityManager.__init__`, `security.py:420`, hashing at
 `security.py:437`; constructed at `server.py:942`), **never written to the
-database**, and re-derived from the token on every restart — which is exactly
+database**, and re-derived from the token on every restart, which is exactly
 why a random salt is safe here where the old deterministic one was thought
 necessary. Nothing compares two hashes, so nothing needs the hash to be
 stable; only the token does, and workers persist that. Successful
@@ -136,10 +136,10 @@ budget (`db.py:1254`), so a deterministically broken task burns one attempt
 rather than three. That is a correctness fix with a denial-of-service
 side-benefit: it removes a 3x amplifier on repeated failing submissions. It
 does not constrain an authenticated submitter, who can simply submit three
-times — see STRIDE row 9.
+times. See STRIDE row 9.
 
 The sign of the exit status is load-bearing and is not a detail. A positive
-status is the script's own verdict on itself — an uncaught exception exits 1 —
+status is the script's own verdict on itself, since an uncaught exception exits 1,
 so re-running it is pure waste. A *negative* status is POSIX for "killed by a
 signal", which is the OOM killer's verdict on the *machine*, not the code's on
 itself, so those keep the full retry budget and may well succeed on another
@@ -158,14 +158,14 @@ is the correct trade and is why row 9 is still "accepted by design".
 | **The internet** | Present only if the operator ran `--public` (ngrok) or joined via Tailscale | Untrusted. |
 
 There is exactly one *authorization* boundary and it is one bit wide: token, or
-no token. Ahead of it now sits a reachability boundary — the coordinator's bind
-address — which is not an access control (it distinguishes no callers) but does
+no token. Ahead of it now sits a reachability boundary, the coordinator's bind
+address, which is not an access control (it distinguishes no callers) but does
 decide whether the authorization boundary is exposed to anyone at all. In the
 default deployment it is not.
 
 Inside the mesh there are no roles, no per-worker keys, no per-job isolation,
 and no asymmetry between "who may submit" and "who may execute". A mesh is a
-single trust domain — the same framing vLLM uses for a Ray cluster: every
+single trust domain, the same framing vLLM uses for a Ray cluster: every
 member is as trusted as the least trustworthy member.
 
 ## 3. Assets
@@ -178,8 +178,8 @@ Ordered by what an attacker actually wants.
 | **SSH keys, cloud credentials, `.env` files** | `$HOME` on every worker | Reachable by any task; there is no filesystem confinement. A dev laptop worker usually holds credentials to things far more valuable than the GPU. |
 | **The GPU itself** | Worker hosts | Theft of compute: crypto mining, model training on someone else's electricity, or a foothold that looks like legitimate load. gpumesh has no quota mechanism, so a submitter can take all of it (`SECURITY.md`, "Not a vulnerability"). |
 | **The token** | `--token` argv (on `serve` and every other subcommand's parser), stdout at `cli.py:774`, `GPUMESH_TOKEN` env, `~/.gpumesh/config.json` at 0600 (`connection_manager.py:23`, `connection_manager.py:121`), and the coordinator's memory as a PBKDF2 hash (`hash_token`, `security.py:155`) | It is the single credential. Holding it is equivalent to being the operator. Note where it is *not*: never in the database, and never in the verify cache, which keys on `HMAC-SHA256(per-process random key, token)` (`security.py:245`). |
-| **Code in flight** | The cloudpickle blob in `payload["_func"]`, stored as JSON text in SQLite (`db.py:890`) and moving over HTTP — cleartext unless `--tls` | Reading it discloses proprietary model code; modifying it is remote code execution on every worker. |
-| **Data in flight and results** | Payloads and result envelopes, cleartext unless `--tls`, stored in SQLite (`db.py:1270`) | Training data, inference outputs. Also the injection vector for step 18 — which `--strict` can refuse, at the cost of every non-JSON return value. |
+| **Code in flight** | The cloudpickle blob in `payload["_func"]`, stored as JSON text in SQLite (`db.py:890`) and moving over HTTP, cleartext unless `--tls` | Reading it discloses proprietary model code; modifying it is remote code execution on every worker. |
+| **Data in flight and results** | Payloads and result envelopes, cleartext unless `--tls`, stored in SQLite (`db.py:1270`) | Training data, inference outputs. Also the injection vector for step 18, which `--strict` can refuse, at the cost of every non-JSON return value. |
 | **The submitting client** | The operator's laptop, usually running a notebook | Compromised via a malicious result at `serializer.py:615`. Attacking the client is often easier than attacking a worker, and lands on a better machine. `--strict` is the client's own control over this (`serializer.py:594-605`). |
 
 ## 4. Actors
@@ -188,20 +188,20 @@ Ordered by what an attacker actually wants.
 | --- | --- | --- |
 | Mesh operator | Runs `gpumesh serve` | Total, by definition. Not defended against. |
 | Token holder | Has URL + token | Arbitrary code execution on every worker; full job control. |
-| Malicious worker | Joined the mesh with a valid token, or was compromised afterwards | Returns a poisoned result envelope; gets code execution on every client that reads it (`serializer.py:615`) — unless that client set `--strict`. Also sees every task it is leased, which no client-side control touches. |
+| Malicious worker | Joined the mesh with a valid token, or was compromised afterwards | Returns a poisoned result envelope; gets code execution on every client that reads it (`serializer.py:615`), unless that client set `--strict`. Also sees every task it is leased, which no client-side control touches. |
 | Compromised coordinator | Owns the queue | Serves arbitrary `_func` blobs to every worker. Total mesh compromise. |
-| Unauthenticated LAN peer | Can reach the ports — **only after the operator opted into a non-loopback bind, or started `gpumesh worker` / `gpumesh setup`** | Should get nothing but a 401 (coordinator) or a 401/429 (claim port). This is the boundary under test. Absent entirely from a default `gpumesh serve`. |
+| Unauthenticated LAN peer | Can reach the ports, but **only after the operator opted into a non-loopback bind, or started `gpumesh worker` / `gpumesh setup`** | Should get nothing but a 401 (coordinator) or a 401/429 (claim port). This is the boundary under test. Absent entirely from a default `gpumesh serve`. |
 | Local user on a mesh host | Shell on a worker or the coordinator, different account | Can read `--token` from the process table (`ps`); can read `~/.gpumesh/config.json` only if they are the same user or root. |
 | Passive network observer | On the path, listening | *Cleartext (default):* reads the token from the header, reads code and data. *With `--tls`:* sees ciphertext and nothing else. Also mitigated by choosing the network, or `--tailscale`. |
-| Active on-path attacker | On the path, able to intercept and answer | *Cleartext:* modifies `_func` in flight, which is RCE on every worker. *With `--tls` and no pinned certificate:* terminates the connection with a certificate of their own and is back to the cleartext case — a self-signed certificate authenticates nothing until someone copies it. *With `GPUMESH_TLS_CA` set to a copy of the coordinator's certificate, or a real CA:* refused. |
+| Active on-path attacker | On the path, able to intercept and answer | *Cleartext:* modifies `_func` in flight, which is RCE on every worker. *With `--tls` and no pinned certificate:* terminates the connection with a certificate of their own and is back to the cleartext case. A self-signed certificate authenticates nothing until someone copies it. *With `GPUMESH_TLS_CA` set to a copy of the coordinator's certificate, or a real CA:* refused. |
 
 ## 5. Entry points and trust boundaries
 
 ### 5.1 Coordinator HTTP port (default 8000, bound `127.0.0.1`)
 
-`cmd_serve` resolves the bind through `_resolve_bind_host` (`cli.py:359`) —
+`cmd_serve` resolves the bind through `_resolve_bind_host` (`cli.py:359`):
 `--host`, then `GPUMESH_HOST`, then `DEFAULT_BIND_HOST = "127.0.0.1"`
-(`cli.py:344`) — and passes it to `server.serve` (`cli.py:718`), where the
+(`cli.py:344`). It passes that to `server.serve` (`cli.py:718`), where the
 socket is bound (`server.py:947`). `GPUMesh.start_coordinator` mirrors the
 default in its signature (`api.py:203`) and calls `serve` by keyword
 specifically so a future parameter reorder cannot silently bind the wrong
@@ -213,7 +213,7 @@ POST, with `_read_json` at `server.py:431`). Bodies are capped at 10 MB
 (`server.py:302`) and oversized ones are drained rather than left to desync the
 connection (`server.py:479-483`).
 
-- **Boundary:** yes, the primary one — **but on a default install there is
+- **Boundary:** yes, the primary one, **but on a default install there is
   nothing on the far side of it.** A loopback bind means no remote peer can
   complete a TCP handshake, so the token check is a second line rather than
   the first.
@@ -244,20 +244,20 @@ connection (`server.py:479-483`).
   (`tls.ensure_self_signed_cert`, `tls.py:222`, reuse at `tls.py:239`), key
   0600 and directory 0700 (`tls.py:184`, `tls.py:231`), TLS 1.2 floor
   (`tls.py:276`), fingerprint printed at `server.py:974`. **This is a
-  confidentiality and integrity control, not an authentication one** — see
+  confidentiality and integrity control, not an authentication one**. See
   STRIDE row 4b.
-- **Caveat — `gpumesh setup`.** The wizard's LAN auto-discovery mode overrides
+- **Caveat, `gpumesh setup`.** The wizard's LAN auto-discovery mode overrides
   the default with `WIZARD_LAN_BIND_HOST = "0.0.0.0"` (`setup_wizard.py:455`),
   resolved through the same `_resolve_bind_host` so `GPUMESH_HOST` still wins
   (`setup_wizard.py:466-475`), bound at `setup_wizard.py:581`. This is
-  deliberate — UDP radar, the claim POST, and the worker dialling back all
-  need a reachable socket — and it announces itself with the same banner
+  deliberate, because UDP radar, the claim POST, and the worker dialling back all
+  need a reachable socket, and it announces itself with the same banner
   (`_announce_bind_host`, `setup_wizard.py:478`, called at
   `setup_wizard.py:615`). If `GPUMESH_HOST` pins loopback, the wizard says so
   and explains why the flow will find nothing (`setup_wizard.py:483-495`).
   The wizard's Tailscale and manual modes only print instructions; they do not
   bind at all.
-- **Caveat — containers.** The published image's `ENTRYPOINT` is `gpumesh`
+- **Caveat, containers.** The published image's `ENTRYPOINT` is `gpumesh`
   with no default subcommand (`Dockerfile:132-133`), so the bind comes from
   the arguments the operator supplies. Documented container usage passes
   `--host 0.0.0.0`, which is correct inside a container and pushes the real
@@ -268,15 +268,15 @@ connection (`server.py:479-483`).
 `claimer.start_claim_server` (`claimer.py:595`) resolves its bind address
 through `_resolve_claim_bind_host` (`claimer.py:40`) and binds it at
 `claimer.py:645`. The precedence is deliberately the same shape as the
-coordinator's `cli._resolve_bind_host` — explicit argument, then
-`GPUMESH_CLAIM_HOST`, then the default — and only the default and the variable
+coordinator's `cli._resolve_bind_host`: explicit argument, then
+`GPUMESH_CLAIM_HOST`, then the default. Only the default and the variable
 name differ, so an operator who has learned `--host`/`GPUMESH_HOST` does not
 have to learn a second set of rules.
 
 **The default is still every interface** (`DEFAULT_CLAIM_BIND_HOST = "0.0.0.0"`,
 `claimer.py:37`), and that is a decision, not an oversight. Unlike the
-coordinator — where running a coordinator and a worker on one machine is a
-real, common case that loopback serves perfectly — a claim server has exactly
+coordinator, where running a coordinator and a worker on one machine is a
+real, common case that loopback serves perfectly, a claim server has exactly
 one purpose: to be reached by a coordinator on *another* machine. A loopback
 claim server is not a safer claim server, it is a broken one, and it fails as
 an unreachable-worker mystery rather than as a refusal. Discovery mode is
@@ -284,12 +284,12 @@ already an explicit opt-in the operator chose; narrowing the default would
 silently undo that choice.
 
 What changed is that the bind is now **addressable**. `GPUMESH_CLAIM_HOST=<addr>`
-pins the listener to one interface — a tailnet or VPN address is the usual
-reason — and that is the only control on this port that reduces the attack
+pins the listener to one interface, usually a tailnet or VPN address,
+and that is the only control on this port that reduces the attack
 *surface* rather than the cost per attempt. It is a separate variable from
 `GPUMESH_HOST` on purpose: the two answer different questions, are frequently
-set on the same machine, and `GPUMESH_HOST=127.0.0.1` — an entirely reasonable
-coordinator setting — would otherwise quietly render every worker on that box
+set on the same machine, and `GPUMESH_HOST=127.0.0.1`, an entirely reasonable
+coordinator setting, would otherwise quietly render every worker on that box
 unclaimable.
 
 A non-loopback bind announces itself: `_print_claim_exposure_warning`
@@ -298,7 +298,7 @@ listening address, the scope, and the OS user that claims will run as. It is
 modelled on `cli._print_exposure_warning` but is deliberately not that
 function: the coordinator's banner closes by telling the reader loopback is the
 default and how to get back to it, which is actively wrong here. Note the
-ordering — the banner is printed *after* `bind()` succeeds, so a listener that
+ordering: the banner is printed *after* `bind()` succeeds, so a listener that
 failed to start never claims to be exposed.
 
 This remains the widest-open surface gpumesh ships, and the one that has been
@@ -343,7 +343,7 @@ every control below applies to both handlers.
     by the same policy without knowing it exists. 401 records a failure, 200
     clears it.
 - **The limiter is `security.RateLimiter`, not a second implementation**
-  (imported `claimer.py:22`, instantiated `claimer.py:228`) — same defaults
+  (imported `claimer.py:22`, instantiated `claimer.py:228`), same defaults
   (5 failures / 300 s window -> 900 s lockout), same loopback exemption, one
   policy for an operator to learn. A fresh listener gets a fresh limiter
   (`claimer.py:642`), on the reasoning that a restart is a deliberate act at
@@ -354,7 +354,7 @@ every control below applies to both handlers.
   (`run_worker` on a background thread, `claimer.py:582`; acknowledged at
   `claimer.py:592`, and at `worker.py:1302` in the patched handler). That is an outbound fetch
   to a network-supplied URL, gated on the worker's token. A token bypass here
-  is therefore both RCE and SSRF — which is why this port, not the
+  is therefore both RCE and SSRF, which is why this port, not the
   coordinator's, is where the hardening effort went.
 - **Residual, and narrowing the bind does not remove it.** The controls above
   are limits on the *cost* of an unauthenticated request, not gates on making
@@ -367,7 +367,7 @@ every control below applies to both handlers.
   maintainer is most likely to add something worse. The lockout is per source
   IP and in memory, so it slows a single attacker rather than a distributed or
   spoofing one, and loopback is exempt. `GPUMESH_CLAIM_HOST` is the only lever
-  that changes *who can open the socket at all* — it is a real reduction in
+  that changes *who can open the socket at all*. It is a real reduction in
   surface and it is the reason the knob exists, but on a mesh that spans
   machines the port is still reachable by everything on the chosen interface.
   **The token is the security boundary. Treat it like one.**
@@ -379,9 +379,13 @@ every control below applies to both handlers.
 nearby peers (`_discovery_printer`, `server.py:897`).
 
 - **Boundary:** no. It is unauthenticated in both directions by design.
-- **What leaks:** hostname, device type, device name, score, api/claim ports,
-  and `platform.platform()` (`discovery.py:146-155`) — an OS and version
-  fingerprint, broadcast to the whole subnet.
+- **What leaks:** hostname, device type, device name, score, and the api/claim
+  ports (`Beacon.__init__`, `discovery.py`). The payload **no longer carries
+  `platform.platform()`**, an OS name-and-build fingerprint that used to go
+  to the whole subnet every 2 s with no opt-out short of `--no-discovery`, and
+  that nothing in the package ever read back. `Peer` still parses the field so
+  beacons from older workers keep working, so a mesh with one old worker in it
+  still has that worker fingerprinting itself.
 - **What does not leak:** the token. It is not in the payload.
 - **Spoofing:** trivial. Anyone can broadcast a beacon claiming to be a
   worker. The consequence is bounded: a discovered peer is only *printed*
@@ -389,9 +393,15 @@ nearby peers (`_discovery_printer`, `server.py:897`).
   range-clamped when parsed (`Peer.__init__`, `discovery.py:254-271`). Disable
   with `--no-discovery`.
 - **Note on the loopback default:** discovery is unaffected by the bind
-  address — it is a separate UDP socket. A coordinator bound to loopback still
-  broadcasts and still listens, so a beacon may advertise a coordinator that
-  no remote worker can actually join.
+  address, since it is a separate UDP socket. But the direction matters, and this
+  entry used to state it backwards. **A coordinator never broadcasts.**
+  `server.serve` starts a `Listener` and nothing else, so a loopback-bound
+  coordinator advertises nothing; it only hears workers and prints them, which
+  is read-only. Beacons come from workers (`run_worker_broadcast`, `gpumesh
+  radar --mode worker`), and a worker beacon carries a `claim_port` on a
+  listener whose own bind is governed separately by `GPUMESH_CLAIM_HOST`
+  (§5.2). What discovery *does* leak either way is presence: being on the
+  subnet is enough to be seen.
 
 ### 5.4 The deserialization boundary, both directions
 
@@ -406,7 +416,7 @@ The most important row in this document.
 The third row is the one that is easy to miss and the reason this document
 exists. `--safe-mode` is a control on *what a submitter may push*; it says
 nothing about *what a worker may return*. A worker that has been admitted to
-the mesh — or a worker host that was compromised after joining — can put an
+the mesh, or a worker host that was compromised after joining, can put an
 arbitrary pickle in the result envelope and get code execution on the
 submitting laptop the moment `decode_result` runs.
 
@@ -416,9 +426,9 @@ submitting client and stops pickled results coming *back*. Neither implies the
 other, and the previous version of this document was right that there was no
 `safe_mode`-equivalent on the client. There is one now.
 
-`--strict` — the flag `gpumesh --strict <subcommand>` (`cli.py:2221`,
+`--strict`, the flag `gpumesh --strict <subcommand>` (`cli.py:2221`,
 exported to the environment at `cli.py:2477`) or `GPUMESH_STRICT_RESULTS=1`
-(`strict_results_enabled`, `serializer.py:538`) — makes `decode_result` raise
+(`strict_results_enabled`, `serializer.py:538`), makes `decode_result` raise
 `UntrustedResultError` (`serializer.py:500`) instead of reaching
 `cloudpickle.loads`. The CLI's `_format_result` catches the refusal and prints
 a `_gpumesh_strict` marker rather than the raw base64 envelope
@@ -432,8 +442,8 @@ objects. With it off, the first pickled result decoded in a process warns once
 (`serializer.py:546`).
 
 What is still not implemented: signing or per-worker authentication of
-results, and any allowlist of pickle classes. `--strict` is the blunt option —
-refuse the format entirely — not the precise one.
+results, and any allowlist of pickle classes. `--strict` is the blunt option, refusing the format
+entirely, rather than the precise one.
 
 ### 5.5 The token file on disk
 
@@ -461,14 +471,14 @@ and on Windows given a best-effort `icacls /inheritance:r`
   (`connection_manager.py:152`), so the warning is not tuned out by repetition.
 - **POSIX only, deliberately.** The read-time check returns early on Windows
   (`connection_manager.py:176`) because `st_mode` there carries no real ACL
-  information — a wide-open file still reports `0o666`, so the check would be
+  information, since a wide-open file still reports `0o666`, so the check would be
   simultaneously always-on and evidence-free. Windows protection comes from
   the `icacls` call, whose failure is reported. **Residual:** a Windows config
   file whose ACL was widened after `save_connection` ran is not detected.
 - The temp file is created inside `~/.gpumesh` with default `mkstemp`
   permissions (0600) before the rename, so there is no world-readable window.
 - **Not covered:** a failed write is still fatal and re-raised
-  (`connection_manager.py:102-107`), which is correct — a partial config is
+  (`connection_manager.py:102-107`), which is correct, since a partial config is
   worse than none.
 
 ## 6. STRIDE
@@ -483,27 +493,27 @@ does not exist in the default deployment at all.
 | # | Threat | STRIDE | Vector | Current control | Residual |
 | --- | --- | --- | --- | --- | --- |
 | 0 | Coordinator reachable from the LAN at all | Elevation (precondition for 1, 2, 4, 5, 10) | Any remote TCP connection to port 8000 | **Loopback bind by default** (`cli.py:344`, `cli.py:359`, `api.py:203`); non-loopback prints an exposure banner (`cli.py:435`) | **None in the default deployment.** In the exposed deployment: accepted, opt-in, and warned |
-| 1 | Unauthenticated peer submits a job | Spoofing / Elevation | `POST /api/jobs` without a token | *Default:* no reachable socket. *Exposed:* `_authed` before body read, `server.py:591` | Low — this is the enforced boundary |
-| 2 | Token guessed by brute force | Spoofing | Repeated `X-Auth-Token` values | `hmac.compare_digest` (`verify_token`, `security.py:175`); per-IP rate limiter, 5 failures / 300 s -> 900 s lockout (`RateLimiter`, `security.py:271`); the lockout branch returns **before** `verify_token` runs (`security.py:482-489`), so a locked-out attacker gets no correctness oracle; a wrong guess also pays the full PBKDF2 cost, because failures are never cached (row 18b) | Low for generated tokens (72 bits); **still high for a short hand-picked `--token`** — the KDF raises the cost of an *offline* guess, not an online one, and the rate limiter is what bounds online guessing. Not reachable remotely in the default deployment |
+| 1 | Unauthenticated peer submits a job | Spoofing / Elevation | `POST /api/jobs` without a token | *Default:* no reachable socket. *Exposed:* `_authed` before body read, `server.py:591` | Low. This is the enforced boundary |
+| 2 | Token guessed by brute force | Spoofing | Repeated `X-Auth-Token` values | `hmac.compare_digest` (`verify_token`, `security.py:175`); per-IP rate limiter, 5 failures / 300 s -> 900 s lockout (`RateLimiter`, `security.py:271`); the lockout branch returns **before** `verify_token` runs (`security.py:482-489`), so a locked-out attacker gets no correctness oracle; a wrong guess also pays the full PBKDF2 cost, because failures are never cached (row 18b) | Low for generated tokens (72 bits); **still high for a short hand-picked `--token`**. The KDF raises the cost of an *offline* guess, not an online one, and the rate limiter is what bounds online guessing. Not reachable remotely in the default deployment |
 | 3 | Token read from the process table | Information disclosure | `ps` / Task Manager on any mesh host | None. `--token` is argv (on `serve` and every other subcommand's parser); `serve` also prints it to stdout (`cli.py:774`) | **Accepted.** Use `GPUMESH_TOKEN` on shared hosts |
-| 4 | Token read off the wire | Information disclosure | Passive sniffing of the `X-Auth-Token` header | **`gpumesh serve --tls`** (`server.py:953-978`; certificate `tls.py:222`; TLS 1.2 floor `tls.py:276`) — opt-in, off by default. Without it: none, the header is cleartext | **Closed on a LAN when `--tls` is on**: a passive observer sees ciphertext, and the shared token no longer travels in the clear where anyone on the same Wi-Fi can lift it out of a capture. **Accepted when it is off**, which is the default. Requires an exposed deployment either way; `--tailscale` also mitigates |
+| 4 | Token read off the wire | Information disclosure | Passive sniffing of the `X-Auth-Token` header | **`gpumesh serve --tls`** (`server.py:953-978`; certificate `tls.py:222`; TLS 1.2 floor `tls.py:276`), opt-in and off by default. Without it: none, the header is cleartext | **Closed on a LAN when `--tls` is on**: a passive observer sees ciphertext, and the shared token no longer travels in the clear where anyone on the same Wi-Fi can lift it out of a capture. **Accepted when it is off**, which is the default. Requires an exposed deployment either way; `--tailscale` also mitigates |
 | 4b | Active on-path attacker substitutes a certificate | Spoofing / Tampering | Terminating the TLS connection with the attacker's own certificate | Only the client's trust decision (`tls.client_context`, `tls.py:295`): `GPUMESH_TLS_CA` pointing at a copy of the coordinator's certificate, or a genuine CA certificate supplied with `--tls-cert`/`--tls-key`. `GPUMESH_TLS_INSECURE=1` disables verification outright (`tls.py:315-320`) | **Open unless the operator moved the certificate by hand.** A self-signed certificate authenticates nothing on its own; the SHA-256 fingerprint printed at startup (`tls.py:256`, `server.py:974`) is what an out-of-band check confirms. `GPUMESH_TLS_INSECURE=1` leaves this branch open on purpose and is documented as doing so |
 | 5 | Code and data read or modified in flight | Tampering / Info disclosure | MITM on the LAN | `--tls` gives confidentiality and integrity against a *passive* observer; nothing without it | **Accepted by default.** With `--tls` the passive branch closes; the active branch stays open per row 4b. Exposed deployments only. Tampering with `_func` is RCE on every worker |
-| 6 | Malicious worker poisons a result | Elevation of privilege | Crafted envelope -> `cloudpickle.loads`, `serializer.py:615` | Token, plus **`--strict` / `GPUMESH_STRICT_RESULTS=1` on the *client*** (`serializer.py:594-605`), which raises `UntrustedResultError` instead of unpickling. **Still not covered by `--safe-mode`**, which is a coordinator-side control on what goes out | **Open by default, refusable on request.** `--strict` costs every non-JSON return value — tensors, numpy arrays, DataFrames stop coming back — which is why it is opt-in. With it off, the first pickled decode warns once per process (`serializer.py:546`). See §5.4. Unaffected by the bind default — the client dials out |
+| 6 | Malicious worker poisons a result | Elevation of privilege | Crafted envelope -> `cloudpickle.loads`, `serializer.py:615` | Token, plus **`--strict` / `GPUMESH_STRICT_RESULTS=1` on the *client*** (`serializer.py:594-605`), which raises `UntrustedResultError` instead of unpickling. **Still not covered by `--safe-mode`**, which is a coordinator-side control on what goes out | **Open by default, refusable on request.** `--strict` costs every non-JSON return value, since tensors, numpy arrays and DataFrames stop coming back, which is why it is opt-in. With it off, the first pickled decode warns once per process (`serializer.py:546`). See §5.4. Unaffected by the bind default, because the client dials out |
 | 7 | Malicious coordinator serves a hostile `_func` | Elevation | `POST /api/lease` response -> `serializer.py:219` | Token; `--safe-mode` on the worker (`worker.py:1063`) | **Accepted.** Safe mode reduces it to script tasks, which still execute |
 | 8 | Token holder steals credentials from `$HOME` | Info disclosure | Any task body | None; granted capability | **Accepted by design** |
-| 9 | Token holder exhausts GPU / memory / disk | Denial of service | Any task body | Per-task timeout only (`--timeout`, default 240 s). `user_error` failures are final rather than retried 3x (`db.py:1254`; set at `sandbox.py:156/165/171` and `worker.py:228`), removing an accidental amplifier — not a quota | **Accepted by design.** No quotas |
-| 10 | Unauthenticated flood of the coordinator port | Denial of service | Connection or request flood | *Default:* no reachable socket. *Exposed:* 10 MB body cap (`server.py:302`); `ThreadingHTTPServer` with no connection cap and **no socket timeout on the coordinator handler** | **Accepted.** In an exposed deployment a LAN peer can still exhaust threads without a token. The claim port's `timeout = 15` fix (row 15) has no coordinator equivalent |
+| 9 | Token holder exhausts GPU / memory / disk | Denial of service | Any task body | Per-task timeout only (`--timeout`, default 240 s). `user_error` failures are final rather than retried 3x (`db.py:1254`; set at `sandbox.py:156/165/171` and `worker.py:228`), removing an accidental amplifier, though not a quota | **Accepted by design.** No quotas |
+| 10 | Unauthenticated flood of the coordinator port | Denial of service | Connection or request flood | *Default:* no reachable socket. *Exposed:* 10 MB body cap (`server.py:302`); `timeout = 60` on the handler (`server.py:341`), so a declared-but-unsent body no longer pins a thread forever; drain bounded by `MAX_DRAIN_BYTES` with `DRAIN_TIMEOUT` / `DRAIN_BUDGET` (`server.py:323-324`), and the pre-close sweep by `SWEEP_TIMEOUT` (`server.py:401`); `ThreadingHTTPServer` still has **no connection cap** | **Partly accepted.** The slowloris half is closed: the coordinator has the equivalent of the claim port's `timeout = 15` (row 15b), set looser at 60 s because a claim is sub-kilobyte while a job payload is megabytes over a possibly slow link. What stays accepted is the absence of a connection cap, so an exposed deployment can still be flooded into thread exhaustion without a token |
 | 11 | Rate limiter used to lock out the operator | Denial of service | 5 bad tokens from the coordinator's own host | **Fixed.** Loopback is exempt and never counted (`RateLimiter.is_exempt`, `security.py:311`; `is_loopback` handles `127.0.0.0/8`, `::1`, IPv4-mapped, `security.py:92`). Loopback rejections say so explicitly (`security.py:497-504`) | Low. Justified in code: loopback presence already implies host access, so the token can be read rather than guessed |
 | 12 | Spoofed discovery beacon | Spoofing | UDP broadcast on 48900 | Field clamping (`discovery.py:254-271`); peers are printed (`server.py:918`), never auto-claimed | Low. Cosmetic pollution of the operator's console |
-| 13 | Host fingerprint leaked to the subnet | Info disclosure | Beacon payload includes `platform.platform()` (`discovery.py:154`) | `--no-discovery` | **Accepted.** Broadcast regardless of bind address. Low value to an attacker already on the LAN |
+| 13 | Host fingerprint leaked to the subnet | Info disclosure | The beacon payload used to include `platform.platform()`, an OS name and build | **Fixed.** The field is no longer sent (`Beacon.__init__`, `discovery.py`). `Peer` still parses it, so a beacon from an older worker still carries one. `--no-discovery` remains the way to send nothing at all | Low. Hostname, device name and score are still broadcast, and presence on the subnet is itself disclosed. Only workers beacon; a coordinator never does (§5.3) |
 | 14 | Unauthenticated claim of an idle worker | Elevation | `POST /api/claim` with a guessed token | `hmac.compare_digest` (`claimer.py:538`, and `worker.py:1260` in the patched handler); single-claim latch (`claimer.py:549-554`); **per-IP rate limiting, same policy as the coordinator** (`claimer.py:228`, accounted in `_send`, `claimer.py:296-300`) | Low. The "no rate limiting on this port" gap is closed |
-| 15 | Pre-auth JSON parsing on the claim port | Tampering / DoS | Body parsed before the token check — unavoidable, the token is *in* the body | Rate limit consulted first (`claimer.py:402`); 16 KB cap refused on the declared length before allocation (`claimer.py:238`, `claimer.py:467`); chunked and length-less refused 411 (`claimer.py:441`, `claimer.py:449`); drain bounded to 256 KB / 2 s (`claimer.py:247-248`) | Low. `json.loads` over ≤16 KB, for non-locked-out peers only. Still the only unauthenticated structured parse in the codebase |
+| 15 | Pre-auth JSON parsing on the claim port | Tampering / DoS | Body parsed before the token check, which is unavoidable because the token is *in* the body | Rate limit consulted first (`claimer.py:402`); 16 KB cap refused on the declared length before allocation (`claimer.py:238`, `claimer.py:467`); chunked and length-less refused 411 (`claimer.py:441`, `claimer.py:449`); drain bounded to 256 KB / 2 s (`claimer.py:247-248`) | Low. `json.loads` over ≤16 KB, for non-locked-out peers only. Still the only unauthenticated structured parse in the codebase |
 | 15b | Slowloris on the claim port | Denial of service | Open connections declaring a body that never arrives; one thread pinned per connection forever | **Fixed.** `timeout = 15` on the handler (`claimer.py:257`), applied to the connection socket by `StreamRequestHandler.setup()` | Low. A generous 15 s for a sub-kilobyte claim |
 | 16 | SSRF from a claimed worker | Elevation / Info disclosure | `coordinator_url` from the request body -> `find_reachable_coordinator` (called at `claimer.py:564`) | Worker token required first | Low. A token bypass on the claim port turns into SSRF *and* RCE |
-| 17 | Token leaked into a log or traceback | Info disclosure | Handler exceptions print tracebacks (`server.py:579-583` for GET, `server.py:829-833` for POST) | Handler logging is suppressed (`server.py:533`, and `claimer.py:512`); the token is not in coordinator request bodies | Low. Would be a reportable bug — see `SECURITY.md`. Note the claim token *is* in a claim body, so a claim-handler traceback would be a real leak; none is printed today |
+| 17 | Token leaked into a log or traceback | Info disclosure | Handler exceptions print tracebacks (`server.py:579-583` for GET, `server.py:829-833` for POST) | Handler logging is suppressed (`server.py:533`, and `claimer.py:512`); the token is not in coordinator request bodies | Low. Would be a reportable bug. See `SECURITY.md`. Note the claim token *is* in a claim body, so a claim-handler traceback would be a real leak; none is printed today |
 | 18 | Offline attack on a captured token hash | Spoofing | The coordinator's in-memory `token_hash` | **PBKDF2-HMAC-SHA256, random 16-byte salt per token, 200000 iterations** (`hash_token`, `security.py:155`; `_hash_pbkdf2`, `security.py:135`; `DEFAULT_KDF_ITERATIONS`, `security.py:43`), floored at 1000 so a typo'd `GPUMESH_AUTH_KDF_ITERATIONS` cannot silently restore one round (`security.py:44`, `security.py:84-88`). The legacy single-round scheme stays verifiable (`security.py:175`) and selectable by name (`GPUMESH_AUTH_KDF=sha256`, `security.py:49`). The hash is never written to the database and is re-derived at every coordinator start, which is why a random salt is safe here | Low. A guess costs 200000 SHA-256 rounds against an unpredictable salt, where it used to cost one against a salt that was a pure function of the token. **Token entropy is still the primary defence**; PBKDF2 is the second one, and it is the one that matters for a hand-chosen `--token`. See `SECURITY.md`, "A note on token hashing" |
-| 18b | KDF cost turned into a CPU amplifier | Denial of service | Every request forcing 200000 PBKDF2 rounds — including a worker polling several times a second | `_VerifyCache` (`security.py:220`, held at `security.py:444`, consulted at `security.py:494`) memoises **successful** verifications only, keyed by `HMAC-SHA256(32 random per-process bytes, token)` (`security.py:240`, `security.py:245`) — never the token itself, so a heap dump yields nothing replayable against another coordinator or this one after a restart | Low. Steady state is one HMAC per request. A *wrong* token still pays the full KDF cost on every attempt, deliberately: caching failures would let a brute-forcer replay a wrong guess for free and would sit in front of the rate limiter (row 2), which is the thing counting those guesses |
+| 18b | KDF cost turned into a CPU amplifier | Denial of service | Every request forcing 200000 PBKDF2 rounds, including a worker polling several times a second | `_VerifyCache` (`security.py:220`, held at `security.py:444`, consulted at `security.py:494`) memoises **successful** verifications only, keyed by `HMAC-SHA256(32 random per-process bytes, token)` (`security.py:240`, `security.py:245`), never the token itself, so a heap dump yields nothing replayable against another coordinator or this one after a restart | Low. Steady state is one HMAC per request. A *wrong* token still pays the full KDF cost on every attempt, deliberately: caching failures would let a brute-forcer replay a wrong guess for free and would sit in front of the rate limiter (row 2), which is the thing counting those guesses |
 | 19 | Repudiation: who submitted this job? | Repudiation | One shared token, no identities | None | **Accepted by design.** Job events record worker joins/leaves (`db.record_event`, `db.py:818`), never submitter identity |
 | 20 | Token file readable by other local users | Info disclosure | `~/.gpumesh/config.json` in plaintext | 0600 + `icacls`; **failures now warn** (`connection_manager.py:64`) and a group/other-readable file warns on load (`connection_manager.py:155`) | Low on POSIX. **Residual on Windows:** `st_mode` carries no ACL information, so a post-hoc ACL widening is not detected (`connection_manager.py:176`) |
 
@@ -523,7 +533,7 @@ are listed so that "we did not think of it" is never a possible reading.
    calls for a tunnel rather than for `--tls`.
 3. **No isolation of tasks.** Same OS user, same `$HOME`, no namespaces, no
    seccomp, no cgroups. The subprocess boundary
-   (`worker.py:269`, `sandbox.py:107`) is for crash containment and cleanup —
+   (`worker.py:269`, `sandbox.py:107`) is for crash containment and cleanup,
    **a crash boundary, not a security boundary**. The trimmed environment for
    script tasks (`sandbox.py:78-91`) and the POSIX CPU-seconds preamble
    (`sandbox.py:100-104`) are conveniences, not controls. `SECURITY.md`,
@@ -550,17 +560,28 @@ are listed so that "we did not think of it" is never a possible reading.
    refuses the format wholesale and takes tensors, numpy arrays and DataFrames
    with it. It is off by default for that reason, so the accepted default
    remains "the client executes what the worker sent". **This is unchanged by
-   the loopback default** — the submitting client dials out to the
+   the loopback default**, because the submitting client dials out to the
    coordinator, so no inbound socket is involved and the bind address gives no
    protection here.
-8. **No socket timeout on the coordinator handler.** Row 10. The claim port
-   got `timeout = 15` (`claimer.py:257`); the coordinator's
-   `CoordinatorHandler` has no equivalent, so an exposed coordinator remains
-   slowloris-able without a token. This is the clearest remaining asymmetry
-   between the two listeners.
+8. ~~**No socket timeout on the coordinator handler.**~~ **Fixed.**
+   `CoordinatorHandler` carries `timeout = 60` (`server.py:341`), a *per
+   read* timeout, deliberately looser than the claim port's 15 s because a
+   claim is under a kilobyte and arrives in one packet while a job payload is
+   megabytes over a possibly slow link. Alongside it: `MAX_DRAIN_BYTES` with
+   `DRAIN_TIMEOUT` / `DRAIN_BUDGET` (`server.py:323-324`) bounding the
+   oversized-body drain, and `SWEEP_TIMEOUT` (`server.py:401`) bounding the
+   pre-close sweep. The asymmetry between the two listeners is now one of
+   value, not of presence.
 9. **Windows token-file ACLs are not re-checked on load.** Row 20, §5.5.
-10. **Discovery ignores the bind address.** §5.3. A loopback coordinator still
-    broadcasts, advertising itself to a subnet that cannot reach it.
+10. ~~**Discovery ignores the bind address.**~~ **Never true of the
+    coordinator.** `server.serve` starts a discovery `Listener` only
+    (`server.py:997-1006`) and never a `Beacon`, so a coordinator, loopback
+    or not, advertises nothing at all. Every beacon gpumesh sends comes from
+    a *worker*: `run_worker_broadcast` (`worker.py`) and `gpumesh radar --mode
+    worker` (`cli.py`), neither of which has a coordinator bind address to
+    ignore. What a loopback coordinator does is *listen*, and print the
+    workers it hears; that direction is read-only and advertises nothing
+    outward. See §5.3.
 
 ## 8. Out of scope
 
@@ -572,25 +593,37 @@ are listed so that "we did not think of it" is never a possible reading.
   transport to a third party; their threat models are theirs.
 - The operator attacking their own mesh. They are the policy.
 - Anything requiring a valid token, except where it defeats a control that is
-  supposed to hold *even for token holders* — and there are none, which is
+  supposed to hold *even for token holders*, and there are none, which is
   precisely the point of `SECURITY.md`.
 - Denial of service by an authenticated submitter.
 
 ## Provenance
 
 - **Written:** 2026-08-15
-- **Last reconciled against the code:** 2026-08-26
+- **Last reconciled against the code:** 2026-09-02
+- **Partial pass, 2026-09-02 (issue #23).** Not a full re-walk. Two accepted
+  risks were re-read against `master` and both turned out to be wrong, which
+  is the failure mode a threat model can least afford. A document asserting a
+  hole that is not there sends a reader to fix the wrong thing, and costs the
+  rest of the document its credibility while they find out. Risk 8 ("no socket
+  timeout on the coordinator handler") was fixed by the 2.0.0 hardening and
+  the entry never caught up. Risk 10 and §5.3's loopback note ("a loopback
+  coordinator still broadcasts") were never true in either direction: no
+  coordinator has ever started a `Beacon`. §5.3's leak list also dropped
+  `platform.platform()`, which the beacon no longer sends. **The remaining
+  citations have not been re-verified since 2026-08-26**. Issue #23 stays
+  open for that.
 - **Against:** the 3.2.0 working tree. Every citation touched by the 3.2.0
-  security work — PBKDF2 token derivation (issue #16), opt-in TLS (issue #28),
-  and strict result deserialization (issue #15) — was **re-verified by reading
+  security work, covering PBKDF2 token derivation (issue #16), opt-in TLS (issue #28),
+  and strict result deserialization (issue #15), was **re-verified by reading
   the source**, along with every citation into `cli.py`, `server.py`,
   `worker.py`, `serializer.py` and `security.py` that those changes moved. No
   commit hash is named because this reconciliation was done against a working
   tree, not a checkout; the previous one was against `10583d5` ("docs: fix
   Markdown formatting in the two-node docker example") at gpumesh 2.0.0, and
   the one before that against `96eee91` at 1.3.0. Note the honest caveat: the
-  tree was being edited *while* this pass ran — `tls.py`, `api.py` and
-  `accelerate.py` all moved between the first read and the last — so the
+  tree was being edited *while* this pass ran, and `tls.py`, `api.py` and
+  `accelerate.py` all moved between the first read and the last, so the
   numbers below are a snapshot taken at the end of it, and the symbol names
   are what will still be true tomorrow.
 - **Version:** gpumesh 3.2.0
@@ -618,17 +651,17 @@ are listed so that "we did not think of it" is never a possible reading.
 
 Every `file:line` citation in this document was re-read against the working
 tree on the reconciliation date. Several of the cited files remain under
-concurrent edit, so if a citation does not land, search for the named symbol —
+concurrent edit, so if a citation does not land, search for the named symbol,
 `decode_result`, `strict_results_enabled`, `UntrustedResultError`, `_authed`,
 `_read_json`, `_resolve_bind_host`, `_print_exposure_warning`,
 `_resolve_claim_bind_host`, `_print_claim_exposure_warning`, `verify_request`,
 `verify_token`, `hash_token`, `_hash_pbkdf2`, `_VerifyCache`, `RateLimiter`,
 `ensure_self_signed_cert`, `client_context`, `wrap_server`,
-`explain_verify_failure`, `MeshClient`, `_warn_permissions` — rather than
+`explain_verify_failure`, `MeshClient`, `_warn_permissions`, rather than
 trusting the number.
 
 This document should be re-read whenever a new endpoint, a new
-`cloudpickle.loads` call site, or a new network listener is added — **or
+`cloudpickle.loads` call site, or a new network listener is added, **or
 whenever a default bind address changes, or a new way to change one is
 added.** `GPUMESH_CLAIM_HOST` is the second kind: it moved no default, but it
 gave an operator a lever over a trust boundary that previously had none, and
@@ -639,6 +672,6 @@ means the *default* posture in every row above is still the unhardened one:
 `--tls` (a second transport mode), `--strict` (a gate in front of the client's
 `cloudpickle.loads`), and `GPUMESH_AUTH_KDF` / `GPUMESH_AUTH_KDF_ITERATIONS`
 (a way to weaken or strengthen token derivation from the environment). A knob
-that can turn a control *off* — `GPUMESH_AUTH_KDF=sha256`,
-`GPUMESH_TLS_INSECURE=1` — belongs in this document as much as the control
+that can turn a control *off*, such as `GPUMESH_AUTH_KDF=sha256` or
+`GPUMESH_TLS_INSECURE=1`, belongs in this document as much as the control
 does, and both are named where they apply.
