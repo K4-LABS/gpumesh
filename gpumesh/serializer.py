@@ -612,7 +612,22 @@ def decode_result(payload, *, strict: bool = None):
                 "torch tensor), which requires cloudpickle to read back. "
                 "Install it with: pip install cloudpickle"
             )
-        return cloudpickle.loads(base64.b64decode(envelope["value"]))
+        # An envelope that announces cloudpickle and then carries no ``value``
+        # used to reach ``envelope["value"]`` and raise a bare
+        # ``KeyError: 'value'`` — on the *submitting* machine, about bytes some
+        # other machine produced. That names neither the worker nor the fact
+        # that a result came back malformed, which is the entire diagnosis.
+        # Everything a worker sends is input, so it gets checked like input.
+        raw = envelope.get("value")
+        if not isinstance(raw, str):
+            raise ValueError(
+                "Malformed result envelope: encoding is 'cloudpickle' but "
+                "'value' is %s rather than a base64 string. The worker that "
+                "produced this result is not speaking the gpumesh result "
+                "protocol." % ("missing" if raw is None
+                               else "a " + type(raw).__name__)
+            )
+        return cloudpickle.loads(base64.b64decode(raw))
 
     return envelope.get("value")
 
