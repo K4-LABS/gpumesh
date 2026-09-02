@@ -10,7 +10,7 @@ none, because people plan around it.
 gpumesh is a **BDFL project**. [@Samurai007AK](https://github.com/Samurai007AK)
 has final say on every decision: what ships, what is rejected, what the release
 cadence is, and what the project is for.
-[@jinia-konar](https://github.com/jinia-konar) is the second maintainer — both
+[@jinia-konar](https://github.com/jinia-konar) is the second maintainer, and both
 are listed in the README and in `.github/CODEOWNERS`, and either can review and
 merge.
 
@@ -23,7 +23,7 @@ honest, this file changes with it.
 
 **In public, in issues.** Design decisions are discussed in the issue or pull
 request they affect, not over DM and not in private. If you find a decision you
-cannot trace to a public thread, that is a gap — ask about it and it will be
+cannot trace to a public thread, that is a gap. Ask about it and it will be
 written down.
 
 **Discussion is genuinely wanted, and it is not a vote.** A well-argued
@@ -59,7 +59,7 @@ bar, because triage is the bottleneck on a two-person project. There is no
 application form. The maintainers will offer triage rights to someone who has,
 over a few weeks:
 
-- Reproduced or ruled out bugs on issues that were not theirs — especially the
+- Reproduced or ruled out bugs on issues that were not theirs, especially the
   networking ones, where the reporter and the maintainer often have no OS or
   network adapter in common
 - Asked reporters for the missing pieces (versions on both machines, full
@@ -69,7 +69,7 @@ over a few weeks:
 
 Triage rights are GitHub's `triage` permission: labels, milestones, closing and
 reopening issues, requesting reviews. They do not include merge access. Nobody
-has them yet — if you want them, the way in is to start doing the work
+has them yet. If you want them, the way in is to start doing the work
 publicly.
 
 ## Becoming a maintainer
@@ -106,7 +106,7 @@ confused about who is answering for what.
 
 **Archiving is announced, not silent.** If the maintainers decide to stop, the
 intent is to: mark the repository archived, say so in the README and in a
-release note, and — if a credible fork exists by then — link to it from the
+release note, and, if a credible fork exists by then, link to it from the
 README so that people arriving from search engines land somewhere maintained.
 
 **Unresponsive for six months.** If there has been no maintainer activity on
@@ -120,7 +120,7 @@ not tied to one personal account. The **published names are**: the PyPI project
 `gpumesh` is on the maintainer's personal account, and the Docker Hub
 namespace `samurai007ak/gpumesh` lives on Docker Hub alongside the
 repository. The PyPI project has no shared credential behind it, so a fork
-cannot inherit it — which is why the ask above is to rename the distribution.
+cannot inherit it, which is why the ask above is to rename the distribution.
 This is a real limitation and is stated here rather than discovered later.
 
 ## Changing this document

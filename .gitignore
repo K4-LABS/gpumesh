@@ -33,6 +33,11 @@ Thumbs.db
 .coverage
 htmlcov/
 
+# Linting. ruff writes this on every run, including from the pre-commit hook,
+# so without it every contributor carries an untracked directory in `git
+# status` and eventually somebody commits it.
+.ruff_cache/
+
 # Jupyter
 .ipynb_checkpoints/
 

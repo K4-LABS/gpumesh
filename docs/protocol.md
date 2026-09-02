@@ -14,7 +14,7 @@ the code wins and the difference is noted.
 > `script: "__gpumesh_function__"` sends pickled bytecode that every worker
 > will execute as the OS user that started it. Anyone who can reach the port
 > and holds the token has arbitrary code execution on every machine in the
-> mesh — and, because results are deserialized by the submitter, a hostile
+> mesh, and, because results are deserialized by the submitter, a hostile
 > worker has the same over the submitter. Read
 > [SECURITY.md](../SECURITY.md) and [THREAT_MODEL.md](../THREAT_MODEL.md)
 > before you expose a coordinator.
@@ -25,7 +25,7 @@ the code wins and the difference is noted.
 
 | | |
 |---|---|
-| Base URL | `http://<coordinator-host>:<port>` — or `https://` when the coordinator was started with `--tls`. 8000 for `gpumesh serve`, 8732 in the Docker image |
+| Base URL | `http://<coordinator-host>:<port>`, or `https://` when the coordinator was started with `--tls`. 8000 for `gpumesh serve`, 8732 in the Docker image |
 | Transport | HTTP/1.1. **Unencrypted by default.** `gpumesh serve --tls` wraps the listener in TLS 1.2+ with a self-signed certificate, which is enough to keep the token out of a LAN packet capture. Put the mesh on Tailscale or an ngrok tunnel if it crosses a network you do not control |
 | Auth header | `X-Auth-Token: <token>` on **every** request, including `GET` |
 | Content type | `application/json; charset=utf-8` both ways |
@@ -34,7 +34,7 @@ the code wins and the difference is noted.
 
 The token is compared with `hmac.compare_digest` against a
 PBKDF2-HMAC-SHA256 hash (random per-token salt, 200 000 iterations by
-default) held in memory only — it is never written to the database, and it is
+default) held in memory only. It is never written to the database, and it is
 re-derived from the token every time the coordinator starts. Hashes in the
 older `salt:hash` single-round format still verify, so a pinned or persisted
 hash keeps working; set `GPUMESH_AUTH_KDF=sha256` to go back to producing
@@ -43,7 +43,7 @@ them.
 A successful verification is memoised in memory, keyed by an HMAC of the
 token under a random per-process key, so a worker polling several times a
 second pays the derivation once rather than on every request. Failures are
-never cached — caching them would let a brute-forcer replay a wrong guess for
+never cached, because caching them would let a brute-forcer replay a wrong guess for
 free, in front of the rate limiter that exists to count those guesses.
 
 Failed attempts from non-loopback addresses are rate limited per IP, and
@@ -61,7 +61,7 @@ point `GPUMESH_TLS_CA` at a copy of it (verified), or set
 |------|-------|
 | `200` | Success, JSON body |
 | `204` | `POST /api/lease` only: no task available. **Empty body** |
-| `400` | Malformed request — bad JSON, non-object body, bad `Content-Length`, missing required field |
+| `400` | Malformed request: bad JSON, non-object body, bad `Content-Length`, missing required field |
 | `401` | Auth failed. The body's `error` string distinguishes a wrong token, a rate-limited IP, and an address not on the allowlist. Treat the string as human-readable, not as a stable API |
 | `403` | `--safe-mode` coordinator refusing a function job |
 | `404` | Unknown endpoint, or unknown job id |
@@ -108,11 +108,11 @@ again after any reconnect.
 | `score` | number | Benchmark result, `gflops * 0.7 + bandwidth_gbps * 0.3`. Must parse as a float or the request is `400` |
 | `cpu_cores` | integer | Falls back to `cpu_count`. Anything unparseable becomes `0` |
 | `gpu_memory_total_mb` | number | Unparseable becomes `0.0` |
-| `protocol_version` | integer | Optional. The wire protocol this worker speaks. **Absent means `1`** — every gpumesh up to and including 1.3.0 sends nothing here, and that unversioned protocol is named 1 retroactively. A value outside the coordinator's window is `426`; a value that is not an integer is `400` |
+| `protocol_version` | integer | Optional. The wire protocol this worker speaks. **Absent means `1`**. Every gpumesh up to and including 1.3.0 sends nothing here, and that unversioned protocol is named 1 retroactively. A value outside the coordinator's window is `426`; a value that is not an integer is `400` |
 
 Workers post their whole capability probe here; unknown extra keys are
 ignored. **`0` is not "unknown", it is "cannot satisfy any positive
-requirement"** — a worker that never reports its core count will never
+requirement"**. A worker that never reports its core count will never
 receive a task asking for cores.
 
 Response:
@@ -126,7 +126,7 @@ reconnecting worker gets a new id and the old row ages out.
 
 The two version fields are the coordinator's half of the handshake: they let a
 worker that is *newer* than the coordinator refuse the pairing itself, which no
-amount of gating on the coordinator can do — an old coordinator has no gate at
+amount of gating on the coordinator can do, since an old coordinator has no gate at
 all. A response without them is exactly the absent case, and means protocol 1.
 The rules for both directions are in [stability.md](stability.md).
 
@@ -143,7 +143,7 @@ appears in `/api/workers`.
 
 `worker_id` is required; everything else is optional. `task_id` names the
 task currently in flight so its lease is extended. `gpu_memory_free_mb` is
-what the memory-aware scheduler reads — until a heartbeat supplies it, the
+what the memory-aware scheduler reads. Until a heartbeat supplies it, the
 scheduler falls back to the total reported at registration.
 
 Response `{"ok": true}`, or `404` with `{"ok": false}` if the coordinator has
@@ -160,7 +160,7 @@ The reaper runs every 5s.
 {"worker_id": "0afecb2dfd44"}
 ```
 
-Returns `204` with an empty body when there is nothing to run — poll, do not
+Returns `204` with an empty body when there is nothing to run. Poll, do not
 retry. On success:
 
 ```json
@@ -201,23 +201,23 @@ out entirely.
 }
 ```
 
-`ok` must be a JSON boolean — a string `"true"` is `400`. On failure send
+`ok` must be a JSON boolean; a string `"true"` is `400`. On failure send
 `ok: false` with `error` (string) and optionally `diagnostics` (an object the
 worker builds: error type, elapsed, GPU memory delta).
 
 `user_error: true` marks a **deterministic** failure: re-running it produces
 the identical failure, so it is failed immediately instead of consuming the
 retry budget. Infrastructure failures omit it and keep the full budget (3
-attempts — the counter increments per *lease*, so it is three leases, not
+attempts, since the counter increments per *lease*, so it is three leases, not
 three re-runs after the first).
 
 The real worker sets it in these cases, and the split is worth knowing because
 it decides whether a task comes back:
 
-| Task kind | Deterministic — fails once | Retried |
+| Task kind | Deterministic, fails once | Retried |
 |---|---|---|
 | Function | the function raised; the return value could not be serialized; the payload was refused for a cross-Python-version reason | timeout, lease expiry, worker death |
-| Script | exit status **positive** (an uncaught exception exits 1, `sys.exit(2)` exits 2 — the script's own verdict on itself); no output at all; last stdout line is not JSON | timeout; exit status **negative** (POSIX: killed by a signal — SIGKILL from the OOM killer says the machine was full, not that the code is wrong); lease expiry |
+| Script | exit status **positive** (an uncaught exception exits 1, `sys.exit(2)` exits 2, which is the script's own verdict on itself); no output at all; last stdout line is not JSON | timeout; exit status **negative** (POSIX: killed by a signal, and SIGKILL from the OOM killer says the machine was full, not that the code is wrong); lease expiry |
 
 A hand-rolled worker chooses for itself; the coordinator only reads the flag.
 
@@ -265,7 +265,7 @@ Real response, captured from a live coordinator:
 ```
 
 `status` is one of `pending`, `running`, `done`, `failed`. `finished` is true
-when every task is `done` or `failed` — note that a job of all-failed tasks
+when every task is `done` or `failed`. Note that a job of all-failed tasks
 is also "finished". `counts` only contains the statuses actually present.
 `404` `{"error": "no such job"}` for an unknown id.
 
@@ -273,8 +273,8 @@ is also "finished". `counts` only contains the statuses actually present.
 
 | Endpoint | Body | Response |
 |----------|------|----------|
-| `/api/cancel` | `{"job_id": "..."}` | `{"pending": 2, "running": 1}` — counts moved to `failed` with `error: "cancelled"` |
-| `/api/retry` | `{"job_id": "..."}` | `{"requeued": 3, "counts": {...}}` — failed/timed-out tasks back to `pending` |
+| `/api/cancel` | `{"job_id": "..."}` | `{"pending": 2, "running": 1}`, counts moved to `failed` with `error: "cancelled"` |
+| `/api/retry` | `{"job_id": "..."}` | `{"requeued": 3, "counts": {...}}`, failed/timed-out tasks back to `pending` |
 | `/api/kill` | `{"force": false}` | Cancels tasks across **all** jobs. `force` must be a boolean or `400` |
 
 Cancelling does not reach into a worker that is mid-task; it marks the rows.
@@ -360,7 +360,7 @@ and are likewise never passed to your function.
 
 ### Script tasks
 
-For a script job, the **whole payload** — scheduler keys included — is
+For a script job, the **whole payload**, scheduler keys included, is
 written to the script's stdin as JSON. The script prints its result as JSON
 on stdout; the last line is taken as the result. `examples/grid_search.py`
 is the reference implementation of that contract, and it simply ignores the
@@ -374,7 +374,7 @@ itself:
 | Key | Type | Meaning |
 |-----|------|---------|
 | `_func` | string | Base64 serialized function (below) |
-| `_params` | object | Keyword arguments — this becomes `func(**_params)` |
+| `_params` | object | Keyword arguments. This becomes `func(**_params)` |
 | `_task_index` | integer | Position in the submitted list, so results can be re-ordered |
 
 ---
@@ -407,7 +407,7 @@ The metadata, captured from a real `serialize_function` call:
 | `modules` | Best-effort list of top-level modules to import before unpickling. Import failures are tolerated |
 | `module_globals` | Maps the *names the function used* to importable module names, so `import numpy as np` rebinds as `np` on the source path |
 | `func_name` | Used to find the function after `exec`-ing the source, and to strip gpumesh's own decorators |
-| `python_version` | `"3.11"` — `major.minor` of the sender |
+| `python_version` | `"3.11"`, the `major.minor` of the sender |
 | `source` | `inspect.getsource()` text, when available. Absent for interactive sessions and heredocs |
 
 When `method == "source"` there are no cloudpickle bytes after the metadata.
@@ -416,7 +416,7 @@ When `method == "source"` there are no cloudpickle bytes after the metadata.
 
 Two different things can be "out of version" on a mesh, and they fail in
 completely different places. This subsection is about the **Python** version of
-the machine that defined the function versus the machine that runs it — a
+the machine that defined the function versus the machine that runs it, a
 per-task, per-function property carried in the envelope above. The next one is
 about the **wire protocol** version of the two processes, which is settled once
 at registration. Neither implies the other: matched Pythons on skewed protocols
@@ -427,13 +427,13 @@ This is the part most likely to bite, and the rules are exact.
 
 | Sender's `python_version` | Worker's Python | What happens |
 |---|---|---|
-| Same | — | cloudpickle. Full fidelity: closures, globals, bound methods, callable objects |
-| Different, `source` present | — | Falls back to rebuilding from source text |
-| Different, no `source` | — | **Refused** with a `ValueError` naming both versions |
-| Absent (pre-0.8.1 sender) | — | Treated as unknown, *not* as a mismatch: cloudpickle is attempted, with a source fallback if it raises |
+| Same | any | cloudpickle. Full fidelity: closures, globals, bound methods, callable objects |
+| Different, `source` present | any | Falls back to rebuilding from source text |
+| Different, no `source` | any | **Refused** with a `ValueError` naming both versions |
+| Absent (pre-0.8.1 sender) | any | Treated as unknown, *not* as a mismatch: cloudpickle is attempted, with a source fallback if it raises |
 
 The refusal is deliberate. Cross-version `cloudpickle.loads()` can succeed
-and hand back a function whose bytecode crashes the interpreter when called —
+and hand back a function whose bytecode crashes the interpreter when called.
 a native segfault inside the task subprocess with no traceback. A clean error
 up front beats a worker crash.
 
@@ -443,9 +443,9 @@ from `module_globals`, so these are gone:
 
 - module-level constants (`SCALE = 3` becomes `NameError` at call time)
 - closure variables
-- bound methods — refused outright, naming `self`/`cls`
-- callable objects — refused, because the source rebuilds the *class*
-- `async def` functions — refused; gpumesh never awaits
+- bound methods, refused outright, naming `self`/`cls`
+- callable objects, refused, because the source rebuilds the *class*
+- `async def` functions, refused; gpumesh never awaits
 
 gpumesh's own `@mesh` / `@accelerate` decorators are stripped from the source
 before exec. **Every other decorator is preserved**, on purpose: silently
@@ -459,7 +459,7 @@ define mesh functions in a `.py` file rather than a REPL.
 ### Cross-version behaviour: the protocol
 
 Everything above is per-function. The *wire* is versioned separately, by
-`gpumesh.PROTOCOL_VERSION` — an integer, deliberately not `__version__`,
+`gpumesh.PROTOCOL_VERSION`, an integer, deliberately not `__version__`,
 because the coordinator and the workers are installed on different machines by
 different people and drift is the normal state of a mesh rather than a
 misconfiguration.
@@ -470,13 +470,13 @@ The short form, so this reference is self-contained:
 |---|---|
 | Current | `PROTOCOL_VERSION = 2`, `MIN_PROTOCOL_VERSION = 1` |
 | Window | Exactly N and N−1, on both sides |
-| Absent `protocol_version` | Means **1**, a fixed constant — not "the current minimum". Every gpumesh through 1.3.0 lands here, and 1 is inside the window |
+| Absent `protocol_version` | Means **1**, a fixed constant, not "the current minimum". Every gpumesh through 1.3.0 lands here, and 1 is inside the window |
 | Worker outside the coordinator's window | `426` at `POST /api/register`. No row, no event, no `/api/workers` entry |
 | Coordinator outside the worker's window | Refused by the worker, reading `protocol_version` off the registration response |
-| Either refusal, in Python | `gpumesh.ProtocolVersionMismatch` — never a bare `ValueError`, and never the worker's generic "failed to register" branch, whose firewall advice is entirely wrong for a version skew |
+| Either refusal, in Python | `gpumesh.ProtocolVersionMismatch`, never a bare `ValueError`, and never the worker's generic "failed to register" branch, whose firewall advice is entirely wrong for a version skew |
 
 Only the **worker** handshake is version-gated. Job submitters
-(`POST /api/jobs`, `GET /api/jobs/<id>`) are not — they are frequently a
+(`POST /api/jobs`, `GET /api/jobs/<id>`) are not. They are frequently a
 notebook on a fourth machine, and their real compatibility constraint is the
 Python version in the function envelope above.
 
@@ -501,7 +501,7 @@ SQLite. So every *function* result is wrapped:
                         "value": "gAWVnAAAAAAAAACME251bXB5..."}}
 ```
 
-`encoding: "json"` when `json.dumps(value)` succeeds — the value passes
+`encoding: "json"` when `json.dumps(value)` succeeds, and the value passes
 through verbatim. Otherwise the value is cloudpickled and base64'd. Decoding
 is exact: `np.arange(5)` returns as `array([0, 1, 2, 3, 4])`, not as a list.
 
@@ -517,8 +517,8 @@ Anything that is not an envelope is passed through unchanged, which is what
 keeps script tasks (plain JSON on stdout) and results from older workers
 working.
 
-Values that cannot be pickled at all — sockets, locks, database connections,
-live CUDA handles — fail the task with a message naming the type and marking
+Values that cannot be pickled at all, such as sockets, locks, database connections
+and live CUDA handles, fail the task with a message naming the type and marking
 it a `user_error`, so it is not retried. Note that an *open file object* is a
 near miss: cloudpickle reads it and hands back a `StringIO`, so the bytes
 arrive but the file does not.
@@ -530,7 +530,7 @@ arrive but the file does not.
 Separate from the HTTP API. Workers broadcast a presence beacon on UDP port
 48900; a coordinator started without `--no-discovery` listens and prints
 nearby machines. `gpumesh radar` uses the same channel. Discovery only makes
-machines *visible* — joining still requires the token over HTTP, and a
+machines *visible*. Joining still requires the token over HTTP, and a
 coordinator bound to loopback cannot be joined regardless of what discovery
 shows.
 
@@ -573,7 +573,7 @@ while True:
         call("POST", "/api/heartbeat", {"worker_id": wid})
         time.sleep(1)
         continue
-    # Script tasks only — running task["script"] is arbitrary code execution.
+    # Script tasks only. Running task["script"] is arbitrary code execution.
     result = {"echo": task["payload"]}
     call("POST", "/api/result", {
         "task_id": task["task_id"], "worker_id": wid,
@@ -581,16 +581,16 @@ while True:
     })
 ```
 
-That is the entire worker contract. Everything else the real worker does —
+That is the entire worker contract. Everything else the real worker does,
 benchmarking, subprocess isolation, backoff, reconnection, crash
-diagnostics — is policy on top of these four calls.
+diagnostics, is policy on top of these four calls.
 
 ---
 
 ## Related
 
-- [stability.md](stability.md) — what is public API, and how `PROTOCOL_VERSION` moves
-- [SECURITY.md](../SECURITY.md) — what a token actually grants
-- [THREAT_MODEL.md](../THREAT_MODEL.md) — the same flow traced through the code
-- [why-not-ray-or-dask.md](why-not-ray-or-dask.md) — when this protocol is the wrong one
-- [../examples/README.md](../examples/README.md) — runnable clients
+- [stability.md](stability.md), what is public API, and how `PROTOCOL_VERSION` moves
+- [SECURITY.md](../SECURITY.md), what a token actually grants
+- [THREAT_MODEL.md](../THREAT_MODEL.md), the same flow traced through the code
+- [why-not-ray-or-dask.md](why-not-ray-or-dask.md), when this protocol is the wrong one
+- [../examples/README.md](../examples/README.md), runnable clients

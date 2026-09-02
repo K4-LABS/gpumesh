@@ -56,7 +56,7 @@ which is the failure that rewrite exists to prevent.
 The socket is wrapped after bind and before `serve_forever`, so a certificate
 problem is a startup failure the operator sees on screen rather than a
 per-connection error nobody is watching for. With no `--tls-cert`/`--tls-key`,
-a self-signed pair is generated under `~/.gpumesh/tls/` on first use — via the
+a self-signed pair is generated under `~/.gpumesh/tls/` on first use, via the
 `cryptography` library, falling back to the `openssl` binary, and refusing to
 start with an error naming all three fixes if neither is available. The key
 file is chmod 0600 and its directory 0700. The certificate is valid for 825
@@ -72,7 +72,7 @@ A worker trusts that certificate one of three ways:
 |------|-----|------------------|
 | `GPUMESH_TLS_CA=/path/to/coordinator-cert.pem` | Copy the certificate to the worker by hand | Encrypted **and** verified against the fingerprint the coordinator printed |
 | `--tls-cert` / `--tls-key` with a real CA certificate | An internal CA, or `tailscale cert` | Encrypted and verified; nothing to do on the worker |
-| `GPUMESH_TLS_INSECURE=1` | Skip verification | Encrypted, unauthenticated — an active on-path attacker can still substitute a certificate |
+| `GPUMESH_TLS_INSECURE=1` | Skip verification | Encrypted, unauthenticated. An active on-path attacker can still substitute a certificate |
 
 All client HTTP goes through `MeshClient` in `gpumesh/worker.py`, which builds
 the SSL context once and rewrites a bare "certificate verify failed" into an
@@ -102,7 +102,7 @@ the worker registry. The check, in order:
 3. **Key derivation.** A miss falls through to the full PBKDF2-HMAC-SHA256
    derivation and a constant-time compare.
 
-The stored form is `pbkdf2_sha256$<iterations>$<salt>$<hash>` — a random 16-byte
+The stored form is `pbkdf2_sha256$<iterations>$<salt>$<hash>`, with a random 16-byte
 hex salt per token, 200000 iterations by default. That hash is derived from the
 token at every coordinator start and lives in coordinator memory only. It is
 never written to the database, so a stolen `gpumesh.db` yields nothing to crack.
@@ -122,7 +122,7 @@ falls straight into the lockout accounting.
 
 A worker posts its result to the coordinator; the submitting client fetches it
 and decodes it. Two envelope shapes come back: JSON for anything
-JSON-encodable, and cloudpickle for everything else — a tensor, a numpy array, a
+JSON-encodable, and cloudpickle for everything else: a tensor, a numpy array, a
 DataFrame.
 
 Decoding the second shape means unpickling bytes produced on another machine,
@@ -141,7 +141,7 @@ The two hardening flags point in opposite directions and are not substitutes:
 
 | Flag | Side | Stops |
 |------|------|-------|
-| `--safe-mode` | Coordinator | Functions going **out** — script jobs only |
+| `--safe-mode` | Coordinator | Functions going **out**, leaving script jobs only |
 | `--strict` | Submitting client | Pickled results coming **back** |
 
 `gpumesh/serializer.py` implements the envelope and the strict branch.

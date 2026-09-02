@@ -10,7 +10,7 @@ network, you want to use them for an afternoon, and you are not willing to
 stand up a cluster to do it.
 
 This page tries to be honest about where that line is. If it reads as
-partisan, [open an issue](https://github.com/K4-LABS/gpumesh/issues) —
+partisan, [open an issue](https://github.com/K4-LABS/gpumesh/issues).
 a comparison nobody trusts is worth less than no comparison.
 
 ---
@@ -21,7 +21,7 @@ a comparison nobody trusts is worth less than no comparison.
 |---|---|---|---|
 | Time to first distributed call | one command, one decorator | cluster start + `ray.init()` | scheduler + workers + client |
 | Assumes a homogeneous cluster | no | mostly | mostly |
-| Long-running daemon | no — the coordinator *is* the process you started | yes (GCS, raylets) | yes (scheduler) |
+| Long-running daemon | no, the coordinator *is* the process you started | yes (GCS, raylets) | yes (scheduler) |
 | Scheduler | ~200 lines of SQL over SQLite | distributed, sophisticated | distributed, sophisticated |
 | Distributed data structures | none | actors, object store | arrays, dataframes, bags, futures |
 | Model sharding / tensor parallel | no | yes (with libraries) | via extensions |
@@ -35,7 +35,7 @@ a comparison nobody trusts is worth less than no comparison.
 ## Use Ray when
 
 - **You need actors or shared state.** Ray's object store and stateful actors
-  are the reason Ray exists. gpumesh has no equivalent and no plan for one —
+  are the reason Ray exists. gpumesh has no equivalent and no plan for one,
   a task takes its arguments and returns a value, full stop.
 - **You are doing distributed training or serving that shards a model.**
   gpumesh runs one task on one machine. It cannot split a model across
@@ -43,7 +43,7 @@ a comparison nobody trusts is worth less than no comparison.
   scope by construction.
 - **You want RLlib, Tune, Serve, or Data.** Those libraries are a large part
   of Ray's value, and gpumesh has no ecosystem at all.
-- **Your cluster is elastic and managed** — Kubernetes, autoscaling, spot
+- **Your cluster is elastic and managed.** Kubernetes, autoscaling, spot
   instances. Ray has real answers there. gpumesh assumes machines you start
   by hand.
 - **You need dependency isolation per job.** Ray runtime environments solve
@@ -57,7 +57,7 @@ a comparison nobody trusts is worth less than no comparison.
   lazily-evaluated collection with a familiar API. gpumesh has nothing like
   it: if your data does not fit on one machine, gpumesh will not help you.
 - **You want a task graph with dependencies.** Dask schedules a DAG. gpumesh
-  schedules a flat list — every task is independent, and if task B needs task
+  schedules a flat list. Every task is independent, and if task B needs task
   A's output you are writing that plumbing yourself.
 - **You are already in the PyData stack** and want distributed to be a
   one-line change to code you have.
@@ -125,7 +125,7 @@ gpumesh's scheduler is a few SQL queries. It sorts pending tasks by `cost`,
 places the requesting worker on a 0..1 line from weakest to strongest by
 benchmark score, and hands it the task at the matching position. Placement
 hints (`gpu`, `gpu_memory_mb`, `cpu_cores`) filter the queue first. Stragglers
-get the lighter half. That is all of it —
+get the lighter half. That is all of it.
 see [protocol.md](protocol.md).
 
 For a flat list of independent tasks on a handful of machines, that is close
@@ -137,7 +137,7 @@ using something else.
 
 Ray and Dask both, reasonably, assume you have a *cluster*: a set of machines
 that are alike, that stay up, that were provisioned together. gpumesh assumes
-the opposite — that you have whatever is on the network right now, that it is
+the opposite: that you have whatever is on the network right now, that it is
 mismatched, and that some of it will disappear mid-job.
 
 This shows up in small places. Every worker is benchmarked at join rather
@@ -150,7 +150,7 @@ quickstart needs no second machine.
 
 This is not a gpumesh advantage. Ray, Dask and gpumesh all execute code sent
 over the network, and none of them sandboxes it. Ray had CVE-2023-48022,
-Dask had CVE-2021-42343 — both, in essence, "the port was reachable and
+Dask had CVE-2021-42343. Both, in essence, were "the port was reachable and
 running code was the intended behaviour". gpumesh is the same category of
 software.
 
@@ -166,7 +166,7 @@ gpumesh's differences are of degree:
 None of that is a sandbox. A token is a license to execute code as the
 worker's user, and the worker's results are deserialized by whoever submitted
 the task, so the trust runs both ways. If you need real isolation, you need
-containers or VMs — from any of these three tools.
+containers or VMs, from any of these three tools.
 
 ### Heterogeneous hardware
 
@@ -191,13 +191,13 @@ you usually do not know them.
 
 Stated plainly, so you can rule it out fast:
 
-- No distributed data structures — no shared arrays, dataframes, or object
+- No distributed data structures. No shared arrays, dataframes, or object
   store
-- No task graphs — every task is independent
+- No task graphs. Every task is independent
 - No model sharding, no tensor or pipeline parallelism
 - No GPU memory sharing between tasks; each task is its own process
-- No dependency shipping — your imports must already exist on the worker
-- No encryption on a plain LAN — use Tailscale or ngrok if the network is not
+- No dependency shipping. Your imports must already exist on the worker
+- No encryption on a plain LAN. Use Tailscale or ngrok if the network is not
   yours
 - Single coordinator, single point of failure
 - Python only
@@ -215,7 +215,7 @@ coordinator is a threaded `HTTPServer` over SQLite; the workers poll for
 leases. That is fine at 2–20 workers and a few thousand tasks. It is not
 designed for hundreds of workers, and nobody has tested it there.
 
-If you outgrow it, you have outgrown it — port the sweep to Ray or Dask.
+If you outgrow it, you have outgrown it. Port the sweep to Ray or Dask.
 Since the unit of work is a plain function taking keyword arguments and
 returning a value, that port is usually mechanical.
 
@@ -223,6 +223,6 @@ returning a value, that port is usually mechanical.
 
 ## Related
 
-- [protocol.md](protocol.md) — the HTTP API and wire format
-- [../README.md#limitations](../README.md#limitations) — the full limitations list
+- [protocol.md](protocol.md), the HTTP API and wire format
+- [../README.md#limitations](../README.md#limitations), the full limitations list
 - [SECURITY.md](../SECURITY.md), [THREAT_MODEL.md](../THREAT_MODEL.md)
