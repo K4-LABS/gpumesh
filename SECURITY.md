@@ -4,21 +4,20 @@
 
 | Version | Supported |
 | --- | --- |
-| 3.1.0 (latest release) | Yes |
-| < 3.1.0 | No |
+| 3.2.0 (latest release) | Yes |
+| < 3.2.0 | No |
 
 Only the latest release is supported. There are no backports and no long-term
 support branches: gpumesh is maintained by one person, and a second supported
 line would mean a second line that does not actually get patched. Fixes land on
-`master` — the default branch — and ship in the next release, which is 3.2.0.
-Please upgrade to the newest version and reproduce there before reporting an
-issue.
+`master`, the default branch, and ship in the next release. Please upgrade to
+the newest version and reproduce there before reporting an issue.
 
 ## gpumesh executes arbitrary code by design
 
 That is the product. `@mesh` and `@accelerate` take a Python function, pickle
 it, ship it to another machine, and run it there. A valid token is therefore
-not a password that guards data — **it is a license to execute arbitrary code
+not a password that guards data. **It is a license to execute arbitrary code
 as the worker's OS user**, on every machine in the mesh, with that user's
 files, GPUs, network access and credentials.
 
@@ -33,24 +32,25 @@ which is true and is only half the story.
 Results come back the same way they went out. A worker wraps its return value
 in an envelope (`serializer.encode_result`, `gpumesh/serializer.py:475`, and
 its duplicate `_encode_result` in `gpumesh/_function_subprocess.py:30`); when
-the value is not JSON-encodable — a numpy array, a torch tensor, a DataFrame,
-which is the normal case for real work — it is cloudpickled and base64'd. The
+the value is not JSON-encodable it is cloudpickled and base64'd. That covers a
+numpy array, a torch tensor or a DataFrame, which is the normal case for real
+work. The
 **submitting client** then unwraps it by calling `cloudpickle.loads` on bytes
 the worker produced:
 
-- `gpumesh/serializer.py:615` — `cloudpickle.loads(base64.b64decode(envelope["value"]))`, inside `decode_result` (`gpumesh/serializer.py:571`)
-- `gpumesh/api.py:632` — `results.append(serializer.decode_result(raw))`, the Python API's result collection
-- `gpumesh/accelerate.py:522` — the value an `@accelerate` / `@mesh` call returns to your code
-- `gpumesh/client.py:37` — `_format_result`, used by `gpumesh status` to print results
+- `gpumesh/serializer.py:615`: `cloudpickle.loads(base64.b64decode(envelope["value"]))`, inside `decode_result` (`gpumesh/serializer.py:571`)
+- `gpumesh/api.py:632`: `results.append(serializer.decode_result(raw))`, the Python API's result collection
+- `gpumesh/accelerate.py:522`: the value an `@accelerate` / `@mesh` call returns to your code
+- `gpumesh/client.py:37`: `_format_result`, used by `gpumesh status` to print results
 
 `cloudpickle.loads` on attacker-controlled bytes is arbitrary code execution.
 So **a malicious or compromised worker gets code execution on every client
-that collects a result from it** — including on the operator's own laptop,
+that collects a result from it**, including on the operator's own laptop,
 which is usually where the notebook and the SSH keys live.
 
 As of 3.2.0 the client can refuse. `--strict`, or `GPUMESH_STRICT_RESULTS=1`,
 makes `decode_result` raise instead of unpickling. It is off by default and it
-costs you every non-JSON return value — see "What `--strict` actually does",
+costs you every non-JSON return value. See "What `--strict` actually does",
 below. This document used to say the result path had no mitigation. It now has
 one, and the one it has is a restriction.
 
@@ -58,9 +58,9 @@ one, and the one it has is a restriction.
 
 `--safe-mode` blocks *function distribution*, and nothing else:
 
-- `gpumesh/server.py:766` — the coordinator returns 403 for a job whose script
+- `gpumesh/server.py:766`: the coordinator returns 403 for a job whose script
   contains `__gpumesh_function__`
-- `gpumesh/worker.py:1063` — the worker refuses such a task even if one reaches it
+- `gpumesh/worker.py:1063`: the worker refuses such a task even if one reaches it
 
 The result path is untouched *by it*. A safe-mode mesh still runs script-based
 tasks (`sandbox.run_task`, `gpumesh/sandbox.py:59`, which writes the submitted
@@ -73,16 +73,16 @@ make a worker's output safe to deserialize, and it is not a sandbox.
 
 `--strict` is the control on the other direction, and it is new in 3.2.0.
 
-- `gpumesh/serializer.py:571` — `decode_result(payload, *, strict=None)`
-- `gpumesh/serializer.py:594-605` — a `cloudpickle` envelope raises
+- `gpumesh/serializer.py:571`: `decode_result(payload, *, strict=None)`
+- `gpumesh/serializer.py:594-605`: a `cloudpickle` envelope raises
   `UntrustedResultError` (`gpumesh/serializer.py:500`) instead of reaching
   `cloudpickle.loads` at `gpumesh/serializer.py:615`
-- `gpumesh/serializer.py:538` — `strict_results_enabled`: the explicit
+- `gpumesh/serializer.py:538`: `strict_results_enabled`: the explicit
   argument, then `GPUMESH_STRICT_RESULTS`, then off
-- `gpumesh/cli.py:2221` — the top-level `gpumesh --strict <subcommand>` flag,
+- `gpumesh/cli.py:2221`: the top-level `gpumesh --strict <subcommand>` flag,
   exported into the environment at `gpumesh/cli.py:2477` so that all three
   decode sites and any subprocess the command spawns see it
-- `gpumesh/client.py:38` — `_format_result` catches the refusal and prints a
+- `gpumesh/client.py:38`: `_format_result` catches the refusal and prints a
   `_gpumesh_strict` marker rather than dumping the raw base64 envelope
 
 **The two flags are set on different machines and stop different directions of
@@ -99,7 +99,7 @@ functions to workers.
 
 **`--strict` is a restriction, not transparent hardening.** JSON-encodable
 results keep working unchanged. A task that returns a torch tensor, a numpy
-array or a DataFrame **stops working under it** — the decode raises rather
+array or a DataFrame **stops working under it**. The decode raises rather
 than executing. That is the whole trade, and it is offered rather than
 defaulted into, because returning those objects is gpumesh's normal workload.
 Under strict mode a result has to be JSON-encodable, or be written to shared
@@ -122,12 +122,12 @@ socket is the surface that matters, and **it binds loopback by default**.
 `DEFAULT_BIND_HOST = "127.0.0.1"` (`gpumesh/cli.py:344`). `serve` then hands
 that address to `server.serve` (`gpumesh/cli.py:718`), and the socket is bound
 to exactly it (`gpumesh/server.py:947`). `GPUMesh.start_coordinator` has the
-same default in its signature — `host: str = "127.0.0.1"` (`gpumesh/api.py:203`).
+same default in its signature, `host: str = "127.0.0.1"` (`gpumesh/api.py:203`).
 
 So out of the box, a coordinator plus its self-worker is a single-machine
 system: no LAN peer can open a connection at all, with or without the token.
-Opening it up is a deliberate act — `--host 0.0.0.0` or `GPUMESH_HOST=0.0.0.0`
-— and it prints a full-width banner naming the OS user tasks will run as and
+Opening it up is a deliberate act, `--host 0.0.0.0` or `GPUMESH_HOST=0.0.0.0`,
+and it prints a full-width banner naming the OS user tasks will run as and
 the device they will run on (`_print_exposure_warning`, `gpumesh/cli.py:435`,
 called at `gpumesh/cli.py:812`; the Python API prints its own equivalent at
 `gpumesh/api.py:285-297`).
@@ -144,7 +144,7 @@ forwards ngrok's edge into it. A loopback bind therefore does not constrain it
 in the slightest. `--public` on the default bind exposes the coordinator to the
 entire public internet, and it always did.
 
-That is by design and is a legitimate configuration — loopback is in fact the
+That is by design and is a legitimate configuration. Loopback is in fact the
 *tightest* bind to pair with `--public`, because then the local ngrok agent is
 the only thing that can reach the port and the LAN cannot. What was wrong was
 the reporting: the tunnel was opened unconditionally while the exposure banner
@@ -155,7 +155,7 @@ The larger exposure printed the smaller warning.
 It now prints its own full-width banner before the tunnel opens
 (`_print_tunnel_exposure_warning`, `gpumesh/cli.py:503`, called at
 `gpumesh/cli.py:820`), naming the public internet as the reach, the OS user
-tasks run as, and the device — and it prints *in addition to* the bind banner
+tasks run as, and the device, and it prints *in addition to* the bind banner
 on a wide bind, because a bind and a tunnel are two separate doors.
 
 **`--tailscale` is not a tunnel and never was.** `open_tunnel` in `tailscale`
@@ -177,14 +177,14 @@ Three things still listen beyond loopback, and they are the honest caveats:
   coordinator's: a claim server exists solely to be reached by a coordinator on
   *another* machine, so binding loopback would not make it safer, it would make
   it a broken feature that fails as an unreachable-worker mystery. What it now
-  has is a *knob* — pass `bind_host`, or set `GPUMESH_CLAIM_HOST`, to pin it to
+  has is a *knob*: pass `bind_host`, or set `GPUMESH_CLAIM_HOST`, to pin it to
   one address (a tailnet or VPN address is the usual reason). A separate
   variable from `GPUMESH_HOST` on purpose: `GPUMESH_HOST=127.0.0.1` is a
   sensible coordinator setting, and sharing it would silently make every worker
   on that box unclaimable. A non-loopback bind prints a banner naming the OS
   user that claims will run as (`_print_claim_exposure_warning`,
   `gpumesh/claimer.py:73`, called at `gpumesh/claimer.py:657`). It is
-  token-gated and rate-limited — see `THREAT_MODEL.md` §5.2, which also states
+  token-gated and rate-limited. See `THREAT_MODEL.md` §5.2, which also states
   plainly what narrowing the bind does and does not buy.
 - **`gpumesh setup`**, in its "Same WiFi / LAN (auto-discover nearby devices)"
   mode, binds `0.0.0.0` on purpose (`WIZARD_LAN_BIND_HOST`,
@@ -197,7 +197,7 @@ Three things still listen beyond loopback, and they are the honest caveats:
   design and carries no token.
 
 Everything else in this document assumes the operator has opted into
-exposure — by widening the bind, or by opening a tunnel with `--public`, which
+exposure, by widening the bind or by opening a tunnel with `--public`, which
 is a larger opt-in than any bind. That opt-in is where the threat model begins.
 
 ### Transport: plain HTTP by default, `--tls` when asked for
@@ -205,8 +205,8 @@ is a larger opt-in than any bind. That opt-in is where the threat model begins.
 The mesh speaks plain HTTP unless told otherwise, and that default has not
 changed. `gpumesh serve --tls` (new in 3.2.0) wraps the coordinator's listener
 in TLS: a self-signed certificate is generated under `~/.gpumesh/tls/` on
-first use — via `cryptography`, falling back to the `openssl` binary
-(`ensure_self_signed_cert`, `gpumesh/tls.py:222`) — with the key at 0600 and
+first use, via `cryptography`, falling back to the `openssl` binary
+(`ensure_self_signed_cert`, `gpumesh/tls.py:222`), with the key at 0600 and
 the directory at 0700 (`gpumesh/tls.py:184`, `gpumesh/tls.py:231`), a SAN
 covering `localhost`, this host's name and every local address
 (`_san_names`, `gpumesh/tls.py:66`), a TLS 1.2 floor (`gpumesh/tls.py:276`),
@@ -226,11 +226,11 @@ passive-eavesdropper branch on a LAN, closed.
 the operator moved the certificate by hand. Client trust has three tiers
 (`client_context`, `gpumesh/tls.py:295`):
 
-1. `GPUMESH_TLS_CA` pointing at a copy of the coordinator's certificate —
+1. `GPUMESH_TLS_CA` pointing at a copy of the coordinator's certificate.
    verified, and the printed fingerprint is what it verifies against.
 2. `--tls-cert`/`--tls-key` with a certificate from a real CA (an internal one,
-   or `tailscale cert`) — verified, nothing else to do.
-3. `GPUMESH_TLS_INSECURE=1` — encrypted, **unauthenticated**. An active
+   or `tailscale cert`). Verified, nothing else to do.
+3. `GPUMESH_TLS_INSECURE=1`. Encrypted, **unauthenticated**. An active
    on-path attacker can still substitute their own certificate and read
    everything. Strictly better than plain HTTP; strictly worse than either
    option above, and it leaves the active-attacker branch open on purpose.
@@ -245,7 +245,7 @@ which builds the context once (`gpumesh/worker.py:122`) and rewrites a bare
 `gpumesh/worker.py:147`).
 
 **`--tls` is LAN-grade, not internet-grade.** For anything crossing a network
-you do not control, tunnel it — `--tailscale` or `--public` — and let the
+you do not control, tunnel it with `--tailscale` or `--public`, and let the
 tunnel be the boundary. Plain HTTP should be read as LAN-only, and LAN-only
 should be read as "a network whose other occupants you trust".
 
@@ -264,10 +264,10 @@ You cannot say "X is not a vulnerability" until you have said who X is and
 what they were deliberately given. Apache Airflow's security model is the
 reference here. gpumesh has four personas.
 
-### Mesh operator — fully trusted
+### Mesh operator: fully trusted
 
-Runs `gpumesh serve`. Chooses the bind address — `--host` / `GPUMESH_HOST`,
-defaulting to loopback (`gpumesh/cli.py:359`) — generates or supplies the
+Runs `gpumesh serve`. Chooses the bind address, `--host` / `GPUMESH_HOST`,
+defaulting to loopback (`gpumesh/cli.py:359`). Generates or supplies the
 token (`gpumesh/cli.py:631`, `secrets.token_urlsafe(12)`), decides who gets
 it, and decides whether to expose the coordinator beyond the LAN with
 `--tailscale` or `--public`.
@@ -283,7 +283,7 @@ banner of its own for exactly that reason.
 The operator is the security policy. gpumesh does not defend against them and
 has no mechanism that could.
 
-### Token holder / task submitter — granted arbitrary code execution
+### Token holder / task submitter: granted arbitrary code execution
 
 Anyone in possession of the coordinator URL and the token, *and* able to reach
 the bind address. Presenting the token in the `X-Auth-Token` header
@@ -295,7 +295,7 @@ the bind address. Presenting the token in the `X-Auth-Token` header
   `gpumesh/_function_subprocess.py:72` calls it)
 - that user's filesystem, including `$HOME`, SSH keys and cloud credentials
 - that machine's GPUs, CPU and memory, for as long as they like
-- that machine's network position — outbound requests originate from inside
+- that machine's network position, since outbound requests originate from inside
   the worker's network
 - every result of every job on the coordinator, and the ability to cancel,
   retry or kill any job (`/api/cancel`, `/api/retry`, `/api/kill`)
@@ -303,17 +303,17 @@ the bind address. Presenting the token in the `X-Auth-Token` header
 There is one token and there are no roles. A token holder is an operator in
 all but name.
 
-### Worker host owner — trusts everyone the operator trusted
+### Worker host owner: trusts everyone the operator trusted
 
 Runs `gpumesh join`, `gpumesh quickjoin` or `gpumesh worker`. By joining, they
 extend the capabilities above to every person the operator has given the token
-to — not just to the operator. They are trusting a set they cannot see and
+to, not just to the operator. They are trusting a set they cannot see and
 were never shown.
 
 This is the persona most likely to be surprised, so it is stated plainly in
 the README and again here.
 
-### Unauthenticated LAN peer — untrusted, and out of scope by default
+### Unauthenticated LAN peer: untrusted, and out of scope by default
 
 Anyone who can reach the coordinator's port, a worker's claim port, or the UDP
 discovery broadcast without holding the token.
@@ -347,7 +347,7 @@ Reports that restate them will be closed with a link to this section.
 - **Tasks not isolated from each other or from `$HOME`.** Function tasks run
   in a subprocess (`gpumesh/worker.py:269`) and script tasks in a temp
   directory (`gpumesh/sandbox.py:73`), both for crash containment and cleanup
-  — not for confinement. Same user, same filesystem, no namespaces, no seccomp.
+  and not for confinement. Same user, same filesystem, no namespaces, no seccomp.
   Script tasks do get a trimmed environment (`gpumesh/sandbox.py:78-91`), which
   is a convenience for reproducibility, not a boundary: the script can read
   anything the OS user can.
@@ -368,7 +368,7 @@ Reports that restate them will be closed with a link to this section.
   reverse-deserialization path described above is a documented property of a
   single trust domain, not a bypass: the malicious worker had to be admitted
   to the mesh with a valid token first. It is listed here so nobody discovers
-  it by surprise — but a report that a worker you deliberately joined can
+  it by surprise, but a report that a worker you deliberately joined can
   attack your client is a report that the trust model works as written.
   `--strict` refuses the decode outright, at the cost of every non-JSON return
   value; running without it is a choice, and the first pickled result decoded
@@ -385,12 +385,12 @@ Reports that restate them will be closed with a link to this section.
   top of it. This document used to say exposure to the internet required
   `--public` on top of a widened bind; that was never true. The ngrok agent
   dials `127.0.0.1:PORT` locally, so `--public` alone reaches the internet
-  from the loopback default — see "`--public` is a second door", above. Until
+  from the loopback default. See "`--public` is a second door", above. Until
   that was corrected, the combination also printed no exposure banner at all,
   which *was* a real defect and is fixed: the tunnel banner
   (`gpumesh/cli.py:503`) now prints on every bind, before the tunnel opens.
   Running `--public` and being reachable from the internet is the feature
-  working. Running it and *not being told* would be a bug — report that.
+  working. Running it and *not being told* would be a bug. Report that.
 - **The worker claim port listening on `0.0.0.0`.** `gpumesh worker` exists to
   be claimed by a coordinator on another machine, so its claim server binds
   every interface by default (`gpumesh/claimer.py:37`, bound at
@@ -422,7 +422,7 @@ used.
   comparison is `hmac.compare_digest` (`verify_token`,
   `gpumesh/security.py:175`, on all three stored hash formats); a way around
   it, or a measurable timing signal, is a vulnerability. So is a way to make the rate limiter reveal whether a
-  token was correct — see "How a rejected request answers", below.
+  token was correct. See "How a rejected request answers", below.
 - **Tokens leaking into logs, tracebacks, error responses, saved files with
   wrong permissions, or process listings.** Note the known one: passing
   `--token` on the command line puts it in the process table for every local
@@ -431,21 +431,21 @@ used.
   token to stdout (`gpumesh/cli.py:774`). `~/.gpumesh/config.json` holds the
   token in plaintext at 0600; when gpumesh cannot restrict it, or finds it
   group/other-readable on load, it says so (`gpumesh/connection_manager.py:64`
-  and `:155`). A *new* leak — into a traceback, an HTTP error body, the SQLite
-  database, or a world-readable file that is written silently — is a bug we
+  and `:155`). A *new* leak, into a traceback, an HTTP error body, the SQLite
+  database, or a world-readable file that is written silently, is a bug we
   will fix.
 - **gpumesh binding an interface beyond what the documented default and the
   user's flags call for.** The documented defaults are: `127.0.0.1` for
   `gpumesh serve` and `GPUMesh.start_coordinator`; `0.0.0.0` for the worker
   claim server and for `gpumesh setup` in LAN mode. A coordinator that bound
   wider than `--host` / `GPUMESH_HOST` asked for, or that ignored either, is a
-  vulnerability — this is a security control now, not a cosmetic default. The
+  vulnerability. This is a security control now, not a cosmetic default. The
   claim port carries the same obligation through its own variable: a claim
   server that bound wider than `GPUMESH_CLAIM_HOST` asked for, or that ignored
   it, is a vulnerability on the same reasoning, because narrowing that bind is
   the only control on that port that reduces attack *surface* rather than cost
   per attempt. (The claim port not reading `GPUMESH_HOST` is deliberate, not a
-  bug — see the caveats above. And `--host-ip` is a different flag again: it
+  bug. See the caveats above. And `--host-ip` is a different flag again: it
   changes only the address *printed* for workers to dial and never affects any
   bind. Its being ignored is a bug, not a security issue.)
 - **A tunnel opening without its banner, or a banner that understates it.**
@@ -464,11 +464,11 @@ used.
   coordinator route ever unpickles, or even parses, an unauthenticated body,
   that is critical. The claim port is the one place that *must* parse before
   it can authenticate, because the claim protocol carries the token in the
-  body — the exposure there is bounded deliberately and described in
+  body. The exposure there is bounded deliberately and described in
   `THREAT_MODEL.md` §5.2. Widening it is a vulnerability.
 - **SSRF from a worker or coordinator to an attacker-chosen URL.** The claim
   flow takes a URL from the network and fetches it
-  (`find_reachable_coordinator`, called at `gpumesh/claimer.py:564`) — it is gated on
+  (`find_reachable_coordinator`, called at `gpumesh/claimer.py:564`). It is gated on
   the worker's own token, and a way to trigger it without that token is a
   vulnerability.
 - **A `--tls` coordinator that serves anything in cleartext.** The socket is
@@ -487,12 +487,12 @@ used.
 
 `SecurityManager.verify_request` (`gpumesh/security.py:446`) returns one of
 three distinguishable messages, and the distinction is intentional in both
-directions — usability and disclosure.
+directions, usability and disclosure.
 
-1. **Not on the allowlist** — the address will never be accepted.
-2. **Rate limited** — this IP has burned its attempts. Five failures in a
+1. **Not on the allowlist.** The address will never be accepted.
+2. **Rate limited.** This IP has burned its attempts. Five failures in a
    300 s window buy a 900 s lockout (`RateLimiter`, `gpumesh/security.py:271`).
-3. **Bad token** — the token really is wrong, with the number of attempts
+3. **Bad token.** The token really is wrong, with the number of attempts
    remaining before lockout.
 
 The rate-limited message says explicitly that *the token in this request was
@@ -501,7 +501,7 @@ true: the lockout branch returns before `verify_token` is ever called.
 
 That ordering is a security property, not an implementation accident.
 Verifying the token during a lockout and reporting "your token is correct, but
-wait" would hand a brute-forcer a free correctness oracle — they could keep
+wait" would hand a brute-forcer a free correctness oracle. They could keep
 guessing at full speed straight through the lockout and learn the instant they
 hit, which is exactly what the lockout exists to prevent. So the message says
 "not checked" rather than "checked and correct", and the code makes that
@@ -514,7 +514,7 @@ text becomes.
 IPv4-mapped forms, `gpumesh/security.py:92`). This is not a weakened control.
 Anyone who can open a socket from `127.0.0.1` is already executing code on the
 coordinator host, where the token sits in argv, in the environment, and in
-`~/.gpumesh/config.json` — they read it, they do not guess it. Meanwhile a
+`~/.gpumesh/config.json`. They read it, they do not guess it. Meanwhile a
 loopback lockout takes out the coordinator's own self-worker and the
 operator's own CLI, which are the two things that cannot be told to come from
 a different address. An exempt IP is never even *counted*
@@ -530,13 +530,13 @@ The coordinator never holds the plain token in its stored state. It derives a
 hash once at startup (`SecurityManager.__init__`, `gpumesh/security.py:420`,
 hashing at `gpumesh/security.py:437`; constructed once per coordinator at
 `gpumesh/server.py:942`) and compares every request against that. The hash is
-never written to the database — `gpumesh/db.py` contains no token column and
-no reference to a token at all — and it is re-derived from the token at every
+never written to the database, since `gpumesh/db.py` contains no token column and
+no reference to a token at all, and it is re-derived from the token at every
 coordinator start.
 
 **That re-derivation is exactly why a random salt is safe here.** The old
-scheme derived the salt deterministically from the token itself —
-`sha256(token)[:16]` — on the reasoning that workers persist the plain token
+scheme derived the salt deterministically from the token itself,
+`sha256(token)[:16]`, on the reasoning that workers persist the plain token
 and the coordinator must produce the same hash after a restart or every worker
 would be locked out. The premise was right and the conclusion did not follow:
 nothing anywhere compares two hashes, so nothing requires the *hash* to be
@@ -560,8 +560,8 @@ token (`gpumesh/security.py:148`) and 200000 iterations by default
   `GPUMESH_AUTH_KDF=sha256` (`_resolve_kdf`, `gpumesh/security.py:49`).
 - Legacy hashes stay **verifiable forever**. `verify_token`
   (`gpumesh/security.py:175`) detects the format from the string rather than
-  from configuration — so a coordinator configured for one scheme still
-  verifies a hash written under the other — and handles
+  from configuration, so a coordinator configured for one scheme still
+  verifies a hash written under the other, and handles
   `pbkdf2_sha256$<iterations>$<salt>$<hash>`, `<salt>:<hash>`, and a bare
   unsalted hash. All three comparisons end in `hmac.compare_digest`
   (`gpumesh/security.py:208`, `:213`, `:217`).
@@ -581,7 +581,7 @@ against a salt the attacker cannot know in advance.
 
 **Token entropy is still the primary defence.** `secrets.token_urlsafe(12)`
 (`gpumesh/cli.py:631`) is about 72 bits, beyond reach of any wordlist or GPU
-cracker, and it never needed a work factor. PBKDF2 is the *second* defence —
+cracker, and it never needed a work factor. PBKDF2 is the *second* defence,
 the one that used to be missing, and the one that matters for a token you
 chose yourself. If you set your own token, still make it long and random.
 
@@ -598,7 +598,7 @@ consulted at `gpumesh/security.py:494`) resolves that:
 
 - **Only successes are cached** (`gpumesh/security.py:519`). Caching failures
   would let a brute-forcer replay a wrong guess for free, and the cache sits
-  *in front of* the rate limiter — which is the thing that is supposed to be
+  *in front of* the rate limiter, which is the thing that is supposed to be
   counting those guesses. So a wrong token pays the full PBKDF2 cost every
   single time and is counted every single time; a right one pays it once.
 - **The token itself is never stored.** The cache key is
@@ -616,7 +616,7 @@ Nine controls ship in 3.2.0. Each gets one line on what it buys and one on
 what it does not, because a control described only by what it buys is how a
 reader ends up trusting it for something it never did.
 
-- **Subprocess isolation per task** — functions at `gpumesh/worker.py:269`,
+- **Subprocess isolation per task.** Functions at `gpumesh/worker.py:269`,
   scripts at `gpumesh/sandbox.py:107`.
   *Buys:* a task that segfaults, hangs or OOMs kills a child process rather
   than the worker, and its temp directory is cleaned up afterwards.
@@ -624,7 +624,7 @@ reader ends up trusting it for something it never did.
   credentials, same network position; no namespaces, no seccomp, no cgroups.
   **It is a crash boundary, not a security boundary.**
 
-- **Loopback-by-default bind** — `DEFAULT_BIND_HOST` (`gpumesh/cli.py:344`),
+- **Loopback-by-default bind.** `DEFAULT_BIND_HOST` (`gpumesh/cli.py:344`),
   `_resolve_bind_host` (`gpumesh/cli.py:359`), `gpumesh/api.py:203`.
   *Buys:* on a default install there is no coordinator socket for an
   unauthenticated LAN peer to reach at all, so most of the threat model has no
@@ -633,20 +633,20 @@ reader ends up trusting it for something it never did.
   whatsoever against `--public`, which tunnels past the bind rather than
   through it.
 
-- **PBKDF2 token derivation** — `hash_token` (`gpumesh/security.py:155`),
+- **PBKDF2 token derivation.** `hash_token` (`gpumesh/security.py:155`),
   200000 iterations (`gpumesh/security.py:43`).
   *Buys:* an offline attack on a captured hash costs 200000 SHA-256 rounds per
   guess, against a random per-token salt, with no precomputation possible.
   *Does not buy:* protection for a token weak enough to be guessed online, and
   nothing at all about what a *valid* token grants.
 
-- **Timing-safe comparison** — `verify_token` (`gpumesh/security.py:175`),
+- **Timing-safe comparison.** `verify_token` (`gpumesh/security.py:175`),
   claim port at `gpumesh/claimer.py:538`.
   *Buys:* no byte-by-byte early exit for an attacker to measure.
   *Does not buy:* anything against a token that leaked. Constant time is not
   secrecy.
 
-- **Rate limiting, with a documented loopback exemption** — `RateLimiter`
+- **Rate limiting, with a documented loopback exemption.** `RateLimiter`
   (`gpumesh/security.py:271`), `is_exempt` (`gpumesh/security.py:311`), the
   same class on the claim port (`gpumesh/claimer.py:228`).
   *Buys:* five failures in 300 s cost one source IP a 900 s lockout, and the
@@ -654,10 +654,10 @@ reader ends up trusting it for something it never did.
   attacker gets no correctness oracle.
   *Does not buy:* anything against a distributed or address-spoofing attacker,
   and nothing at all from loopback, which is exempt and never even counted
-  (`gpumesh/security.py:334-338`) — deliberately, for the reasons in "How a
+  (`gpumesh/security.py:334-338`), deliberately, for the reasons in "How a
   rejected request answers", above.
 
-- **0600 config permissions** — `gpumesh/connection_manager.py:121`,
+- **0600 config permissions.** `gpumesh/connection_manager.py:121`,
   re-checked on load at `gpumesh/connection_manager.py:155`.
   *Buys:* the plaintext token in `~/.gpumesh/config.json` is unreadable by
   other local users on POSIX, and a failure to restrict it is printed rather
@@ -666,21 +666,21 @@ reader ends up trusting it for something it never did.
   on Windows of an ACL widened after the file was written
   (`gpumesh/connection_manager.py:176`).
 
-- **Opt-in TLS** — `gpumesh serve --tls` (`gpumesh/tls.py`, wired at
+- **Opt-in TLS.** `gpumesh serve --tls` (`gpumesh/tls.py`, wired at
   `gpumesh/server.py:953-978`).
   *Buys:* the token and the pickled payloads stop travelling in cleartext on a
   LAN, so a passive eavesdropper on the same Wi-Fi gets nothing usable.
   *Does not buy:* authentication of the coordinator, unless the certificate
-  was moved to the worker by hand or came from a real CA — and nothing at all
+  was moved to the worker by hand or came from a real CA, and nothing at all
   under `GPUMESH_TLS_INSECURE=1`. Off by default.
 
-- **`--safe-mode`** — coordinator at `gpumesh/server.py:766`, worker at
+- **`--safe-mode`.** Coordinator at `gpumesh/server.py:766`, worker at
   `gpumesh/worker.py:1063`.
   *Buys:* a token holder cannot push a pickled *function* to a worker.
   *Does not buy:* a sandbox. Script tasks still execute arbitrary Python as
   the worker's OS user, and results still come back as pickles.
 
-- **`--strict`** — client-side, `gpumesh/serializer.py:594-605`.
+- **`--strict`.** Client-side, `gpumesh/serializer.py:594-605`.
   *Buys:* a hostile worker cannot get code execution on the submitting client
   through a result envelope.
   *Does not buy:* compatibility. Tensors, numpy arrays and DataFrames stop
@@ -714,7 +714,7 @@ strength of anything in this section. Written 2026-08-26.
    protected rather than implying all of them are.
 
 2. **A Firecracker microVM per task.** *Not started.* Linux-only, and a hard
-   kernel boundary rather than a filtered one — the failure mode of a seccomp
+   kernel boundary rather than a filtered one. The failure mode of a seccomp
    escape is a compromised host, the failure mode of a microVM escape is a
    hypervisor CVE. It is second rather than first because the costs are real:
    boot latency on every task, GPU passthrough that is far from free, and a
@@ -722,7 +722,7 @@ strength of anything in this section. Written 2026-08-26.
 
 3. **A WASM runtime for the pure-compute subset.** *Not started, and the
    narrowest of the three.* Portable across every platform gpumesh runs on,
-   with a memory-safe boundary by construction — at the cost of **not running
+   with a memory-safe boundary by construction, at the cost of **not running
    arbitrary PyTorch**. A WASM tier would be a second, narrower execution mode
    for tasks that fit inside it, not a replacement for the current one.
 
@@ -791,7 +791,7 @@ Out of scope:
 
 - Third-party dependencies (`cloudpickle`, `torch`, `pyngrok`, …). Report
   those upstream. If a dependency issue is exploitable *specifically because
-  of how gpumesh uses it*, that is in scope — say so and show the path.
+  of how gpumesh uses it*, that is in scope. Say so and show the path.
 - Anything in the "Not a vulnerability" section.
 - The maintainer's other projects, accounts, or infrastructure.
 
@@ -801,7 +801,7 @@ There is no bug bounty, no payment, and no swag. gpumesh is an unfunded
 project maintained by one person.
 
 **Bring a proof of concept against a default install.** A report that shows a
-concrete attack — the commands, the payload, the observed result — will be
+concrete attack, meaning the commands, the payload and the observed result, will be
 read carefully and fixed. A report that is scanner output, a severity score, a
 list of "dangerous functions", or an AI-generated description of a
 vulnerability class will be closed without discussion. This is not hostility;
