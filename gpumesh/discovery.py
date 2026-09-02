@@ -68,7 +68,9 @@ def netmask_for(local_ip: str) -> str | None:
                         and addr.netmask):
                     return addr.netmask
     except (OSError, AttributeError):
-        pass
+        # Best-effort probe: interface details may be unavailable on some
+        # platforms/environments, so fall back to caller's default path.
+        return None
     return None
 
 
