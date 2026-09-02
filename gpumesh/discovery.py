@@ -17,6 +17,7 @@ Thread safety:
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import socket
 import threading
@@ -41,11 +42,47 @@ ROLE_TYPES = {
 
 # -- helpers ---------------------------------------------------------------
 
+def netmask_for(local_ip: str) -> str | None:
+    """The IPv4 netmask configured on the interface holding ``local_ip``.
+
+    ``None`` when it cannot be determined. psutil is an optional extra
+    (``gpumesh[sysinfo]``), so a machine without it is the ordinary case, not
+    an error — the caller falls back.
+
+    psutil rather than parsing ``ipconfig`` / ``ip addr`` output: that text is
+    localised, so the mask line reads "Subnet Mask" on one machine and
+    "Máscara de subred" on the next, and a parser that misses it picks the
+    broadcast address of the wrong network — which is the failure this
+    function exists to remove, reintroduced by its own fix. psutil reads the
+    same value from the OS API as a number.
+    """
+    try:
+        import psutil
+    except ImportError:
+        return None
+    try:
+        for addrs in psutil.net_if_addrs().values():
+            for addr in addrs:
+                if (addr.family == socket.AF_INET
+                        and addr.address == local_ip
+                        and addr.netmask):
+                    return addr.netmask
+    except (OSError, AttributeError):
+        pass
+    return None
+
+
 def get_broadcast_address() -> str:
     """Determine the subnet broadcast address.
 
-    Tries to compute it from the local interface IP and netmask.
-    Falls back to 255.255.255.255 if detection fails.
+    Computed from the interface's real address and netmask whenever the
+    netmask can be read. The /24 guess below is the fallback, not the rule:
+    it is right for most home networks and wrong for every /16 and /23, where
+    the address it produces is an ordinary host on the subnet rather than its
+    broadcast — so the beacon reaches nobody and discovery silently reports no
+    peers on a network where peers are in fact reachable.
+
+    Falls back to 255.255.255.255 when even the local address cannot be found.
     """
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
@@ -56,10 +93,19 @@ def get_broadcast_address() -> str:
     finally:
         s.close()
 
-    # Common /24 assumption — works for most home/office networks.
-    # For /16 or other netmasks the broadcast would be wrong but the
-    # fallback broadcast address (255.255.255.255) still reaches the
-    # local subnet in practice on most OSes.
+    netmask = netmask_for(local_ip)
+    if netmask:
+        try:
+            return str(
+                ipaddress.IPv4Interface(f"{local_ip}/{netmask}")
+                .network.broadcast_address
+            )
+        except ValueError:
+            pass
+
+    # No netmask available. The /24 assumption works for most home and office
+    # networks, and where it does not, 255.255.255.255 still reaches the local
+    # subnet on most OSes.
     parts = local_ip.split(".")
     if len(parts) == 4:
         return f"{parts[0]}.{parts[1]}.{parts[2]}.255"
@@ -140,9 +186,16 @@ class Beacon:
         interval: float = BEACON_INTERVAL,
         role: str = "worker",
     ):
-        import platform
         role = _validate_role(role)
         self._claim_port = claim_port
+        # No ``platform`` key. It used to carry platform.platform() — the full
+        # OS name, release and build — broadcast unencrypted to every machine
+        # on the subnet every two seconds, with no opt-out short of turning
+        # discovery off. Nothing consumed it: Peer still parses the field for
+        # beacons from older workers, but no caller in this package reads
+        # ``peer.platform``, and the radar has never displayed it. An OS
+        # fingerprint handed to the whole network for zero benefit is not a
+        # trade worth keeping, so it stops being sent.
         self._payload = {
             "type": ROLE_TYPES[role],
             "hostname": hostname or socket.gethostname(),
@@ -151,7 +204,6 @@ class Beacon:
             "score": score,
             "api_port": api_port,
             "claim_port": claim_port,
-            "platform": platform.platform(),
         }
         self._port = port or get_ephemeral_port()
         self._interval = interval

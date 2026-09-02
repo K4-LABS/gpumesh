@@ -15,6 +15,7 @@ from gpumesh.discovery import (
     build_beacon,
     get_broadcast_address,
     get_ephemeral_port,
+    netmask_for,
     parse_beacon,
 )
 
@@ -93,6 +94,64 @@ class TestBroadcastAddress:
         for part in parts:
             assert part.isdigit()
             assert 0 <= int(part) <= 255
+
+    @pytest.mark.parametrize("netmask,expected", [
+        ("255.255.255.0", "192.0.2.255"),      # /24 — what the old guess assumed
+        ("255.255.0.0", "192.0.255.255"),      # /16 — where the guess was wrong
+        ("255.255.254.0", "192.0.3.255"),      # /23 — and here
+    ])
+    def test_broadcast_follows_the_real_netmask(self, monkeypatch, netmask,
+                                                expected):
+        """A /16 or /23 must not get the /24 answer.
+
+        The old code returned 192.0.2.255 for all three. On the wider two that
+        is an ordinary host address, so the beacon reaches nobody and
+        discovery reports an empty network that in fact has peers on it.
+        """
+        monkeypatch.setattr("gpumesh.discovery.netmask_for",
+                            lambda ip: netmask)
+        monkeypatch.setattr("socket.socket.getsockname",
+                            lambda self: ("192.0.2.10", 0))
+        assert get_broadcast_address() == expected
+
+    def test_falls_back_to_the_24_guess_without_a_netmask(self, monkeypatch):
+        """No netmask available: keep the old behaviour rather than fail."""
+        monkeypatch.setattr("gpumesh.discovery.netmask_for", lambda ip: None)
+        monkeypatch.setattr("socket.socket.getsockname",
+                            lambda self: ("192.0.2.10", 0))
+        assert get_broadcast_address() == "192.0.2.255"
+
+    def test_netmask_for_returns_none_without_psutil(self, monkeypatch):
+        """psutil is an optional extra; its absence is normal, not an error."""
+        import builtins
+        real_import = builtins.__import__
+
+        def no_psutil(name, *args, **kwargs):
+            if name == "psutil":
+                raise ImportError("no psutil")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", no_psutil)
+        assert netmask_for("192.0.2.10") is None
+
+
+class TestBeaconPayload:
+    """The beacon goes out in clear to the whole subnet — check what is in it."""
+
+    def test_beacon_does_not_broadcast_an_os_fingerprint(self):
+        """platform.platform() named the OS build to every machine nearby.
+
+        Nothing in the package ever read it back, so it was a fingerprint
+        given away for no benefit.
+        """
+        beacon = Beacon(device="cpu", device_name="test", score=1.0)
+        assert "platform" not in beacon._payload
+
+    def test_peer_still_parses_platform_from_an_older_worker(self):
+        """Dropping the field must not break a beacon sent by an old worker."""
+        peer = Peer({"hostname": "old", "platform": "Windows-10"},
+                    ("192.0.2.10", 48900))
+        assert peer.platform == "Windows-10"
 
 
 class TestPeer:
