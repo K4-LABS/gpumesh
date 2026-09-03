@@ -94,6 +94,62 @@ class TestBroadcastAddress:
             assert part.isdigit()
             assert 0 <= int(part) <= 255
 
+    def test_broadcast_address_slash16(self, monkeypatch):
+        import collections
+        snicaddr = collections.namedtuple("snicaddr", ["family", "address", "netmask", "broadcast", "ptp"])
+        fake_addrs = {
+            "eth0": [snicaddr(socket.AF_INET, "172.16.10.5", "255.255.0.0", None, None)]
+        }
+        monkeypatch.setattr("socket.socket.connect", lambda self, addr: None)
+        monkeypatch.setattr("socket.socket.getsockname", lambda self: ("172.16.10.5", 54321))
+        
+        class FakePsutil:
+            @staticmethod
+            def net_if_addrs():
+                return fake_addrs
+                
+        import sys
+        monkeypatch.setitem(sys.modules, "psutil", FakePsutil)
+        assert get_broadcast_address() == "172.16.255.255"
+
+    def test_broadcast_address_slash23(self, monkeypatch):
+        import collections
+        snicaddr = collections.namedtuple("snicaddr", ["family", "address", "netmask", "broadcast", "ptp"])
+        fake_addrs = {
+            "en0": [snicaddr(socket.AF_INET, "192.168.4.50", "255.255.254.0", None, None)]
+        }
+        monkeypatch.setattr("socket.socket.connect", lambda self, addr: None)
+        monkeypatch.setattr("socket.socket.getsockname", lambda self: ("192.168.4.50", 54321))
+        
+        class FakePsutil:
+            @staticmethod
+            def net_if_addrs():
+                return fake_addrs
+                
+        import sys
+        monkeypatch.setitem(sys.modules, "psutil", FakePsutil)
+        assert get_broadcast_address() == "192.168.5.255"
+
+    def test_broadcast_address_fallback_to_slash24(self, monkeypatch):
+        monkeypatch.setattr("socket.socket.connect", lambda self, addr: None)
+        monkeypatch.setattr("socket.socket.getsockname", lambda self: ("10.0.1.25", 54321))
+        
+        class FakePsutil:
+            @staticmethod
+            def net_if_addrs():
+                return {}
+                
+        import sys
+        monkeypatch.setitem(sys.modules, "psutil", FakePsutil)
+        assert get_broadcast_address() == "10.0.1.255"
+
+    def test_broadcast_address_fallback_to_global(self, monkeypatch):
+        def fake_connect(self, addr):
+            raise OSError("No route to host")
+            
+        monkeypatch.setattr("socket.socket.connect", fake_connect)
+        assert get_broadcast_address() == "255.255.255.255"
+
 
 class TestPeer:
     """Tests for Peer data class."""

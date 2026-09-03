@@ -44,8 +44,8 @@ ROLE_TYPES = {
 def get_broadcast_address() -> str:
     """Determine the subnet broadcast address.
 
-    Tries to compute it from the local interface IP and netmask.
-    Falls back to 255.255.255.255 if detection fails.
+    Tries to compute it from the local interface IP and netmask via psutil.
+    Falls back to the /24 heuristic, then 255.255.255.255 if detection fails.
     """
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
@@ -56,13 +56,22 @@ def get_broadcast_address() -> str:
     finally:
         s.close()
 
-    # Common /24 assumption — works for most home/office networks.
-    # For /16 or other netmasks the broadcast would be wrong but the
-    # fallback broadcast address (255.255.255.255) still reaches the
-    # local subnet in practice on most OSes.
+    try:
+        import psutil
+        for addrs in psutil.net_if_addrs().values():
+            for a in addrs:
+                if a.family == socket.AF_INET and a.address == local_ip and a.netmask:
+                    import ipaddress
+                    iface = ipaddress.IPv4Interface(f"{local_ip}/{a.netmask}")
+                    return str(iface.network.broadcast_address)
+    except (ImportError, ValueError, Exception):
+        pass
+
+    # Common /24 assumption — fallback if netmask cannot be determined
     parts = local_ip.split(".")
     if len(parts) == 4:
         return f"{parts[0]}.{parts[1]}.{parts[2]}.255"
+
     return BROADCAST_ADDR_FALLBACK
 
 
