@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`gpumesh mcp-serve`: drive a mesh from an AI coding assistant.** Exposes
+  the mesh to Claude Code, Cursor and any other MCP client as seven tools:
+  `workers`, `mesh_status`, `submit_job`, `job_status`, `job_result`,
+  `cancel_job` and `radar_scan`. Nothing to configure when a mesh is already
+  set up, because it reads the same `~/.gpumesh/config.json` every other
+  gpumesh command reads. `claude mcp add gpumesh -- gpumesh mcp-serve` is the
+  whole setup, and [docs/mcp.md](docs/mcp.md) carries snippets for both
+  clients.
+
+  Every tool is a thin wrapper over the existing public `GPUMesh` API, so this
+  widens who can reach the mesh without widening what the mesh does. The
+  assistant holds the token the user already has. It cannot reach a mesh the
+  user could not reach from their own shell, and no tool writes the saved
+  connection, because resolving one is a read. `--safe-mode` and `--strict`
+  mean exactly what they meant before.
+
+  The MCP SDK is the optional `[mcp]` extra, `pip install "gpumesh[mcp]"`, and
+  stays out of the base install. It requires Python 3.10+, which gpumesh does
+  not, so the extra carries a `python_version >= '3.10'` marker. On a 3.9
+  interpreter `pip install gpumesh[all]` still succeeds, and `mcp-serve` exits
+  with the install hint rather than a traceback.
+
 ## [3.2.0] — 2026-08-26
 
 > **Upgrade note: `hash_token()` returns a different format by default.** A

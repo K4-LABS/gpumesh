@@ -2010,6 +2010,23 @@ def cmd_setup(args):
     run_setup_wizard()
 
 
+def cmd_mcp_serve(args):
+    """Expose this machine's mesh connection to an AI assistant over MCP.
+
+    Speaks MCP on stdin/stdout, so it is started by the assistant rather than
+    by a person — nothing is printed on the happy path, because anything
+    written to stdout here is framed as protocol and corrupts the session.
+    """
+    try:
+        from .mcp_server import build_server
+    except ImportError as exc:
+        raise SystemExit(
+            f"{red('[ERROR]')} MCP support needs the 'mcp' package, which is "
+            f"an optional extra: pip install \"gpumesh[mcp]\"  ({exc})"
+        )
+    build_server(args.url or None, args.token or None).run()
+
+
 def cmd_worker(args):
     """Start a worker that broadcasts presence and waits to be claimed."""
     token = args.token
@@ -2449,6 +2466,17 @@ def main():
     p.add_argument("--mode", choices=["coordinator", "worker"], default="coordinator",
                    help="radar mode: coordinator (listen) or worker (broadcast+listen)")
     p.set_defaults(func=cmd_radar)
+
+    p = sub.add_parser(
+        "mcp-serve",
+        help="serve this mesh to an AI assistant over MCP (stdio)",
+        description="Expose the mesh as MCP tools for Claude Code, Cursor and "
+                    "other MCP clients. Started by the assistant, not by hand. "
+                    "With no --url/--token it uses the saved connection, so a "
+                    "mesh you have already joined needs no configuration. "
+                    "See docs/mcp.md for the config snippets.")
+    _add_conn_args(p)
+    p.set_defaults(func=cmd_mcp_serve)
 
     p = sub.add_parser("worker",
                        help="start a worker that broadcasts and waits to be claimed",

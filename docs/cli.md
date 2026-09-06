@@ -178,6 +178,7 @@ promises is in [`docs/stability.md`](stability.md).
 |---------|-------------|
 | `gpumesh workers` | List connected workers and their status |
 | `gpumesh devices` | Show all GPUs/CPUs as one unified pool |
+| `gpumesh mcp-serve` | Serve the mesh to an AI assistant over MCP, see [mcp.md](mcp.md). Needs `pip install "gpumesh[mcp]"`, and the assistant starts it rather than you |
 
 Job and monitoring commands (`submit`, `status`, `cancel`, `retry`, `workers`, `devices`, `kill`) accept `--url URL --token TOKEN`. If you omit them, gpumesh falls back to the `GPUMESH_URL` / `GPUMESH_TOKEN` environment variables, then to the connection saved by `join`/`serve`.
 
