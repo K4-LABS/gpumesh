@@ -28,7 +28,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stays out of the base install. It requires Python 3.10+, which gpumesh does
   not, so the extra carries a `python_version >= '3.10'` marker. On a 3.9
   interpreter `pip install gpumesh[all]` still succeeds, and `mcp-serve` exits
-  with the install hint rather than a traceback.
+  with the install hint rather than a traceback. Both SDK generations work:
+  2.x renamed `FastMCP` to `MCPServer` and moved it up a level, leaving the
+  constructor, the tool decorator and `run()` alone, so the import takes
+  whichever name is present and the pin stays uncapped.
 
 ## [3.2.0] — 2026-08-26
 

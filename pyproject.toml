@@ -180,7 +180,10 @@ tls = ["cryptography>=41.0.0"]
 # extra resolves to nothing there rather than failing the whole install, and
 # `mcp-serve` exits with the "pip install gpumesh[mcp]" message it already
 # prints when the import is missing. 1.2 is the oldest release carrying the
-# FastMCP decorator API that mcp_server.py is written against.
+# FastMCP decorator API that mcp_server.py is written against, and the upper
+# end is open because 2.x works too: it renamed FastMCP to MCPServer and moved
+# it up a level, but left the constructor, the tool decorator and run()
+# untouched, so mcp_server.py imports whichever name is present.
 mcp = ["mcp>=1.2; python_version >= '3.10'"]
 
 # Tooling floors, not runtime: pytest 7 for the modern fixture/ini behaviour
