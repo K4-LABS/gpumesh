@@ -1,19 +1,37 @@
+# A coordinator and one worker on a private compose network.
+#
+#     export GPUMESH_TOKEN=$(python -c "import secrets; print(secrets.token_urlsafe(32))")
+#     docker compose up -d
+#
+# Two things here used to be wrong together, and either alone would have been
+# survivable. The token was hardcoded to a value printed in this repository,
+# and the host-side publish was "8732:8732", which binds every interface. So
+# anyone on your network could reach a coordinator whose token they could read
+# on GitHub, and a gpumesh worker runs whatever the coordinator sends it, as
+# the user who started it. The token now has to be supplied, and the publish
+# is loopback by default, matching the compose file at the repository root.
 services:
   coordinator:
-    image: samurai007ak/gpumesh:3.0.0
-    # Explicitly pass the token to guarantee it matches
-    command: serve --port 8732 --token my-secret-mesh-token
+    image: samurai007ak/gpumesh:3.2.0
+    # Both services read the same variable, so they cannot disagree about it.
+    # The `:?` stops the run with a readable message when it is unset, rather
+    # than starting a coordinator no worker can authenticate against.
+    command: serve --port 8732 --token ${GPUMESH_TOKEN:?set GPUMESH_TOKEN}
     ports:
-      - "8732:8732"
+      # Host side. Name an address deliberately: a bare "8732:8732" binds
+      # every interface the machine has. Set GPUMESH_BIND=0.0.0.0 only when
+      # you mean to let other machines in.
+      - "${GPUMESH_BIND:-127.0.0.1}:8732:8732"
     environment:
+      # Container side, and this one must be 0.0.0.0. A loopback bind inside a
+      # container answers nothing from outside it, published port included.
       - GPUMESH_HOST=0.0.0.0
     networks:
       - mesh-network
 
   worker:
-    image: samurai007ak/gpumesh:3.0.0
-    # Explicitly pass the same token here
-    command: join http://coordinator:8732 --token my-secret-mesh-token
+    image: samurai007ak/gpumesh:3.2.0
+    command: join http://coordinator:8732 --token ${GPUMESH_TOKEN:?set GPUMESH_TOKEN}
     depends_on:
       - coordinator
     networks:

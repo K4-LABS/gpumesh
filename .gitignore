@@ -23,13 +23,6 @@ venv/
 .vscode/
 .idea/
 
-# AI coding assistants (local tooling, not part of the project)
-.agents/
-.claude/
-.continue/
-.forge/
-.aider*
-skills-lock.json
 
 # OS
 .DS_Store
@@ -39,6 +32,11 @@ Thumbs.db
 .pytest_cache/
 .coverage
 htmlcov/
+
+# Linting. ruff writes this on every run, including from the pre-commit hook,
+# so without it every contributor carries an untracked directory in `git
+# status` and eventually somebody commits it.
+.ruff_cache/
 
 # Jupyter
 .ipynb_checkpoints/

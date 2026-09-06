@@ -45,10 +45,10 @@ Tensions can occur between community members even when they are trying their bes
 
 When an incident does occur, it is important to report it promptly. To report a
 possible violation, **email
-[arijitkonar16@gmail.com](mailto:arijitkonar16@gmail.com)** — the maintainer
+[arijitkonar16@gmail.com](mailto:arijitkonar16@gmail.com)**. The maintainer
 address published in the README, so it is one that is actually read. Include
 what happened, where, and links if the incident is public. You do not need to
-decide in advance whether something "counts" — reporting it is enough.
+decide in advance whether something "counts". Reporting it is enough.
 
 ### Who reads a report, and what to do if that is the problem
 

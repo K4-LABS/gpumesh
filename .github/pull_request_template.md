@@ -8,7 +8,7 @@ One or two sentences.
 
 ## How do you know it works?
 
-The test you added, or the manual steps you ran — especially for networking
+The test you added, or the manual steps you ran, especially for networking
 changes, where "I ran it across two machines and here is the output" is worth
 more than any unit test.
 
@@ -16,16 +16,16 @@ more than any unit test.
 
 ### Checklist
 
-- [ ] `pytest` is green locally — no failures and no errors. (Windows shows a
+- [ ] `pytest` is green locally, with no failures and no errors. (Windows shows a
       few skips and one xpass; those are intentional. The total count moves as
       tests are added, so a *failure* is what matters, not the number.)
-- [ ] `ruff check --select E9,F63,F7,F82 .` is clean — that is the subset CI
+- [ ] `ruff check --select E9,F63,F7,F82 .` is clean. That is the subset CI
       hard-gates on. The full `ruff check .` and `mypy` are advisory in CI
       (there is a pre-existing backlog), but please read their annotations on
       the lines you touched. Any `# noqa` added carries a reason on the same line.
 - [ ] Coverage still clears the CI floor: `pytest --cov=gpumesh --cov-fail-under=80`
 - [ ] `CHANGELOG.md` updated under `## [Unreleased]`
-- [ ] If the wire changed, `gpumesh.PROTOCOL_VERSION` is bumped — and
+- [ ] If the wire changed, `gpumesh.PROTOCOL_VERSION` is bumped, and
       `.github/workflows/compat.yml` still passes
 - [ ] Branch named `fix/`, `feat/`, `docs/`, `test/`, or `chore/` + short description
 - [ ] No reformatting of files unrelated to this change
@@ -35,7 +35,7 @@ more than any unit test.
 
 ### AI assistance
 
-- [ ] **No AI tool was used**, or — if one was — I have said so in the
+- [ ] **No AI tool was used**, or, if one was, I have said so in the
       description above, I have read every line of this diff myself, and I have
       run it. See [AI-assisted contributions](https://github.com/K4-LABS/gpumesh/blob/master/CONTRIBUTING.md#ai-assisted-contributions).
 

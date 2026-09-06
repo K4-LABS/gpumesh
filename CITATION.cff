@@ -3,12 +3,8 @@
 # GitHub reads this file and renders a "Cite this repository" button on the
 # repository sidebar, in both APA and BibTeX.
 #
-# MAINTAINER TODO before launch:
-#   1. Replace the given-names / family-names placeholders below with your real
-#      name. GitHub renders whatever is here verbatim into people's papers.
-#   2. Optionally uncomment and fill the `orcid:` line.
-#   3. Bump `version` and `date-released` on every release, alongside
-#      pyproject.toml, gpumesh/__init__.py and CHANGELOG.md.
+# `version` and `date-released` are bumped on every release, alongside
+# pyproject.toml, gpumesh/__init__.py and CHANGELOG.md.
 
 cff-version: 1.2.0
 message: "If you use gpumesh in work that you publish, please cite it as below."
@@ -22,11 +18,9 @@ abstract: >-
 type: software
 
 authors:
-  # TODO: replace with the maintainer's real name before the first release.
-  - given-names: FIRST-NAME-PLACEHOLDER
-    family-names: LAST-NAME-PLACEHOLDER
+  - given-names: Arijit
+    family-names: Konar
     alias: Samurai007AK
-    # orcid: "https://orcid.org/0000-0000-0000-0000"
 
 version: 3.2.0
 date-released: "2026-08-26"
