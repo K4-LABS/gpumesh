@@ -780,45 +780,6 @@ which tool to use instead.
 
 ---
 
-## Prior art and credits
-
-gpumesh borrows shamelessly, at the level of **API shape and scheduling
-strategy**. No code was copied from any of these projects; what was taken is
-the idea of what a good interface looks like, and each one is credited in the
-source where its influence lands.
-
-[**exo**](https://github.com/exo-explore/exo) (Apache-2.0) is the closest
-relative in spirit, running AI workloads on the consumer hardware you
-already own. Its runner-supervisor pattern is why every gpumesh task runs in
-its own subprocess, and its crash diagnostics and topology-change events are
-reflected in `worker.py` and `db.py`.
-[**hivemind**](https://github.com/learning-at-home/hivemind) (MIT) supplied
-the TTL-based worker expiry that prunes a machine that has stopped
-heartbeating. [**Petals**](https://github.com/bigscience-workshop/petals)
-(MIT) supplied straggler deprioritisation: a worker slower than twice its
-peers' median gets lighter tasks rather than holding up the batch.
-[**cudf.pandas**](https://github.com/rapidsai/cudf) (Apache-2.0) is where
-`accelerate.install(mesh)` comes from: an import hook that makes existing
-code use the accelerator without editing it.
-[**Hugging Face Accelerate**](https://github.com/huggingface/accelerate)
-(Apache-2.0) is the source of the `.to(device)` placement idea.
-[**clustrix**](https://github.com/ContextLab/clustrix) (MIT) is where
-`@accelerate(cores=8, memory="16GB")` gets its shape, declaring resource
-requirements on the decorator rather than in a separate config.
-[**burla**](https://github.com/Burla-Cloud/burla) contributed the
-`remote_parallel_map` batch pattern behind `.map()` and the `func_gpu="A100"`
-hardware-selection idea; note that burla is licensed **FSL-1.1-Apache-2.0**,
-which is *source-available, not OSI open source*. Two smaller influences round
-it out: **distry**, for the
-plain single-function decorator, and **ezpz**, for `setup_torch()`-style
-automatic backend detection.
-
-If you maintain one of these and think the credit is wrong, or the influence
-is closer to copying than we believe,
-[open an issue](https://github.com/K4-LABS/gpumesh/issues) and it will be
-corrected.
-
----
 
 ## Maintainers
 
