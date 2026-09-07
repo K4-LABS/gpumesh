@@ -2,7 +2,7 @@
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/K4-LABS/gpumesh/master/docs/img/gpumesh-logo.png">
-  <img alt="gpumesh logo" src="https://raw.githubusercontent.com/K4-LABS/gpumesh/master/docs/img/gpumesh-logo-light.png" width="240">
+  <img alt="gpumesh, a GPU mesh network" src="https://raw.githubusercontent.com/K4-LABS/gpumesh/master/docs/img/gpumesh-logo-light.png" width="240">
 </picture>
 
 # gpumesh

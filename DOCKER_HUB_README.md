@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="https://raw.githubusercontent.com/K4-LABS/gpumesh/master/docs/img/gpumesh-logo.png" alt="gpumesh logo" width="300">
+<img src="https://raw.githubusercontent.com/K4-LABS/gpumesh/master/docs/img/gpumesh-logo.png" alt="gpumesh, a GPU mesh network" width="300">
 
 # gpumesh
 
