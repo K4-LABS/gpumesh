@@ -829,11 +829,6 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ```
 
-gpumesh was MIT-licensed through 2.0.0, then AGPL-3.0 from 3.0.0, and moves
-to Apache-2.0 starting with 3.1.0. The change is not retroactive: every
-release published under a previous license remains available under those
-terms.
-
 ---
 
 [GitHub](https://github.com/K4-LABS/gpumesh) · [Issues](https://github.com/K4-LABS/gpumesh/issues) · [PyPI](https://pypi.org/project/gpumesh/)
