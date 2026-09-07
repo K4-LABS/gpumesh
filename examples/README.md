@@ -21,7 +21,7 @@ default, so a mesh of one exercises exactly the same code path as a mesh of
 ten.
 
 ```bash
-# terminal 1 — generate a real token, not "mysecret"
+# terminal 1: generate a real token, not "mysecret"
 gpumesh serve --token "$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
 
 # terminal 2
@@ -38,9 +38,9 @@ that up, and what you are agreeing to when you do.
 |------|---------------|-------|
 | [`hello_mesh.py`](hello_mesh.py) | The smallest complete program: `@mesh`, a single call, a `.map()`, and the pool size | nothing |
 | [`second_machine.py`](second_machine.py) | Reads your live mesh and prints the exact `join` command for another machine, plus what `--host 0.0.0.0` really means | nothing |
-| [`param_sweep.py`](param_sweep.py) | A hyperparameter grid spread across the pool with `.map()` — the workload gpumesh exists for | nothing |
+| [`param_sweep.py`](param_sweep.py) | A hyperparameter grid spread across the pool with `.map()`, the workload gpumesh exists for | nothing |
 | [`pytorch_sweep.py`](pytorch_sweep.py) | The same sweep with a real (tiny) PyTorch model, results back as a pandas DataFrame | torch (on every worker), pandas optional |
-| [`numpy_result.py`](numpy_result.py) | Returning values JSON cannot express: ndarrays, `Decimal`, `set`, `bytes` — and one that genuinely cannot cross machines | numpy (optional; skips cleanly without it) |
+| [`numpy_result.py`](numpy_result.py) | Returning values JSON cannot express: ndarrays, `Decimal`, `set`, `bytes`, and one that genuinely cannot cross machines | numpy (optional; skips cleanly without it) |
 | [`worker_leaves.py`](worker_leaves.py) | Lease expiry and re-queue, why your own bug is not retried three times, and the local fallback when the mesh is gone | nothing |
 | [`dev_mode.py`](dev_mode.py) | The "connect once, code normally" flow for VS Code / Jupyter / PyCharm | nothing |
 | [`grid_search.py`](grid_search.py) + [`payloads.json`](payloads.json) | The *script* path rather than the decorator path: one payload per task, JSON on stdin, JSON on stdout | nothing |
@@ -84,13 +84,13 @@ submitted scripts only.
   `cost` is a relative task weight (default `1.0`) that routes heavier tasks to
   stronger workers. It is stripped before your function is called, on the mesh
   path and on the local fallback both, so your signature does not need a `cost`
-  parameter. `param_sweep.py` uses it. (Placement hints — `gpu`,
-  `gpu_memory_mb`, `cpu_cores` — behave the *opposite* way in a `.map()` list:
+  parameter. `param_sweep.py` uses it. (Placement hints `gpu`,
+  `gpu_memory_mb` and `cpu_cores` behave the *opposite* way in a `.map()` list:
   they are not stripped, because there they are ordinary payload keys and
   reach your function. They only act as hints when `@mesh`/`@accelerate` writes
   them from its own keywords.)
 - **Return plain data.** Arrays, tensors and DataFrames are fine. Anything
-  bound to a live process — sockets, locks, database handles, CUDA handles —
+  bound to a live process, such as sockets, locks, database handles or CUDA handles,
   is not, and fails with a message naming the type.
 - **Same Python minor version on every machine, ideally.** Functions ship as
   cloudpickled bytecode when versions match and as source text when they do

@@ -33,8 +33,19 @@ Thumbs.db
 .coverage
 htmlcov/
 
+# Linting. ruff writes this on every run, including from the pre-commit hook,
+# so without it every contributor carries an untracked directory in `git
+# status` and eventually somebody commits it.
+.ruff_cache/
+
 # Jupyter
 .ipynb_checkpoints/
+
+# Sphinx output. `sphinx-build docs docs/_build/html` writes here on every
+# local docs build, and the docs workflow uses the same path. Without this it
+# is a few thousand untracked files sitting inside a tracked directory, which
+# is how one of them eventually gets committed.
+docs/_build/
 
 # Local operator notes and scratch scripts. These describe one particular
 # two-laptop setup and carry its coordinator token, so they must never be

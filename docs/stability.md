@@ -28,7 +28,7 @@ borrowed laptops, it is a cluster with extra steps.
 ## 1. The Python API
 
 **The public API is exactly the names in `gpumesh.__all__`.** Everything else
-in the package is internal and may change, move, or vanish in any release —
+in the package is internal and may change, move, or vanish in any release,
 including submodules you can import today.
 
 ```python
@@ -43,24 +43,24 @@ Every exception gpumesh raises **at** a caller is in that list. That rule is
 worth stating separately, because it is the one an incomplete `__all__` breaks
 first: an exception a user must write in an `except` clause, and cannot find in
 the declared public API, is a promise nobody can rely on. Exceptions that never
-cross the API boundary — internal control flow such as
+cross the API boundary, such as internal control flow like
 `accelerate._MeshUnavailable`, which is raised and caught two frames apart
-inside one module — are not listed, and are not raised at you either.
+inside one module, are not listed, and are not raised at you either.
 
 | Name | What is promised |
 |---|---|
 | `GPUMesh` | The class, its constructor signature, and its documented methods: `workers`, `distribute`, `submit`, `submit_job`, `status`, `job_status`, `devices`, `device_count`, `gpu_count`, `total_score`, `auto_device`, `results_to_dataframe`, and the static `start_coordinator` / `add_worker` |
 | `GPUMeshError` | The exception type raised by `GPUMesh` operations. Catchable, and it stays a subclass of `Exception` |
 | `accelerate`, `accelerate_install` | The decorator and the installer |
-| `PlacementUnsupportedError` | Raised by `.map()` when the mesh object cannot carry a `gpu=`/`cores=`/`memory=` constraint — see the fallback contract below. Subclass of `RuntimeError`, never narrowed |
-| `mesh` | The `@mesh` **decorator** — see the warning below |
+| `PlacementUnsupportedError` | Raised by `.map()` when the mesh object cannot carry a `gpu=`/`cores=`/`memory=` constraint. See the fallback contract below. Subclass of `RuntimeError`, never narrowed |
+| `mesh` | The `@mesh` **decorator**. See the warning below |
 | `torch` | The lazy `gpumesh.torch` integration module, including the names it documents: `setup_torch`, `device`, and the `RemoteDeviceError` its `device()` raises |
 | `load_ipython_extension`, `unload_ipython_extension` | So `%load_ext gpumesh` keeps working |
 | `ProtocolVersionMismatch` | Raised when a worker and a coordinator cannot talk. Subclass of `Exception`, never narrowed |
 | `PROTOCOL_VERSION`, `MIN_PROTOCOL_VERSION` | Integers. See §3 |
 | `__version__` | A PEP 440 string |
 
-`GPUMesh` currently exposes two pairs of near-duplicate methods —
+`GPUMesh` currently exposes two pairs of near-duplicate methods,
 `status`/`job_status` and `submit`/`submit_job`. Both pairs are supported;
 neither is deprecated today. If one is ever removed it goes through §5 first.
 
@@ -69,7 +69,7 @@ neither is deprecated today. If one is ever removed it goes through §5 first.
 > binding in `__init__.py` is load-bearing. The import machinery pins
 > `gpumesh.mesh` to the submodule the first time anything does
 > `import gpumesh.mesh`, which would permanently shadow a lazy `__getattr__`
-> and make `from gpumesh import mesh` return a module — *depending on import
+> and make `from gpumesh import mesh` return a module, *depending on import
 > order*. The submodule is imported eagerly and the name re-bound immediately,
 > so both `from gpumesh import mesh` (decorator) and
 > `from gpumesh.mesh import connect` (module) are safe. Do not "simplify" it.
@@ -77,7 +77,7 @@ neither is deprecated today. If one is ever removed it goes through §5 first.
 ### The `@accelerate` fallback contract
 
 `@accelerate` runs your function locally when the mesh cannot take it. That
-fallback is the reason a mesh is *optional* — and it is also the only part of
+fallback is the reason a mesh is *optional*, and it is also the only part of
 this API that can turn a failure into a wrong answer, so exactly which failures
 fall back and which propagate is public, and changing the split is a MAJOR
 change.
@@ -90,8 +90,8 @@ The reason is not a preference for strictness. Once `POST /api/jobs` has
 succeeded, the coordinator owns a job that may be pending, may be running on
 a worker at this moment, and may finish after your call has returned. Running
 the same batch locally on top of that executes the work **twice**, which for
-anything with a side effect — a file written, a row inserted, a model
-checkpointed — is worse than any exception.
+anything with a side effect, whether a file written, a row inserted or a model
+checkpointed, is worse than any exception.
 
 | What happened | `@accelerate(...)(...)` | `.map([...])` |
 |---|---|---|
@@ -115,7 +115,7 @@ and no longer do:
 - **`TimeoutError` propagates.** An unschedulable job quietly becoming a local
   run after 300 seconds is a worse outcome than an error: the caller waited out
   the entire timeout precisely because they wanted mesh execution, and the job
-  is still on the coordinator. Note the corollary — a `TimeoutError` here does
+  is still on the coordinator. Note the corollary: a `TimeoutError` here does
   not always mean "your function is slow". It also covers a coordinator that
   became unreachable for the whole polling window, and the message says which
   case it was.
@@ -129,7 +129,7 @@ Resource validation (`gpu=`, `cores=`, `memory=`) is a snapshot taken at call
 time, and it is deliberately **fail-open on ignorance and fail-closed on
 measurement**: a worker that reports no capacity for a resource is unknown and
 passes, because the coordinator's scheduler is the real enforcement point and
-refusing here only stops the task from reaching it — but a worker that reports
+refusing here only stops the task from reaching it. But a worker that reports
 `0` has been measured, and 0 satisfies no positive requirement. Validation is
 also never more permissive than the coordinator's scheduler, so a task that
 passes it cannot then be un-leasable.
@@ -143,7 +143,7 @@ passes it cannot then be un-leasable.
   They are importable because Python has no way to stop you, not because they
   are supported. `gpumesh.worker.MeshClient` in particular is a convenience
   used by this project's own tests; if you want a stable client, use the HTTP
-  protocol directly (§3) — it *is* versioned.
+  protocol directly (§3). It *is* versioned.
 - Any name beginning with `_`.
 - The SQLite schema in `gpumesh.db`. It is an implementation detail of one
   process, is not a migration target, and is not readable across versions.
@@ -163,9 +163,9 @@ public and changes only by adding keys.
 
 | Code | Meaning |
 |---|---|
-| `0` | Success. Also a clean interrupt of a long-running command (`serve`, `join`) — a worker you stopped with Ctrl+C did not fail |
+| `0` | Success. Also a clean interrupt of a long-running command (`serve`, `join`). A worker you stopped with Ctrl+C did not fail |
 | `1` | The command failed: coordinator unreachable, token rejected, job failed, port in use, no such job. Also `gpumesh` with no subcommand (it prints help), and a *second* Ctrl+C during shutdown, which abandons the graceful path on purpose |
-| `2` | Usage error, emitted by `argparse` — unknown subcommand, missing required argument, bad flag |
+| `2` | Usage error, emitted by `argparse` for an unknown subcommand, a missing required argument or a bad flag |
 
 Scripts should test for zero versus non-zero. gpumesh does not currently
 allocate distinct codes per failure kind; if it ever does, new codes will be
@@ -182,7 +182,7 @@ meaning "failed".
 - Making a previously optional argument required is **MAJOR**.
 - Environment variables read by the CLI (`GPUMESH_TOKEN`, `GPUMESH_HOST`,
   `GPUMESH_HOST_IP`, `GPUMESH_CLAIM_HOST`, `GPUMESH_COLOR`) follow the same
-  rules as flags — including the clause above about defaults. Narrowing the set
+  rules as flags, including the clause above about defaults. Narrowing the set
   of values one accepts counts: `GPUMESH_HOST_IP` began rejecting hostnames,
   which is a behaviour change for anyone who had one there, even though every
   value that ever *worked* still works.
@@ -194,7 +194,7 @@ meaning "failed".
 Versioned by an integer, `gpumesh.PROTOCOL_VERSION`, deliberately independent
 of `__version__`. It moves only when the wire changes: a new required field, a
 changed meaning for an existing field, a new endpoint a peer must have. A
-patch release does not move it, which is the point — otherwise every Tuesday's
+patch release does not move it, which is the point. Otherwise every Tuesday's
 bugfix would refuse every worker that had not been upgraded that afternoon.
 
 The endpoint-by-endpoint reference is [protocol.md](protocol.md). This section
@@ -207,7 +207,7 @@ covers only compatibility.
 Today: `PROTOCOL_VERSION = 2`, `MIN_PROTOCOL_VERSION = 1`.
 
 One version of slack is what lets an operator upgrade machines one at a time
-instead of holding a flag day — which matters enormously here, because the
+instead of holding a flag day, which matters enormously here, because the
 machines belong to other people and get upgraded when they feel like it. It is
 not wider than one because every supported version is a branch the code has to
 keep implementing and CI has to keep exercising (`.github/workflows/compat.yml`
@@ -222,7 +222,7 @@ That unversioned protocol is named, retroactively, **version 1**. Protocol 2 is
 the same protocol plus the handshake fields, so the numbering starts at 2 with
 a live N−1 branch rather than at 1 with a dead one.
 
-**An absent `protocol_version` is mapped to 1** — a fixed constant, never
+**An absent `protocol_version` is mapped to 1**, a fixed constant, never
 "whatever the current minimum happens to be". The distinction bites the day
 `PROTOCOL_VERSION` becomes 3: a peer that sent no version is telling you it
 predates versioning, which is evidence for 1 and never for 2. Pinning the
@@ -242,7 +242,7 @@ into a refusal here, and it is not special-cased into an exemption either.
   gpumesh ever released.
 - A coordinator answers a successful registration with its own
   `protocol_version` and `min_protocol_version`, and reports both on
-  `GET /api/health` — so an operator can read the window without owning a
+  `GET /api/health`, so an operator can read the window without owning a
   worker that can join.
 - A worker outside the coordinator's window is refused **at registration**
   with **HTTP 426 Upgrade Required** and a message naming both versions, which
@@ -252,7 +252,7 @@ into a refusal here, and it is not special-cased into an exemption either.
   skew from a malformed body.
 - A coordinator outside the *worker's* window is refused by the worker, on the
   registration response. This half cannot be delegated: a coordinator older
-  than the worker has no gate at all — it accepts anything and then behaves
+  than the worker has no gate at all. It accepts anything and then behaves
   however the difference makes it behave.
 - Both refusals surface as `gpumesh.ProtocolVersionMismatch`, not as a bare
   `ValueError` and not through the worker's generic "failed to register"
@@ -277,7 +277,7 @@ function envelope's Python version, which has its own rules in
 | Changed status code for an existing condition | Bump |
 
 Each bump drops the oldest version out of the window, so peers that far behind
-start being refused — clearly, at registration, naming both versions. That is
+start being refused, clearly, at registration, naming both versions. That is
 the deprecation, and it is why the number is allowed to move at all.
 
 ---
@@ -295,7 +295,7 @@ distro Python of 3.9.
   `requires-python` means pip resolves an older gpumesh for you instead of
   installing a broken one.
 - A version is dropped when the code actually needs a feature from a newer
-  one, or when upstream security support for it ends — **not** because the
+  one, or when upstream security support for it ends, **not** because the
   calendar moved. Raising the floor also means dropping the classifier and the
   matrix entry in `.github/workflows/tests.yml`.
 - Every supported version is in that matrix. A version not tested in CI is not
@@ -311,7 +311,7 @@ a deprecation period first.
 **Two releases minimum**, and the warning class changes between them:
 
 1. **First release:** `DeprecationWarning`. This is nearly invisible on
-   purpose — Python hides it by default outside `__main__`, so library users
+   purpose. Python hides it by default outside `__main__`, so library users
    do not get scolded for their dependencies' choices. Test suites (pytest
    turns it back on) and developers running scripts directly do see it, which
    is the right first audience.
@@ -344,14 +344,14 @@ def submit_job(self, script, payloads, name=""):
 
 CLI flags follow the same shape: the flag keeps working, and using it prints a
 line to **stderr** naming the replacement and the removal version. Removing a
-protocol version follows §3 — it leaves the window and peers get the 426.
+protocol version follows §3: it leaves the window and peers get the 426.
 
 ---
 
 ## Related
 
-- [protocol.md](protocol.md) — the endpoint-by-endpoint HTTP reference
-- [../CHANGELOG.md](../CHANGELOG.md) — what actually changed, per release
-- [../SECURITY.md](../SECURITY.md) — what a token grants
-- `.github/workflows/compat.yml` — CI that runs a real task between the
+- [protocol.md](protocol.md), the endpoint-by-endpoint HTTP reference
+- [../CHANGELOG.md](../CHANGELOG.md), what actually changed, per release
+- [../SECURITY.md](../SECURITY.md), what a token grants
+- `.github/workflows/compat.yml`: CI that runs a real task between the
   current tree and a released gpumesh, in both role assignments

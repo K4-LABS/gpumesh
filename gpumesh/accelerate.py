@@ -837,7 +837,8 @@ def install(mesh: Any = None) -> None:
     After calling install(), all @accelerate-decorated functions will
     automatically use the mesh for distribution.
 
-    Usage:
+    Usage::
+
         from gpumesh import accelerate
         accelerate.install(mesh)
 
@@ -855,7 +856,8 @@ def accelerate(mesh_or_fn: Any = None, *, gpu: str | None = None,
                timeout: float | None = None) -> Any:
     """Decorator that makes mesh resources transparent to user code.
 
-    Can be used as:
+    Can be used as::
+
         @accelerate(mesh)  # With mesh argument
         def train(...): ...
 

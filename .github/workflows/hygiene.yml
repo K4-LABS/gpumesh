@@ -94,11 +94,14 @@ jobs:
   docs-links:
     # -- The gap: 19 markdown files, cross-linked, nothing checking them ----
     #
-    # There is no docs build to break — the documentation is plain markdown
-    # read on github.com — so the failure mode is not a build error, it is a
-    # link that quietly 404s after a file is renamed. README.md alone points
-    # into docs/, and CONTRIBUTING.md, SECURITY.md and the rest point at each
-    # other. Renaming or moving one file is a normal, well-intentioned PR and
+    # The docs workflow builds docs/ with Sphinx and fails on a link it cannot
+    # resolve, but its source tree is docs/ and nothing else. Sphinx never
+    # parses the root markdown, so README.md, CONTRIBUTING.md, SECURITY.md,
+    # THREAT_MODEL.md and the rest go unchecked. Those are read on github.com,
+    # and they point into docs/ and at each other on almost every page. This
+    # job covers them. The failure there is not a build error. It is a link
+    # that quietly 404s after a file is renamed. Renaming or moving one file
+    # is a normal, well-intentioned PR and
     # is exactly what breaks them.
     #
     # RELATIVE links only, on purpose. A general link checker that resolves

@@ -1,6 +1,7 @@
 """Local PyTorch convenience helpers for GPUMesh.
 
-Usage:
+Usage::
+
     import gpumesh
     import torch
 
