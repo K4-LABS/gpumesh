@@ -11,6 +11,7 @@
 across machines on your network, with one decorator, one CLI command, or a Python API.
 
 [![Tests](https://img.shields.io/github/actions/workflow/status/K4-LABS/gpumesh/tests.yml?branch=master&label=tests&style=for-the-badge&logo=githubactions&logoColor=white)](https://github.com/K4-LABS/gpumesh/actions/workflows/tests.yml)
+[![Docs](https://img.shields.io/readthedocs/gpumesh?style=for-the-badge&logo=readthedocs&logoColor=white)](https://gpumesh.readthedocs.io)
 [![PyPI](https://img.shields.io/pypi/v/gpumesh?style=for-the-badge&logo=pypi&logoColor=white)](https://pypi.org/project/gpumesh/)
 [![Python](https://img.shields.io/pypi/pyversions/gpumesh?style=for-the-badge&logo=python&logoColor=white)](https://pypi.org/project/gpumesh/)
 
@@ -19,7 +20,7 @@ across machines on your network, with one decorator, one CLI command, or a Pytho
 [![Contributors](https://img.shields.io/github/contributors/K4-LABS/gpumesh?style=for-the-badge&logo=github&logoColor=white)](https://github.com/K4-LABS/gpumesh/graphs/contributors)
 
 [Quickstart](#quickstart) ·
-[Docs](https://github.com/K4-LABS/gpumesh/tree/master/docs) ·
+[Docs](https://gpumesh.readthedocs.io) ·
 [Contributing](https://github.com/K4-LABS/gpumesh/blob/master/CONTRIBUTING.md) ·
 [Issues](https://github.com/K4-LABS/gpumesh/issues)
 

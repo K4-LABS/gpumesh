@@ -1,0 +1,72 @@
+name: docs
+
+# -- The gap: Read the Docs cannot gate a pull request from a fork ----------
+#
+# Read the Docs hosts the site and, with "Build pull requests for this
+# project" switched on in its dashboard, builds a preview per PR. That covers
+# the common case and is the thing reviewers actually click.
+#
+# It does not cover the case this repository sees most, a first-time
+# contributor pushing from a fork. RTD's PR builds run off its GitHub
+# integration on this repository, and a build that never runs reports nothing.
+# The author then finds out their docstring does not parse after merge, which
+# is the point at which nobody is looking.
+#
+# So this job builds the same docs with the same configuration, on every PR,
+# fork or not, and hands back the rendered HTML as an artifact. There is no
+# second source of truth here. docs/conf.py is shared, and `-W` matches
+# `fail_on_warning: true` in .readthedocs.yaml on purpose. If the two ever
+# disagree, that is the bug.
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: sphinx (docs build with no warnings)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          # Same interpreter Read the Docs uses (see .readthedocs.yaml).
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install the package and the docs extra
+        # Editable, so autodoc imports the working tree rather than a copy.
+        # The optional extras stay uninstalled. docs/conf.py mocks them.
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[docs]"
+
+      - name: Build the documentation
+        # -W turns every warning into a failure. That covers an unresolved
+        # cross-reference, a page missing from a toctree, and a docstring that
+        # does not parse. --keep-going reports all of them in one run instead
+        # of stopping at the first, so a PR gets one round of fixes, not five.
+        run: sphinx-build -b html -W --keep-going docs docs/_build/html
+
+      - name: Upload the rendered HTML
+        # For PRs from forks, where the Read the Docs preview link is absent,
+        # this artifact is how a reviewer sees the pages before merging.
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: docs-html
+          path: docs/_build/html
+          retention-days: 14

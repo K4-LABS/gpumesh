@@ -1,0 +1,40 @@
+# Read the Docs build configuration.
+#
+# Hosts the pages under docs/ at https://gpumesh.readthedocs.io.
+#
+# This file does NOT switch on per-PR preview builds. There is no yaml key for
+# that. It is a project setting in the Read the Docs dashboard, under
+# Admin -> Settings -> "Build pull requests for this project". Switch it on and
+# RTD builds a preview of every pull request and posts the link as a commit
+# status. The docs job in .github/workflows/docs.yml covers the rest, because
+# RTD's PR builds do not reach a fork.
+
+version: 2
+
+build:
+  os: ubuntu-24.04
+  tools:
+    # 3.12 everywhere in CI: hygiene.yml and the lint job in tests.yml both
+    # pin it. The package itself supports >= 3.9; the docs build has no reason
+    # to be the place that discovers a 3.9 problem.
+    python: "3.12"
+
+python:
+  install:
+    # Installs the package, so autodoc can import gpumesh, plus the `docs`
+    # extra. The optional extras (gpu, ui, mcp, ...) stay out on purpose.
+    # docs/conf.py mocks every one of them, which is what stops a
+    # documentation build from pulling a torch wheel to render a docstring.
+    - method: pip
+      path: .
+      extra_requirements:
+        - docs
+
+sphinx:
+  configuration: docs/conf.py
+  # A warning from Sphinx means a broken cross-reference, a page missing from
+  # the toctree, or a docstring that does not parse. All three render as
+  # something wrong on a page nobody re-reads. Same reasoning as -W in the
+  # docs workflow. If this is ever red on arrival, fix the warnings rather
+  # than turning it off.
+  fail_on_warning: true
