@@ -22,6 +22,8 @@ __version__ = "3.2.0"
 # compatibility window is non-degenerate on the day it ships — the N-1 branch
 # is exercised by every worker in the field right now, rather than being dead
 # code that first runs whenever version 2 eventually lands.
+#: The wire protocol version this build speaks. Deliberately not
+#: ``__version__``: it moves only when the handshake itself changes.
 PROTOCOL_VERSION = 2
 
 # The compatibility window is exactly {N-1, N}: this coordinator accepts a
@@ -33,6 +35,8 @@ PROTOCOL_VERSION = 2
 # implementing and CI must actually keep exercising — the compat workflow
 # doubles in size per extra version — and "supported forever" is precisely how
 # you arrive at the mystery misbehaviour this handshake exists to remove.
+#: The oldest wire protocol version this build accepts from a peer. The
+#: compatibility window is exactly ``{N-1, N}``.
 MIN_PROTOCOL_VERSION = PROTOCOL_VERSION - 1
 
 # What an absent ``protocol_version`` means on the wire.
