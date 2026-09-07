@@ -123,7 +123,7 @@ dependencies = [
 
 [project.urls]
 Homepage = "https://github.com/K4-LABS/gpumesh"
-Documentation = "https://github.com/K4-LABS/gpumesh#readme"
+Documentation = "https://gpumesh.readthedocs.io"
 Repository = "https://github.com/K4-LABS/gpumesh"
 Issues = "https://github.com/K4-LABS/gpumesh/issues"
 # PyPI renders a `Changelog` key as a dedicated sidebar link on the project
@@ -174,6 +174,18 @@ ui = ["rich>=13.0", "questionary>=2.0"]
 # for the interpreters in `requires-python`.
 tls = ["cryptography>=41.0.0"]
 
+# `gpumesh mcp-serve` only. The MCP SDK requires Python >= 3.10, which this
+# package does not (see the note on requires-python above), so the marker is
+# what keeps `pip install gpumesh[all]` working on a 3.9 interpreter: the
+# extra resolves to nothing there rather than failing the whole install, and
+# `mcp-serve` exits with the "pip install gpumesh[mcp]" message it already
+# prints when the import is missing. 1.2 is the oldest release carrying the
+# FastMCP decorator API that mcp_server.py is written against, and the upper
+# end is open because 2.x works too: it renamed FastMCP to MCPServer and moved
+# it up a level, but left the constructor, the tool decorator and run()
+# untouched, so mcp_server.py imports whichever name is present.
+mcp = ["mcp>=1.2; python_version >= '3.10'"]
+
 # Tooling floors, not runtime: pytest 7 for the modern fixture/ini behaviour
 # the suite assumes, build 1.0 for PEP 517 `--wheel`/`--sdist` as used in CI,
 # twine 5 for `check --strict`.
@@ -201,7 +213,27 @@ lint = [
     "mypy>=1.10",
 ]
 
-all = ["gpumesh[gpu,tunnel,sysinfo,notebook,ui,tls]"]
+# Used by .readthedocs.yaml and .github/workflows/docs.yml only. Kept as an
+# extra rather than a docs/requirements.txt so there is one place that says
+# what a build of this project needs, the same as `dev`, `packaging` and
+# `lint` above.
+#
+# sphinx 7.0 is the oldest series myst-parser 2.x supports and the oldest that
+# Read the Docs still builds without a deprecation banner. myst-parser 2.0 is
+# where `myst_heading_anchors` and the `colon_fence`/`deflist` extensions
+# settled into the behaviour docs/conf.py depends on. furo is calendar-
+# versioned, and 2024.1.29 is simply the oldest release built against sphinx 7.
+#
+# None of the optional extras (gpu, ui, mcp, ...) appear here, on purpose.
+# docs/conf.py lists every one of them in autodoc_mock_imports, so a docs
+# build resolves the annotations without installing a torch wheel.
+docs = [
+    "sphinx>=7.0",
+    "myst-parser>=2.0",
+    "furo>=2024.1.29",
+]
+
+all = ["gpumesh[gpu,tunnel,sysinfo,notebook,ui,tls,mcp]"]
 
 [project.scripts]
 gpumesh = "gpumesh.cli:main"
@@ -240,6 +272,11 @@ ignore = [
     ".gitignore",
     ".gitattributes",
     "SECURITY-INSIGHTS.yml",
+    # Read the Docs build configuration. Same argument as .github/** above.
+    # It is instructions for one hosting service, and it does nothing sitting
+    # in a source distribution. docs/conf.py is NOT ignored. That one ships,
+    # so `sphinx-build docs` works from an unpacked sdist.
+    ".readthedocs.yaml",
     # Docker Hub's own README, published to Docker Hub rather than PyPI.
     "DOCKER_HUB_README.md",
     ".env.example",

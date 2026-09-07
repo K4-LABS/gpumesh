@@ -25,6 +25,13 @@ include CITATION.cff
 
 recursive-include docs *.md
 
+# The Sphinx configuration. `recursive-include docs *.md` above does not match
+# it, and check-manifest requires every git-tracked file to be covered. It is
+# also what makes `sphinx-build -b html docs docs/_build/html` work from an
+# unpacked sdist, which is the only way to build these pages without a git
+# checkout.
+include docs/conf.py
+
 # Logos. README.md now references these by absolute raw.githubusercontent.com
 # URL — a relative path 404s on PyPI, which renders the long description as a
 # standalone page — so the sdist does not strictly need them to render. They
