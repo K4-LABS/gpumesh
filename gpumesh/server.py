@@ -96,6 +96,20 @@ def _protocol_refusal(worker_proto: int) -> str:
     )
 
 
+def _short_text(value, limit: int = 32) -> str:
+    """Coerce a worker-supplied label to a short, safe string.
+
+    Registration fields like ``python_version`` are worker-controlled, and a
+    worker is not trusted to be honest just because its token is valid. These
+    are only displayed and compared, never parsed into behaviour, so the whole
+    job here is to stop an unbounded or non-string value from becoming an
+    unbounded entry in every ``gpumesh workers`` listing.
+    """
+    if value is None:
+        return ""
+    return str(value)[:limit]
+
+
 class _InFlight:
     """Counts requests currently being served, so shutdown can wait them out.
 
@@ -681,6 +695,14 @@ class CoordinatorHandler(BaseHTTPRequestHandler):
                     cpu_cores=cpu_cores,
                     gpu_memory_total_mb=gpu_total_mb,
                     gpu_memory_free_mb=body.get("gpu_memory_free_mb"),
+                    # Everything a worker sends is input, so these are
+                    # length-capped and coerced to str rather than trusted:
+                    # they are only ever displayed and compared, never
+                    # executed, but an unbounded string from a worker would
+                    # still be an unbounded string in every listing.
+                    python_version=_short_text(body.get("python_version")),
+                    gpumesh_version=_short_text(body.get("gpumesh_version")),
+                    bench_method=_short_text(body.get("bench_method")),
                 )
                 self.db.record_event("worker_joined", worker_id)
                 status.log(f"{bold(cyan('[mesh]'))} worker {green('joined')}: {body.get('hostname')} "

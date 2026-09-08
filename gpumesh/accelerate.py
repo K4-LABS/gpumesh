@@ -57,6 +57,44 @@ POLL_MAX_INTERVAL = 1.0
 POLL_BACKOFF = 1.5
 
 
+def _warn_if_auth_failure(exc) -> None:
+    """Say so when the mesh was skipped because the token was refused.
+
+    An unreachable mesh and a rejected token both end in the same silent local
+    fallback, and for an unreachable mesh that is exactly right -- it is what
+    makes a mesh optional. A 401 is different in kind: the mesh is up, it
+    answered, and it rejected this caller. Staying silent there turns a typo in
+    a token into "my GPU job ran on my own laptop" with nothing on screen to
+    say why, which on a mesh with a real GPU in it is a very large and very
+    invisible difference.
+
+    Still a warning and not an exception: the fallback contract is documented
+    and code depends on it. The user just gets told which of the two happened.
+    """
+    # The 401 does not arrive bare. GPUMesh.workers() wraps urllib's HTTPError
+    # in a GPUMeshError whose message carries the status, so the raised object
+    # has no ``.code`` of its own -- walk the exception chain for one, and fall
+    # back to the message text for wrappers that did not chain.
+    code = None
+    seen = 0
+    cursor = exc
+    while cursor is not None and seen < 5:
+        code = getattr(cursor, "code", None)
+        if code is not None:
+            break
+        cursor = cursor.__cause__ or cursor.__context__
+        seen += 1
+    if code != 401 and "401" not in str(exc):
+        return
+    import warnings
+    warnings.warn(
+        "[accelerate] The coordinator rejected this token (HTTP 401), so the "
+        "mesh was not used and this ran locally instead. Check the token with "
+        "`gpumesh show-connection`, or pass the one the coordinator printed.",
+        stacklevel=3,
+    )
+
+
 class _MeshUnavailable(Exception):
     """Raised when the mesh cannot accept tasks (unreachable, no workers, etc).
 
@@ -398,7 +436,8 @@ class AcceleratedFunction:
         # Check if mesh has any alive workers
         try:
             workers = self._mesh.workers()
-        except Exception:
+        except Exception as exc:
+            _warn_if_auth_failure(exc)
             raise _MeshUnavailable("cannot reach mesh")
 
         alive = [w for w in workers if w.get("alive", False)]
@@ -684,8 +723,10 @@ class AcceleratedFunction:
                             stacklevel=2,
                         )
                         return [self._fn(**_local_kwargs(p)) for p in params_list]
-            except Exception:
-                pass  # mesh down — fall through to distribute which will also fallback
+            except Exception as exc:
+                # mesh down — fall through to distribute which will also
+                # fallback. A refused token is the one case worth naming.
+                _warn_if_auth_failure(exc)
 
         # Carry the same routing hints a single call sends, so a mapped job is
         # spread only over workers that match gpu=/cores=/memory=. They are

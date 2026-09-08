@@ -197,3 +197,48 @@ def test_gpu_memory_info_new_torch_memory_attribute():
     assert result is not None
     assert result["total_mb"] == 12288.0
     assert result["free_mb"] == 8192.0
+
+
+class TestBenchmarkTiersRankHardwareNotPackages:
+    """The score bands workers in ``db.lease_task``, so what it measures matters.
+
+    It used to fall straight from torch to a pure-Python matmul. torch is an
+    optional extra, so a default ``pip install gpumesh`` took the Python path
+    and scored ~0.04 GFLOP/s on a machine that measures ~400 with torch — the
+    same hardware, four orders of magnitude apart. Such a worker was pinned to
+    the lightest band for good, no matter how fast it actually was.
+    """
+
+    def _forced(self, monkeypatch, *, torch_ok, numpy_ok):
+        from gpumesh import capability
+
+        def unavailable(*_a, **_k):
+            raise ImportError("simulated: not installed")
+
+        if not torch_ok:
+            monkeypatch.setattr(capability, "_bench_torch", unavailable)
+        if not numpy_ok:
+            monkeypatch.setattr(capability, "_bench_numpy", unavailable)
+        return capability.run_benchmark("cpu", force=True)
+
+    def test_numpy_answers_when_torch_is_absent(self, monkeypatch):
+        """numpy and torch dispatch the same matmul to the same BLAS."""
+        result = self._forced(monkeypatch, torch_ok=False, numpy_ok=True)
+        assert result["bench_method"] == "numpy"
+        # The point of the tier: a numpy worker is not orders of magnitude
+        # below a torch one. Deliberately loose — this asserts "same ballpark",
+        # not a throughput figure, so it cannot flake on a busy machine.
+        assert result["gflops"] > 1.0
+
+    def test_python_is_the_last_resort_and_says_so(self, monkeypatch):
+        result = self._forced(monkeypatch, torch_ok=False, numpy_ok=False)
+        assert result["bench_method"] == "python"
+
+    def test_the_method_is_always_reported(self, monkeypatch):
+        """A mesh mixing methods is not ranking hardware, and nothing else says so."""
+        result = self._forced(monkeypatch, torch_ok=True, numpy_ok=True)
+        assert result["bench_method"] in ("torch", "numpy", "python")
+
+    def test_full_probe_carries_the_method_to_the_coordinator(self):
+        """It rides in the registration body; without it the mesh cannot warn."""
+        assert full_probe()["bench_method"] in ("torch", "numpy", "python")

@@ -18,6 +18,29 @@ duplicated here. Keep ``_encode_result`` in sync with
 ``serializer.encode_result``.
 """
 
+# worker.py launches this helper by PATH (``[sys.executable, helper_path]``),
+# so Python puts the helper's own directory -- the installed ``gpumesh``
+# package directory -- at ``sys.path[0]``. Every top-level module sharing a
+# name with a gpumesh module is then shadowed for the user's task: a task
+# doing ``import torch`` gets ``gpumesh/torch.py`` (which has no ``.cuda``,
+# no ``.arange``, no ``.zeros``) instead of PyTorch, and ``import accelerate``
+# gets this package's decorator module instead of HuggingFace Accelerate.
+# The failure surfaces inside the user's own function as a bare AttributeError,
+# so the blame lands on their code.
+#
+# Strip that entry before anything else runs. This module deliberately imports
+# only the stdlib and cloudpickle (see the docstring above), so it needs
+# nothing from that directory itself.
+import os as _os
+import sys as _sys
+
+_gpumesh_pkg_dir = _os.path.dirname(_os.path.abspath(__file__))
+_sys.path[:] = [
+    _p for _p in _sys.path
+    if _os.path.abspath(_p or _os.getcwd()) != _gpumesh_pkg_dir
+]
+del _gpumesh_pkg_dir
+
 import base64
 import json
 import os

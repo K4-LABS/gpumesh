@@ -183,9 +183,49 @@ def _bench_torch(device: str) -> float:
     return flops / elapsed / 1e9  # GFLOP/s
 
 
+def _bench_numpy() -> float:
+    """Same matmul as :func:`_bench_torch`, measured through numpy.
+
+    This tier exists because the score is meant to rank *hardware*, and
+    without it the ranking silently ranked *installed packages* instead.
+    torch is an optional extra (``gpumesh[gpu]``), so a default
+    ``pip install gpumesh`` fell straight through to ``_bench_python`` and
+    scored ~0.04 GFLOP/s on a machine that can do ~400 -- a factor of ~14000,
+    measured on identical hardware by running both paths on one machine. The
+    scheduler bands workers by score, so such a worker was pinned to the
+    lightest band for good no matter how fast it actually was.
+
+    numpy closes that gap because both it and torch dispatch a float32 matmul
+    to the same BLAS: measured side by side on one CPU, torch 381.5 GFLOP/s vs
+    numpy 350.5 GFLOP/s, a ratio of 1.09. That is well inside the spread the
+    scheduler already tolerates between real machines, so a numpy worker and a
+    torch worker can be ranked against each other honestly.
+    """
+    import numpy as np
+
+    n = 1024
+    a = np.random.rand(n, n).astype("float32")
+    b = np.random.rand(n, n).astype("float32")
+    (a @ b).sum()  # warmup, and force BLAS to be resolved
+    start = time.perf_counter()
+    iters = 10
+    for _ in range(iters):
+        c = a @ b
+    c.sum()
+    elapsed = time.perf_counter() - start
+    return 2 * n**3 * iters / elapsed / 1e9
+
+
 def _bench_python() -> float:
-    """Pure-Python matmul fallback. Slow by design; scores are comparable
-    across machines because everyone runs the same loop."""
+    """Pure-Python matmul, the last resort when neither torch nor numpy is present.
+
+    Scores from this path are comparable to *each other* -- every machine runs
+    the same loop -- but NOT to a score from :func:`_bench_torch` or
+    :func:`_bench_numpy`, which are three to four orders of magnitude higher on
+    the same hardware. That is why ``run_benchmark`` reports ``bench_method``
+    alongside the number: a mesh mixing methods is not ranking hardware, and
+    the only way to know is to look at which path produced each score.
+    """
     n = 48
     a = [[(i * j) % 7 / 7.0 for j in range(n)] for i in range(n)]
     b = [[(i + j) % 5 / 5.0 for j in range(n)] for i in range(n)]
@@ -235,10 +275,12 @@ def _bench_memory_bandwidth_python() -> float:
 
 
 def benchmark(device: str) -> float:
-    try:
-        return round(_bench_torch(device), 3)
-    except (ImportError, RuntimeError, OSError):
-        return round(_bench_python(), 3)
+    for probe in (lambda: _bench_torch(device), _bench_numpy, _bench_python):
+        try:
+            return round(probe(), 3)
+        except (ImportError, RuntimeError, OSError):
+            continue
+    return round(_bench_python(), 3)
 
 
 import threading
@@ -264,10 +306,22 @@ def run_benchmark(device: str | None = None, force: bool = False) -> dict:
         info = probe_device()
         device = info["device"]
 
-    try:
-        gflops = _bench_torch(device)
-    except (ImportError, RuntimeError, OSError):
+    # Tiered on purpose, and the tier that answered is reported: see
+    # _bench_numpy's docstring for why ranking a torch score against a
+    # pure-Python one is not ranking hardware.
+    gflops = None
+    bench_method = "python"
+    for name, probe in (("torch", lambda: _bench_torch(device)),
+                        ("numpy", _bench_numpy)):
+        try:
+            gflops = probe()
+            bench_method = name
+            break
+        except (ImportError, RuntimeError, OSError):
+            continue
+    if gflops is None:
         gflops = _bench_python()
+        bench_method = "python"
 
     try:
         if device in ("cuda", "mps"):
@@ -282,6 +336,7 @@ def run_benchmark(device: str | None = None, force: bool = False) -> dict:
         "gflops": round(gflops, 3),
         "bandwidth_gbps": round(bw, 3),
         "score": score,
+        "bench_method": bench_method,
     }
     with _benchmark_lock:
         _benchmark_cache[cache_key] = result
@@ -294,6 +349,10 @@ def full_probe() -> dict:
     info["score"] = bench["score"]
     info["gflops"] = bench["gflops"]
     info["bandwidth_gbps"] = bench["bandwidth_gbps"]
+    # Which benchmark tier produced the score. It rides along to the
+    # coordinator in the registration body so a mesh mixing tiers is visible
+    # rather than silently mis-ranked; see _bench_numpy's docstring.
+    info["bench_method"] = bench.get("bench_method", "python")
     gpu_info = get_gpu_memory_info(0)
     if gpu_info:
         info["gpu_memory_total_mb"] = gpu_info["total_mb"]

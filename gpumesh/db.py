@@ -25,6 +25,9 @@ CREATE TABLE IF NOT EXISTS workers (
     score         REAL NOT NULL,
     cpu_cores     INTEGER NOT NULL DEFAULT 0,
     gpu_memory_total_mb REAL NOT NULL DEFAULT 0.0,
+    python_version  TEXT NOT NULL DEFAULT '',
+    gpumesh_version TEXT NOT NULL DEFAULT '',
+    bench_method    TEXT NOT NULL DEFAULT '',
     registered_at REAL NOT NULL,
     last_seen     REAL NOT NULL
 );
@@ -380,6 +383,34 @@ class Database:
                 conn.execute(
                     "ALTER TABLE workers ADD COLUMN gpu_memory_total_mb REAL NOT NULL DEFAULT 0.0"
                 )
+            # Migrate: record what each worker is actually running.
+            #
+            # Without these the coordinator schedules across a mesh it cannot
+            # describe. cloudpickle does not cross Python minor versions, so a
+            # function submitted from 3.11 ships to a 3.12 worker as *source*
+            # and is rebuilt there from module-valued globals only -- a
+            # module-level constant or helper becomes NameError at call time.
+            # That limitation is documented, but which worker picks a task up
+            # is a scheduling accident, so the same call succeeded on one
+            # worker and failed on another with nothing to explain why, and
+            # `gpumesh doctor` could only say "run doctor on each worker
+            # machine and compare the Python lines by hand".
+            #
+            # bench_method rides along for the same reason: a score produced by
+            # the pure-Python benchmark is orders of magnitude below one from
+            # torch or numpy on identical hardware, so a mesh mixing methods is
+            # not ranking hardware and nothing said so.
+            for _col, _decl in (
+                ("python_version", "TEXT NOT NULL DEFAULT ''"),
+                ("gpumesh_version", "TEXT NOT NULL DEFAULT ''"),
+                ("bench_method", "TEXT NOT NULL DEFAULT ''"),
+            ):
+                try:
+                    conn.execute("SELECT %s FROM workers LIMIT 1" % _col)
+                except sqlite3.OperationalError:
+                    conn.execute(
+                        "ALTER TABLE workers ADD COLUMN %s %s" % (_col, _decl)
+                    )
             # Migrate: add the task submission timestamp. The unsatisfiable
             # detector measures how long a task has been waiting against it,
             # so without a value it cannot tell "just submitted" from "stuck
@@ -559,7 +590,10 @@ class Database:
     def register_worker(self, hostname: str, device: str, score: float,
                         device_name: str = "", cpu_cores: int = 0,
                         gpu_memory_total_mb: float = 0.0,
-                        gpu_memory_free_mb: float | None = None) -> str:
+                        gpu_memory_free_mb: float | None = None,
+                        python_version: str = "",
+                        gpumesh_version: str = "",
+                        bench_method: str = "") -> str:
         """Record a worker and the capacity it reports.
 
         ``cpu_cores`` and ``gpu_memory_total_mb`` come straight from the
@@ -581,10 +615,12 @@ class Database:
         with self._lock, self._conn:
             self._conn.execute(
                 "INSERT INTO workers (id, hostname, device, device_name, score,"
-                " cpu_cores, gpu_memory_total_mb, registered_at, last_seen)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " cpu_cores, gpu_memory_total_mb, python_version,"
+                " gpumesh_version, bench_method, registered_at, last_seen)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (worker_id, hostname, device, device_name, score,
-                 cpu_cores, gpu_memory_total_mb, now, now),
+                 cpu_cores, gpu_memory_total_mb, python_version or "",
+                 gpumesh_version or "", bench_method or "", now, now),
             )
             # The stats row is created here so later UPDATEs have something to
             # hit, and its gpu_memory_free_mb is left NULL unless the worker
@@ -663,7 +699,8 @@ class Database:
         with self._lock:
             cutoff = time.time() - WORKER_DEAD_AFTER
             rows = self._conn.execute(
-                "SELECT id, hostname, device, device_name, score, last_seen"
+                "SELECT id, hostname, device, device_name, score, last_seen,"
+                " python_version, gpumesh_version, bench_method"
                 " FROM workers"
             ).fetchall()
         return [
@@ -674,6 +711,11 @@ class Database:
                 "device_name": r[3],
                 "score": r[4],
                 "alive": r[5] >= cutoff,
+                # Empty string means a worker too old to report it, which is
+                # not the same as a worker that reported nothing useful.
+                "python_version": r[6] or None,
+                "gpumesh_version": r[7] or None,
+                "bench_method": r[8] or None,
             }
             for r in rows
         ]
@@ -709,7 +751,8 @@ class Database:
             rows = self._conn.execute(
                 "SELECT w.id, w.hostname, w.device, w.device_name, w.score,"
                 " w.last_seen, w.cpu_cores, w.gpu_memory_total_mb,"
-                " s.gpu_memory_free_mb"
+                " s.gpu_memory_free_mb, w.python_version, w.gpumesh_version,"
+                " w.bench_method"
                 " FROM workers w LEFT JOIN worker_stats s ON s.worker_id = w.id"
                 " ORDER BY w.last_seen DESC"
             ).fetchall()
@@ -730,6 +773,10 @@ class Database:
                 # mapped to the same thing rather than shipped to clients that
                 # would try to compare it.
                 "gpu_memory_free_mb": _free_vram_reading(r[8]),
+                # Empty string means a worker too old to report it.
+                "python_version": r[9] or None,
+                "gpumesh_version": r[10] or None,
+                "bench_method": r[11] or None,
             })
         return devices
 

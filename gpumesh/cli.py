@@ -1113,8 +1113,37 @@ def cmd_workers(args):
     for w in resp["workers"]:
         state = status_alive() if w["alive"] else status_dead()
         dev = device_icon(w.get("device", "cpu"))
+        py = w.get("python_version")
         safe_print(f"  {dev}  {bold(w['id'][:8]):<10}  {w['hostname']:<16}  "
-              f"score={w['score']:<8}  [{state}]")
+              f"score={w['score']:<8}  py={py or '?':<8}  [{state}]")
+
+    # Two things the scheduler acts on that nothing used to show.
+    #
+    # A mesh spanning Python minor versions cannot ship functions as bytecode
+    # between those versions, so functions cross as source and lose their
+    # module-level constants and helpers -- and which worker takes a task is a
+    # scheduling accident, so the same call can work on one worker and raise
+    # NameError on another. Saying so here is cheaper than diagnosing it later.
+    #
+    # A score from the pure-Python benchmark is orders of magnitude below one
+    # from torch or numpy on identical hardware, so a mesh mixing benchmark
+    # methods is ranking installed packages rather than machines.
+    alive = [w for w in resp["workers"] if w.get("alive")]
+    pys = {w.get("python_version") for w in alive if w.get("python_version")}
+    if len(pys) > 1:
+        safe_print()
+        safe_print(yellow("  [!] Mixed Python versions: " + ", ".join(sorted(pys))))
+        safe_print(dim("      Functions cross versions as source text and lose module-level"))
+        safe_print(dim("      constants and helper functions, so a task can succeed on one"))
+        safe_print(dim("      worker and raise NameError on another. Match versions, or keep"))
+        safe_print(dim("      what a function needs inside its own body."))
+    methods = {w.get("bench_method") for w in alive if w.get("bench_method")}
+    if len(methods) > 1 and "python" in methods:
+        safe_print()
+        safe_print(yellow("  [!] Mixed benchmark methods: " + ", ".join(sorted(methods))))
+        safe_print(dim("      A 'python' score is thousands of times below a torch/numpy one"))
+        safe_print(dim("      on the same hardware, so these scores are not comparable and"))
+        safe_print(dim("      the scheduler will under-use those workers. Install numpy there."))
     safe_print()
 
 

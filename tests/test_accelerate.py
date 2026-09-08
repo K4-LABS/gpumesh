@@ -1483,3 +1483,53 @@ class TestPlacementHintsInAPayloadAreNotStripped:
 
         assert train.map([{"lr": 0.1, "cost": 2}]) == [{"lr": 0.1}]
         assert mesh.seen_params == [{"lr": 0.1}]
+
+
+class TestARefusedTokenIsNamedNotSwallowed:
+    """An unreachable mesh and a rejected token both end in local execution.
+
+    For an unreachable mesh that is the documented contract and exactly right.
+    A 401 is different in kind: the mesh is up, it answered, and it rejected
+    this caller. Silence there turns a typo in a token into "my GPU job ran on
+    my own laptop" with nothing on screen to say why.
+    """
+
+    def _warns(self, exc):
+        import warnings
+        import urllib.error  # noqa: F401  (kept local; this file imports no urllib)
+        from gpumesh.accelerate import _warn_if_auth_failure
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            _warn_if_auth_failure(exc)
+        return [str(w.message) for w in caught]
+
+    def test_a_bare_401_is_named(self):
+        import urllib.error
+        exc = urllib.error.HTTPError("http://c", 401, "Unauthorized", {}, None)
+        assert any("401" in m for m in self._warns(exc))
+
+    def test_a_401_wrapped_by_the_api_layer_is_still_named(self):
+        """GPUMesh.workers() wraps HTTPError, so the raised object has no .code.
+
+        The first version of this check read ``exc.code`` and therefore never
+        fired on the only path that actually reaches it.
+        """
+        import urllib.error
+        inner = urllib.error.HTTPError("http://c", 401, "Unauthorized", {}, None)
+        try:
+            try:
+                raise inner
+            except urllib.error.HTTPError as e:
+                raise RuntimeError("Failed to list workers: HTTP Error 401") from e
+        except RuntimeError as wrapped:
+            assert any("401" in m for m in self._warns(wrapped))
+
+    def test_an_unreachable_mesh_stays_silent(self):
+        """The ordinary fallback must not grow a warning; that is the contract."""
+        import urllib.error
+        assert self._warns(urllib.error.URLError("connection refused")) == []
+
+    def test_another_http_error_stays_silent(self):
+        import urllib.error
+        exc = urllib.error.HTTPError("http://c", 503, "Unavailable", {}, None)
+        assert self._warns(exc) == []

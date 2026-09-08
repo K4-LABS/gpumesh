@@ -627,7 +627,39 @@ def decode_result(payload, *, strict: bool = None):
                 "protocol." % ("missing" if raw is None
                                else "a " + type(raw).__name__)
             )
-        return cloudpickle.loads(base64.b64decode(raw))
+        data = base64.b64decode(raw)
+        try:
+            return cloudpickle.loads(data)
+        except RuntimeError as exc:
+            # A torch tensor pickles the device it lived on. A worker that
+            # returns a CUDA tensor therefore cannot be read back on a
+            # CPU-only submitter -- torch raises "Attempting to deserialize
+            # object on a CUDA device but torch.cuda.is_available() is False".
+            # That is the mesh's whole point (borrow someone else's GPU from a
+            # machine without one), so it cannot be left to fail.
+            #
+            # Only the failing case is retried, and only this error: a client
+            # that *does* have CUDA keeps getting a real CUDA tensor from the
+            # unmodified path above, which is what the caller asked for.
+            if "torch.cuda.is_available() is False" not in str(exc):
+                raise
+            try:
+                import io as _io
+                import torch
+                import torch.storage
+            except ImportError:
+                raise exc
+            # torch pickles storages through this hook; pointing it at
+            # torch.load(map_location="cpu") is what maps them onto the host.
+            original = torch.storage._load_from_bytes
+            torch.storage._load_from_bytes = (
+                lambda b: torch.load(_io.BytesIO(b), map_location="cpu",
+                                     weights_only=False)
+            )
+            try:
+                return cloudpickle.loads(data)
+            finally:
+                torch.storage._load_from_bytes = original
 
     return envelope.get("value")
 

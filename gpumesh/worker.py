@@ -91,6 +91,7 @@ DELIVERED = "delivered"
 OBSOLETE = "obsolete"            # the coordinator no longer wants it
 AUTH_FAILED = "auth"             # wrong token; the worker has to stop
 UNDELIVERABLE = "undeliverable"  # a refusal that retrying cannot fix
+TOO_LARGE = "too_large"          # the result itself exceeds the coordinator's limit
 GAVE_UP = "gave_up"              # the retry budget ran out
 # NOTE: there are deliberately NO "give up and exit" thresholds here.
 # After a worker registers it never exits on its own: coordinator outages,
@@ -523,6 +524,14 @@ def _try_register(mesh: "MeshClient", info: dict, retries: int = 3,
             # deployable at all without a flag day.
             body = dict(info)
             body["protocol_version"] = PROTOCOL_VERSION
+            # What this worker is actually running. The coordinator cannot
+            # otherwise know, and it schedules across these versions: a
+            # function submitted from a different Python minor version ships
+            # as source and loses its module-level globals, so which worker
+            # picks a task up decides whether the task works. Older
+            # coordinators ignore unknown keys, same as protocol_version above.
+            body["python_version"] = "%d.%d.%d" % sys.version_info[:3]
+            body["gpumesh_version"] = __version__
             try:
                 resp = mesh.call("POST", "/api/register", body)
             except urllib.error.HTTPError as reg_exc:
@@ -605,6 +614,32 @@ def _diagnostics_report(task_id: str, error: Exception,
     return report
 
 
+def _too_large_failure(payload: dict) -> dict:
+    """Turn a result the coordinator refused as too large into a task failure.
+
+    Carries no result, so this body is a few hundred bytes and cannot hit the
+    same limit the result did.
+
+    ``worker_id`` is not decoration. ``complete_task`` matches on
+    ``(task_id, worker_id)`` — that pairing is what makes a result from a
+    worker whose lease has since been reassigned a 409 rather than an
+    overwrite — and a failure report is subject to the same rule. Omitting it
+    matches no row, so the failure is silently discarded and the caller times
+    out exactly as it did before any of this existed.
+    """
+    return {
+        "task_id": payload.get("task_id"),
+        "worker_id": payload.get("worker_id"),
+        "ok": False,
+        "error": (
+            "result too large: the coordinator refused it with HTTP 413. "
+            "Return less data (write large arrays to shared storage and "
+            "return a path), or raise the coordinator's limit."
+        ),
+        "elapsed": payload.get("elapsed", 0.0),
+    }
+
+
 def _classify_result_status(code: int):
     """What an HTTP status means for a result we are already holding.
 
@@ -632,6 +667,15 @@ def _classify_result_status(code: int):
         return AUTH_FAILED
     if code == 409:
         return OBSOLETE
+    # 413 is the one refusal we can explain to the submitter. Everything else
+    # in the "final" class is a bug somewhere; this one is a fact about the
+    # result -- it is bigger than the coordinator accepts -- and the person
+    # waiting on the call is exactly who needs to hear it. Reported as a task
+    # failure rather than dropped, because a dropped result is re-run to
+    # produce the same oversized bytes and refused again, and the caller is
+    # left to time out and blame a slow task.
+    if code == 413:
+        return TOO_LARGE
     if code in (408, 429):
         return None
     if 400 <= code < 500:
@@ -680,6 +724,12 @@ def _deliver_result(mesh: "MeshClient", payload: dict,
                 return OBSOLETE
             if final == AUTH_FAILED:
                 return AUTH_FAILED
+            if final == TOO_LARGE:
+                safe_print(f"{bold(cyan('[worker]'))} {red('result too large')} for "
+                           f"{bold(str(task_id))} (HTTP 413) — reporting it as a "
+                           f"task failure so the caller is told why instead of "
+                           f"waiting out its timeout")
+                return TOO_LARGE
             if final is not None:
                 safe_print(f"{bold(cyan('[worker]'))} {red('WARNING')}: the "
                            f"coordinator refused the result for "
@@ -944,6 +994,15 @@ def run_worker(url: str, token: str, task_timeout: float = 240.0,
         computing results it can never deliver would be worse than useless.
         """
         outcome = _deliver_result(mesh, payload, stop)
+        if outcome == TOO_LARGE:
+            # Re-report the same task as failed. This body carries no result,
+            # so it is a few hundred bytes and cannot hit the same limit --
+            # and the guard below means a failure that somehow did would be
+            # dropped rather than looping.
+            second = _deliver_result(mesh, _too_large_failure(payload), stop)
+            if second == AUTH_FAILED:
+                stop.set()
+            return outcome
         if outcome == AUTH_FAILED:
             safe_print(f"{bold(cyan('[worker]'))} {red('authentication failed')} "
                        f"— the coordinator restarted with a different token. "

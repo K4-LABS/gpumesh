@@ -476,13 +476,48 @@ class TestWorkerRetry:
         assert worker_mod._deliver_result(mesh, _PAYLOAD) == worker_mod.OBSOLETE
         assert len(mesh.calls) == 1
 
-    @pytest.mark.parametrize("code", [400, 403, 404, 411, 413, 426])
+    # 413 used to live in this list. It is a refusal of these bytes like the
+    # rest, but unlike the rest it has a cause we can hand to the person
+    # waiting on the call -- the result is bigger than the coordinator accepts
+    # -- so it gets its own outcome and is covered separately below.
+    @pytest.mark.parametrize("code", [400, 403, 404, 411, 426])
     def test_a_refusal_of_these_bytes_is_not_retried(self, fast_retries, code):
         """The next attempt would send the same bytes."""
         mesh = _ScriptedMesh([_http_error(code)] * 10)
         assert (worker_mod._deliver_result(mesh, _PAYLOAD)
                 == worker_mod.UNDELIVERABLE)
         assert len(mesh.calls) == 1
+
+    def test_a_413_is_reported_as_too_large_rather_than_undeliverable(
+            self, fast_retries):
+        """413 is the one final refusal whose cause the submitter can act on.
+
+        Dropping it meant the coordinator re-queued the task on lease expiry,
+        a worker recomputed the same oversized result, and it was refused
+        again -- while the caller sat through its whole timeout and was then
+        told the task was slow. The size is the diagnosis, so it gets its own
+        outcome and is not retried.
+        """
+        mesh = _ScriptedMesh([_http_error(413)] * 10)
+        assert (worker_mod._deliver_result(mesh, _PAYLOAD)
+                == worker_mod.TOO_LARGE)
+        assert len(mesh.calls) == 1
+
+    def test_the_too_large_failure_carries_the_worker_id(self):
+        """Without it the report matches no row and is silently dropped.
+
+        ``complete_task`` matches on ``(task_id, worker_id)``. A failure that
+        omits the worker_id is discarded exactly like the oversized result it
+        is meant to explain, and the caller times out with the wrong reason --
+        which is indistinguishable from the bug this whole path exists to fix.
+        """
+        failure = worker_mod._too_large_failure(_PAYLOAD)
+        assert failure["task_id"] == _PAYLOAD["task_id"]
+        assert failure["worker_id"] == _PAYLOAD["worker_id"]
+        assert failure["ok"] is False
+        assert "413" in failure["error"]
+        # It must not carry the result that was refused for being too big.
+        assert "result" not in failure
 
     @pytest.mark.parametrize("code", [408, 429])
     def test_the_two_4xx_that_mean_later_are_retried(self, fast_retries, code):
