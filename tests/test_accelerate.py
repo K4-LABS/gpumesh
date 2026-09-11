@@ -76,6 +76,17 @@ class TestAccelerateDecorator:
         result = train(lr=0.01, epochs=100)
         assert result == {"lr": 0.01, "epochs": 100}
 
+    def test_map_preserves_malformed_result_error_entry(self):
+        mesh = MagicMock()
+        mesh.workers.return_value = [{"alive": True}]
+        mesh.distribute.return_value = [{"_error": "malformed result: bad base64"}]
+
+        @accelerate(mesh)
+        def work(x):
+            return x
+
+        assert work.map([{"x": 1}]) == [{"_error": "malformed result: bad base64"}]
+
     def test_map_calls_distribute(self):
         mesh = MagicMock()
         mesh.distribute.return_value = [
