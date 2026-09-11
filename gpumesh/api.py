@@ -629,7 +629,15 @@ class GPUMesh:
                 # gpumesh/client.py substitutes a marker instead, because that
                 # path only formats results for a terminal, where raising
                 # would abort the listing over one bad task.
-                results.append(serializer.decode_result(raw))
+                try:
+                    results.append(serializer.decode_result(raw))
+                except serializer.UntrustedResultError:
+                    # Strict mode deliberately refuses untrusted pickles.
+                    raise
+                except Exception as exc:
+                    # A malformed worker envelope must not discard the other
+                    # results in this collection.
+                    results.append({"_error": f"malformed result: {exc}"})
             elif task["status"] == "failed":
                 results.append({"_error": task.get("error", "unknown")})
             else:

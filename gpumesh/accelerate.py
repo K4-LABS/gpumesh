@@ -544,7 +544,17 @@ class AcceleratedFunction:
                         # at the call site rather than a placeholder object
                         # that the caller's next line would silently compute
                         # with.
-                        result = {} if raw is None else serializer.decode_result(raw)
+                        if raw is None:
+                            result = {}
+                        else:
+                            try:
+                                result = serializer.decode_result(raw)
+                            except serializer.UntrustedResultError:
+                                # Strict mode deliberately refuses untrusted
+                                # pickles rather than returning a placeholder.
+                                raise
+                            except Exception as exc:
+                                result = {"_error": f"malformed result: {exc}"}
                         if os.environ.get("GPUMESH_VERBOSE") == "1":
                             safe_print(green(f"[accelerate] mesh result: {result}"))
                         return result

@@ -206,6 +206,25 @@ class TestDistribute:
         squares = sorted(r["square"] for r in results)
         assert squares == [4, 9, 16]
 
+    def test_malformed_result_does_not_abort_collection(self):
+        m = GPUMesh("http://127.0.0.1:1", "tok")
+        client = _RecordingClient()
+        client.call = lambda method, path, body=None: (
+            {"job_id": "job-1"} if method == "POST" else {
+                "finished": True,
+                "counts": {"done": 2},
+                "tasks": [
+                    {"status": "done", "result": {"__gpumesh_result__": {
+                        "encoding": "cloudpickle", "value": "!!!"}}},
+                    {"status": "done", "result": {"value": 2}},
+                ],
+            }
+        )
+        m._client = client
+        results = m.distribute(function=_square, params=[{"x": 1}, {"x": 2}])
+        assert results[0]["_error"].startswith("malformed result:")
+        assert results[1] == {"value": 2}
+
     def test_distribute_with_cost(self, mesh_with_worker):
         """Distribute with custom costs."""
         def identity(x):

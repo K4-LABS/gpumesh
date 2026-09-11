@@ -884,6 +884,13 @@ class TestStrictResultMode:
             assert decode_result(envelope, strict=False) == value
             assert decode_result(envelope, strict=True) == value
 
+    def test_malformed_cloudpickle_value_is_rejected(self):
+        from gpumesh.serializer import decode_result
+
+        with pytest.raises(Exception):
+            decode_result({"__gpumesh_result__": {
+                "encoding": "cloudpickle", "value": "!!!"}}, strict=False)
+
     def test_pickled_result_decodes_when_strict_is_off(self):
         """The default stays permissive — nothing is refused unless asked."""
         from gpumesh.serializer import decode_result
