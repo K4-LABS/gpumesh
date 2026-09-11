@@ -339,6 +339,19 @@ class TestDefaultDbPath:
         assert config_dir.exists()
         assert db_path == str(config_dir / "gpumesh.db")
 
+    @pytest.mark.skipif(os.name == "nt",
+                        reason="st_mode does not reflect real ACL bits on Windows")
+    def test_directory_is_created_owner_only(self, tmp_path, monkeypatch):
+        """~/.gpumesh holds the token, the job database and the TLS key --
+        it needs the same lockdown its contents get (#56)."""
+        config_dir = tmp_path / ".gpumesh"
+        monkeypatch.setattr(cm, "_CONFIG_DIR", str(config_dir))
+        monkeypatch.setattr(cm, "_DB_PATH", str(config_dir / "gpumesh.db"))
+
+        cm.default_db_path()
+
+        assert (config_dir.stat().st_mode & 0o777) == 0o700
+
     def test_db_and_config_share_one_directory(self, tmp_path, monkeypatch):
         """A single mount/backup of ~/.gpumesh covers both token and queue."""
         config_dir = tmp_path / ".gpumesh"

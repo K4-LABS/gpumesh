@@ -15,6 +15,7 @@ import uuid
 
 from .accelerate import device_matches
 from .ansi import safe_print, green, yellow, red, bold, dim
+from ._file_perms import restrict_path
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS workers (
@@ -362,6 +363,15 @@ class Database:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("PRAGMA foreign_keys=ON")
             conn.executescript(SCHEMA)
+            # The database holds every submitted script, payload and result
+            # in cleartext. sqlite3.connect() and WAL mode create the main
+            # file and its -wal/-shm siblings with the process's default
+            # umask (typically world-readable), so each one needs the same
+            # owner-only treatment the saved token gets.
+            for suffix in ("", "-wal", "-shm"):
+                sibling = path + suffix
+                if os.path.exists(sibling):
+                    restrict_path(sibling, "submitted code, payloads and results in plaintext")
             # Migrate: add device_name column to existing databases
             try:
                 conn.execute("SELECT device_name FROM workers LIMIT 1")

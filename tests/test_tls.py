@@ -68,6 +68,29 @@ class TestCertificateGeneration:
         assert len(parts) == 32
         assert all(len(p) == 2 for p in parts)
 
+    @pytest.mark.skipif(os.name == "nt",
+                        reason="st_mode does not reflect real ACL bits on Windows")
+    def test_key_and_tls_dir_are_owner_only(self, tmp_path):
+        """The private key --tls relies on needs the same 0600 the saved
+        token gets, and its directory the same 0700 (#56)."""
+        _, key = tls.ensure_self_signed_cert(tmp_path)
+        assert (key.stat().st_mode & 0o777) == 0o600
+        assert (tmp_path.stat().st_mode & 0o777) == 0o700
+
+    @pytest.mark.skipif(os.name == "nt",
+                        reason="st_mode does not reflect real ACL bits on Windows")
+    def test_a_reused_key_is_restricted_too(self, tmp_path):
+        """The common path on every restart after the first is reusing an
+        existing pair (see the idempotency test above) -- that path used to
+        skip the permission check entirely, restricting a key only on the
+        one day it happened to be generated."""
+        key = tls.ensure_self_signed_cert(tmp_path)[1]
+        os.chmod(key, 0o644)
+
+        key_again = tls.ensure_self_signed_cert(tmp_path)[1]
+        assert key_again == key
+        assert (key.stat().st_mode & 0o777) == 0o600
+
 
 class TestServerSide:
 

@@ -1,3 +1,4 @@
+import os
 import random
 import sqlite3
 import threading
@@ -33,6 +34,30 @@ def test_database_creates_missing_parent_directory(tmp_path):
     db.close()
 
     assert nested.exists()
+
+
+@pytest.mark.skipif(os.name == "nt",
+                    reason="st_mode does not reflect real ACL bits on Windows")
+def test_database_file_is_created_owner_only(tmp_path):
+    """The DB holds submitted code, payloads and results in cleartext --
+    it needs the same 0600 the saved token gets (#56)."""
+    db_path = tmp_path / "jobs.db"
+    db = Database(str(db_path))
+    db.close()
+    assert (db_path.stat().st_mode & 0o777) == 0o600
+
+
+@pytest.mark.skipif(os.name == "nt",
+                    reason="st_mode does not reflect real ACL bits on Windows")
+def test_database_wal_sidecar_is_created_owner_only(tmp_path):
+    """WAL mode writes the same data to a -wal file beside the main one;
+    a 0600 main file with a world-readable -wal defeats the point."""
+    db_path = tmp_path / "jobs.db"
+    db = Database(str(db_path))
+    wal_path = tmp_path / "jobs.db-wal"
+    assert wal_path.exists()
+    assert (wal_path.stat().st_mode & 0o777) == 0o600
+    db.close()
 
 
 def test_register_and_list_workers(db):
