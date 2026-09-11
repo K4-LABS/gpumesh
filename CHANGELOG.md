@@ -60,6 +60,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   consults `peer.platform`, and the radar has never displayed it. (#17)
 
 ### Security
+- **The job database and the TLS private key were left world-readable; only
+  the saved token got locked down.** `db.py` opened the coordinator's SQLite
+  database (submitted scripts, payloads and results, in cleartext) with a
+  plain `sqlite3.connect()` and no `chmod`, typically leaving it `0644`
+  under the default umask — its `-wal`/`-shm` sidecars, which carry the same
+  data under WAL mode, were equally unprotected. `tls.py`'s key-file chmod
+  was a documented no-op on Windows with no `icacls` equivalent, and the
+  common case of reusing an existing, still-valid certificate on every
+  restart after the first skipped the permission check entirely — only a
+  freshly generated key pair ever got it. On a shared machine, any other
+  local user could read proprietary code and training data out of the
+  database, or copy the key `--tls` relies on. The saved-token file's
+  chmod + Windows `icacls` + warn-on-failure treatment is now a shared
+  helper (`gpumesh/_file_perms.py`), reused for the database, its WAL
+  sidecars, the TLS key, and the `~/.gpumesh` directory itself. (#56)
+
 - **The two-node Docker example shipped a hardcoded token and published on
   every interface.** `examples/docker-2node/docker-compose.yaml` ran
   `--token my-secret-mesh-token`, a value printed in this repository, and

@@ -44,6 +44,8 @@ import ssl
 import subprocess
 import sys
 
+from ._file_perms import restrict_path
+
 # Certificates live beside the rest of gpumesh's per-user state so that the
 # 0600/0700 story is the same one told for ~/.gpumesh/config.json.
 DEFAULT_TLS_DIR = pathlib.Path.home() / ".gpumesh" / "tls"
@@ -179,11 +181,9 @@ def _generate_with_openssl(certfile: pathlib.Path,
 
 
 def _restrict(path: pathlib.Path) -> None:
-    """Best-effort 0600. A no-op on Windows, where chmod does not mean this."""
-    try:
-        os.chmod(path, 0o600)
-    except OSError:
-        pass
+    """Owner-only permissions on both platforms, warning rather than
+    silently leaving the private key readable if it fails."""
+    restrict_path(str(path), "the TLS private key --tls relies on")
 
 
 def _expires_soon(certfile: pathlib.Path) -> bool:
@@ -227,16 +227,17 @@ def ensure_self_signed_cert(tls_dir=None, force: bool = False):
     """
     tls_dir = pathlib.Path(tls_dir) if tls_dir else DEFAULT_TLS_DIR
     tls_dir.mkdir(parents=True, exist_ok=True)
-    try:
-        os.chmod(tls_dir, 0o700)
-    except OSError:
-        pass
+    restrict_path(str(tls_dir), "the TLS private key --tls relies on")
 
     certfile = tls_dir / CERT_NAME
     keyfile = tls_dir / KEY_NAME
 
     have_both = certfile.exists() and keyfile.exists()
     if have_both and not force and not _expires_soon(certfile):
+        # An existing key is the common path on every restart after the
+        # first, so it needs the same re-check a freshly generated one gets
+        # below -- not just a chmod on the day it was created.
+        _restrict(keyfile)
         return certfile, keyfile
 
     if not (_generate_with_cryptography(certfile, keyfile)
