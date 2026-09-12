@@ -1020,8 +1020,9 @@ class Database:
         """Re-queue all failed tasks of a job so workers run them again.
 
         Failed (and timed-out) tasks are reset to 'pending' with a fresh
-        attempt budget (attempts = 0) and their error cleared. Done, running
-        and pending tasks are left untouched.
+        attempt budget (attempts = 0), a refreshed created_at (so the
+        unsatisfiable grace period starts again), and their error cleared.
+        Done, running and pending tasks are left untouched.
 
         Returns {"requeued": N, "counts": {...}} or None if job not found.
         """
@@ -1035,9 +1036,9 @@ class Database:
             cur = self._conn.execute(
                 "UPDATE tasks SET status = 'pending', error = NULL,"
                 " worker_id = NULL, lease_expires = NULL, result = NULL,"
-                " attempts = 0"
+                " attempts = 0, created_at = ?"
                 " WHERE job_id = ? AND status = 'failed'",
-                (job_id,),
+                (time.time(), job_id),
             )
         counts = self.job_status(job_id)["counts"]
         return {"requeued": cur.rowcount, "counts": counts}
