@@ -106,8 +106,11 @@ def _transform_cell(source: str) -> tuple[str, int]:
         if isinstance(node, ast.FunctionDef):
             # Skip functions the user already decorated with @mesh — wrapping
             # them again would produce mesh(mesh(f)), which breaks remote runs.
-            if any(isinstance(d, ast.Name) and d.id == "mesh"
-                   for d in node.decorator_list):
+            decorators = [d.func if isinstance(d, ast.Call) else d
+                          for d in node.decorator_list]
+            if any((isinstance(d, ast.Name) and d.id in {"mesh", "mesh_fn"})
+                   or (isinstance(d, ast.Attribute) and d.attr in {"mesh", "mesh_fn"})
+                   for d in decorators):
                 continue
             if node.decorator_list:
                 insert_lines.add(node.decorator_list[0].lineno)

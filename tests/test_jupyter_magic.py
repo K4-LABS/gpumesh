@@ -141,6 +141,25 @@ class TestLoadExtension:
 class TestTransformCell:
     """_transform_cell wraps top-level functions with @mesh."""
 
+    @pytest.mark.parametrize("decorator", [
+        "mesh",
+        "mesh()",
+        'mesh(gpu="cuda")',
+        "mesh_fn",
+        'mesh_fn(gpu="cuda")',
+        "gpumesh.mesh",
+        'gpumesh.mesh(gpu="cuda")',
+        'gpumesh.mesh.mesh_fn(gpu="cuda")',
+    ])
+    def test_existing_mesh_decorator_forms_are_not_wrapped_twice(self, decorator):
+        """Call-form and qualified mesh decorators must retain their configuration."""
+        from gpumesh.jupyter_magic import _transform_cell
+
+        src = f"@{decorator}\ndef train(lr):\n    return lr\n"
+        out, count = _transform_cell(src)
+        assert count == 0
+        assert out == src, "existing mesh decorators must not be duplicated"
+
     def test_wraps_top_level_functions(self):
         from gpumesh.jupyter_magic import _transform_cell
 
