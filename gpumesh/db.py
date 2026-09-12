@@ -1035,9 +1035,9 @@ class Database:
             cur = self._conn.execute(
                 "UPDATE tasks SET status = 'pending', error = NULL,"
                 " worker_id = NULL, lease_expires = NULL, result = NULL,"
-                " attempts = 0"
+                " attempts = 0, created_at = ?"
                 " WHERE job_id = ? AND status = 'failed'",
-                (job_id,),
+                (time.time(), job_id),
             )
         counts = self.job_status(job_id)["counts"]
         return {"requeued": cur.rowcount, "counts": counts}
