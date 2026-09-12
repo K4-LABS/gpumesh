@@ -224,8 +224,10 @@ def devices() -> list[dict]:
         _ensure_api()
         try:
             return _mesh.devices()
-        except Exception:
-            pass
+        except Exception as exc:
+            # 401 must warn (token rejected) while still falling back locally.
+            from gpumesh.accelerate import _warn_if_auth_failure
+            _warn_if_auth_failure(exc)
     return []
 
 
@@ -237,8 +239,9 @@ def device_count() -> int:
         _ensure_api()
         try:
             return _mesh.device_count()
-        except Exception:
-            pass
+        except Exception as exc:
+            from gpumesh.accelerate import _warn_if_auth_failure
+            _warn_if_auth_failure(exc)
     return 1
 
 
@@ -250,8 +253,9 @@ def total_score() -> float:
         _ensure_api()
         try:
             return _mesh.total_score()
-        except Exception:
-            pass
+        except Exception as exc:
+            from gpumesh.accelerate import _warn_if_auth_failure
+            _warn_if_auth_failure(exc)
     return 0.0
 
 
