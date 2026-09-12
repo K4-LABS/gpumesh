@@ -474,6 +474,76 @@ class TestMeshHelpers:
         score = total_score()
         assert isinstance(score, (int, float))
 
+    def test_refused_token_warns_on_devices_helpers(self, monkeypatch):
+        """A 401 from devices()/device_count()/total_score() must warn.
+
+        Swallowing every exception made a typo'd token look like a healthy
+        local mesh. Connection-refused stays silent; only auth failures speak.
+        """
+        import urllib.error
+        import warnings
+        from importlib import import_module
+
+        mesh_mod = import_module("gpumesh.mesh")
+
+        refused = urllib.error.HTTPError(
+            "http://coordinator", 401, "Unauthorized", {}, None,
+        )
+
+        class _RefusedMesh:
+            def devices(self):
+                raise refused
+
+            def device_count(self):
+                raise refused
+
+            def total_score(self):
+                raise refused
+
+        monkeypatch.setattr(mesh_mod, "_connected", True)
+        monkeypatch.setattr(mesh_mod, "_mesh", _RefusedMesh())
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            assert mesh_mod.devices() == []
+            assert mesh_mod.device_count() == 1
+            assert mesh_mod.total_score() == 0.0
+
+        messages = [str(w.message) for w in caught]
+        assert len(messages) == 3
+        assert all("401" in m and "token" in m.lower() for m in messages)
+
+    def test_unreachable_mesh_stays_silent_on_devices_helpers(self, monkeypatch):
+        """Connection refused is the documented silent fallback."""
+        import urllib.error
+        import warnings
+        from importlib import import_module
+
+        mesh_mod = import_module("gpumesh.mesh")
+
+        unreachable = urllib.error.URLError("connection refused")
+
+        class _DownMesh:
+            def devices(self):
+                raise unreachable
+
+            def device_count(self):
+                raise unreachable
+
+            def total_score(self):
+                raise unreachable
+
+        monkeypatch.setattr(mesh_mod, "_connected", True)
+        monkeypatch.setattr(mesh_mod, "_mesh", _DownMesh())
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            assert mesh_mod.devices() == []
+            assert mesh_mod.device_count() == 1
+            assert mesh_mod.total_score() == 0.0
+
+        assert caught == []
+
 
 class TestMeshWithCoordinator:
     """@mesh works with a real coordinator."""

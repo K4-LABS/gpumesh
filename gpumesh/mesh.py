@@ -34,11 +34,12 @@ _AcceleratedFunction = None
 _MeshUnavailable = None
 _local_kwargs = None
 _connection_manager = None
+_warn_if_auth_failure = None
 
 
 def _ensure_api():
     global _GPUMesh, _AcceleratedFunction, _MeshUnavailable, _local_kwargs
-    global _connection_manager
+    global _connection_manager, _warn_if_auth_failure
     if _GPUMesh is None:
         accel = importlib.import_module(".accelerate", "gpumesh")
         _AcceleratedFunction = accel.AcceleratedFunction
@@ -50,6 +51,9 @@ def _ensure_api():
         # import exists to close. See accelerate._local_kwargs for why only
         # ``cost`` is stripped.
         _local_kwargs = accel._local_kwargs
+        # Same reason: a 401 is not "mesh unreachable". accelerate already
+        # names that case; the mesh helpers must not re-swallow it.
+        _warn_if_auth_failure = accel._warn_if_auth_failure
         _GPUMesh = importlib.import_module(".api", "gpumesh").GPUMesh
         _connection_manager = importlib.import_module(
             ".connection_manager", "gpumesh"
@@ -224,8 +228,8 @@ def devices() -> list[dict]:
         _ensure_api()
         try:
             return _mesh.devices()
-        except Exception:
-            pass
+        except Exception as exc:
+            _warn_if_auth_failure(exc)
     return []
 
 
@@ -237,8 +241,8 @@ def device_count() -> int:
         _ensure_api()
         try:
             return _mesh.device_count()
-        except Exception:
-            pass
+        except Exception as exc:
+            _warn_if_auth_failure(exc)
     return 1
 
 
@@ -250,8 +254,8 @@ def total_score() -> float:
         _ensure_api()
         try:
             return _mesh.total_score()
-        except Exception:
-            pass
+        except Exception as exc:
+            _warn_if_auth_failure(exc)
     return 0.0
 
 
