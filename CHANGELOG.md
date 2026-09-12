@@ -34,6 +34,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   whichever name is present and the pin stays uncapped.
 
 ### Fixed
+- **`%%mesh` leaves configured and qualified mesh decorators intact (#86).**
+  Functions already using `@mesh(...)`, `@mesh_fn`, or qualified forms such
+  as `@gpumesh.mesh(...)` no longer receive a second `@mesh` wrapper.
 - **Discovery no longer assumes a /24 subnet.** `get_broadcast_address()`
   computed `X.Y.Z.255` from the local address regardless of the real netmask,
   so on a /16, a /23, or any other width the address it produced was an
