@@ -884,6 +884,46 @@ def test_unsatisfiable_names_a_cores_requirement(db):
     assert "cpu_cores=64" in db.job_status(job_id)["tasks"][0]["error"]
 
 
+def test_retry_resets_created_at_so_unsatisfiable_gets_a_new_grace(db):
+    """Manual retry must not instantly re-fail on the original created_at.
+
+    retry() used to keep the original created_at, so a task that failed as
+    unsatisfiable hours ago still had waited >> 60s and the next reaper
+    pass failed it again — even if a matching GPU had just joined.
+    """
+    db.register_worker("cpu-laptop", "cpu", 1.0, "Intel i7")
+    job_id = db.create_job("j", "s", [{"cost": 1, "gpu": "A100"}])
+    _age_pending_tasks(db, UNSATISFIABLE_AFTER + 5)
+    assert len(db.fail_unsatisfiable_tasks()) == 1
+    assert db.job_status(job_id)["tasks"][0]["status"] == "failed"
+
+    db.retry_job(job_id)
+    assert db.job_status(job_id)["tasks"][0]["status"] == "pending"
+
+    # Still inside the fresh 60s grace: must stay pending.
+    assert db.fail_unsatisfiable_tasks() == []
+    assert db.job_status(job_id)["tasks"][0]["status"] == "pending"
+
+    # After a new grace period with still no matching GPU, fail again.
+    _age_pending_tasks(db, UNSATISFIABLE_AFTER + 5)
+    assert len(db.fail_unsatisfiable_tasks()) == 1
+    assert db.job_status(job_id)["tasks"][0]["status"] == "failed"
+
+
+def test_retry_unsatisfiable_then_matching_worker_gets_the_task(db):
+    """After retry, a newly joined matching worker can lease the task."""
+    db.register_worker("cpu-laptop", "cpu", 1.0, "Intel i7")
+    job_id = db.create_job("j", "s", [{"cost": 1, "gpu": "A100"}])
+    _age_pending_tasks(db, UNSATISFIABLE_AFTER + 5)
+    assert len(db.fail_unsatisfiable_tasks()) == 1
+
+    db.retry_job(job_id)
+    gpu = db.register_worker("rig", "cuda", 90.0, "NVIDIA A100-SXM4-40GB")
+    task = db.lease_task(gpu)
+    assert task is not None
+    assert task["job_id"] == job_id
+
+
 def test_unsatisfiable_reports_a_combination_no_single_worker_has(db):
     """Each requirement is met somewhere, but never on the same machine."""
     db.register_worker("gpu-box", "cuda", 90.0, "NVIDIA A100", cpu_cores=2)
