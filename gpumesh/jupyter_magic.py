@@ -106,8 +106,17 @@ def _transform_cell(source: str) -> tuple[str, int]:
         if isinstance(node, ast.FunctionDef):
             # Skip functions the user already decorated with @mesh — wrapping
             # them again would produce mesh(mesh(f)), which breaks remote runs.
-            if any(isinstance(d, ast.Name) and d.id == "mesh"
-                   for d in node.decorator_list):
+            # Match bare @mesh, @mesh(...), and attribute forms like @gpumesh.mesh(...).
+            def _is_mesh_decorator(d):
+                if isinstance(d, ast.Name) and d.id == "mesh":
+                    return True
+                if isinstance(d, ast.Attribute) and d.attr == "mesh":
+                    return True
+                if isinstance(d, ast.Call):
+                    return _is_mesh_decorator(d.func)
+                return False
+
+            if any(_is_mesh_decorator(d) for d in node.decorator_list):
                 continue
             if node.decorator_list:
                 insert_lines.add(node.decorator_list[0].lineno)
