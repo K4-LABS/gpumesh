@@ -18,14 +18,21 @@ printed immediately, exactly as before.
 from __future__ import annotations
 
 import threading
+from collections import deque
 
 from .ansi import safe_print
 
+LOG_VISIBLE = 6  # max mesh log lines shown inside the ticker region
+
+# Bounded: only the newest LOG_VISIBLE lines are ever rendered, and one of the
+# producers (the discovery printer) emits a line per unauthenticated UDP
+# beacon. An unbounded list let any LAN host grow coordinator memory for the
+# life of the process just by varying beacon hostnames.
+_LOG_KEEP = 64
+
 _lock = threading.Lock()
 _active = False
-_log_lines: list[str] = []
-
-LOG_VISIBLE = 6  # max mesh log lines shown inside the ticker region
+_log_lines: deque = deque(maxlen=_LOG_KEEP)
 
 
 def is_active() -> bool:
@@ -66,4 +73,4 @@ def snapshot(limit: int = LOG_VISIBLE) -> list[str]:
     This is the visible log window the ticker renders above its block.
     """
     with _lock:
-        return list(_log_lines[-limit:])
+        return list(_log_lines)[-limit:] if limit > 0 else []

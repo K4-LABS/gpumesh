@@ -12,6 +12,7 @@ the coordinator mesh via ``gpumesh.worker.run_worker``.
 # otherwise be evaluated at definition time and raise TypeError on import.
 from __future__ import annotations
 
+import hashlib
 import hmac
 import json
 import os
@@ -172,6 +173,32 @@ def claim_candidates(body: dict) -> list:
     return candidates
 
 
+CLAIM_CHALLENGE_PATH = "/api/claim/challenge"
+_CLAIM_PROOF_CONTEXT = b"gpumesh-claim-challenge-v1|"
+
+
+def claim_proof(token: str, nonce: str) -> str:
+    """HMAC proving knowledge of the worker claim token for one nonce.
+
+    The coordinator learns a worker's address from an unauthenticated UDP
+    beacon, so before it sends anything secret it asks the worker to prove it
+    holds the claim token the operator typed: it sends a fresh random nonce,
+    and the worker answers with this HMAC. A host that merely spoofed a beacon
+    cannot produce it, and the coordinator's own token never leaves the
+    coordinator until the proof checks out (``setup_wizard._claim_worker``).
+    The answer reveals nothing reusable: the nonce is single-use and chosen by
+    the verifier.
+    """
+    return hmac.new(token.encode("utf-8"),
+                    _CLAIM_PROOF_CONTEXT + nonce.encode("ascii"),
+                    hashlib.sha256).hexdigest()
+
+
+def _valid_nonce(nonce) -> bool:
+    return (isinstance(nonce, str) and 32 <= len(nonce) <= 128
+            and all(c in "0123456789abcdef" for c in nonce))
+
+
 class ClaimHandler(BaseHTTPRequestHandler):
     """Handler for the claim port.
 
@@ -260,6 +287,12 @@ class ClaimHandler(BaseHTTPRequestHandler):
     # there rather than in __init__.
     _responded = False
     _body_consumed = False
+    # True once _read_json reserved a rate-limit attempt for this request
+    # (claim requests only). Only then does _send account the outcome, so a
+    # challenge answered 200 can never clear a peer's failure history.
+    _admitted = False
+    # Set once the claim token has been compared, right or wrong.
+    _token_checked = False
 
     def handle_one_request(self):
         # BaseHTTPRequestHandler reuses one handler instance for every
@@ -267,6 +300,8 @@ class ClaimHandler(BaseHTTPRequestHandler):
         # request rather than per instance.
         self._responded = False
         self._body_consumed = False
+        self._admitted = False
+        self._token_checked = False
         super().handle_one_request()
 
     def _client_ip(self) -> str:
@@ -294,10 +329,17 @@ class ClaimHandler(BaseHTTPRequestHandler):
         # exists. 401 is only ever emitted for a token mismatch and 200 only
         # for a completed claim, so the mapping is unambiguous.
         ip = self._client_ip()
-        if code == 401:
-            self._rate_limiter.record_failure(ip)
-        elif code == 200:
-            self._rate_limiter.record_success(ip)
+        if self._admitted:
+            self._admitted = False  # account each reservation exactly once
+            if code == 401:
+                # try_admit already counted this attempt; decide the lockout.
+                self._rate_limiter.record_failure(ip, reserved=True)
+            elif code == 200:
+                self._rate_limiter.record_success(ip)
+            elif not self._token_checked:
+                # Answered before the token was looked at (bad framing, bad
+                # JSON, wrong shape): not a guess, so hand the attempt back.
+                self._rate_limiter.release(ip)
 
         data = (
             json.dumps(body, ensure_ascii=False).encode("utf-8")
@@ -383,7 +425,7 @@ class ClaimHandler(BaseHTTPRequestHandler):
             except (AttributeError, OSError):
                 pass
 
-    def _read_json(self):
+    def _read_json(self, admit: bool = True):
         # Re-entry guard. worker.py's _intercepted_do_POST delegates to the
         # original do_POST when this returns None, and the original calls
         # _read_json again. Reading the body a second time would block on a
@@ -398,8 +440,19 @@ class ClaimHandler(BaseHTTPRequestHandler):
         # token cannot be checked here (it is in the body we have not read
         # yet), which is precisely why the gate that does not need the body
         # goes first.
+        #
+        # For a claim (admit=True) the check also reserves the attempt in the
+        # same locked step (RateLimiter.try_admit). Checking here and counting
+        # only on the later 401 let a concurrent burst all pass the gate
+        # before any failure was recorded. A challenge carries no token, so
+        # it is only gated, never counted.
         ip = self._client_ip()
-        if not self._rate_limiter.is_allowed(ip):
+        if admit:
+            allowed = self._rate_limiter.try_admit(ip)
+            self._admitted = allowed
+        else:
+            allowed = self._rate_limiter.is_allowed(ip)
+        if not allowed:
             self._body_consumed = True
             self.close_connection = True
             remaining = int(self._rate_limiter.get_lockout_remaining(ip))
@@ -514,7 +567,29 @@ class ClaimHandler(BaseHTTPRequestHandler):
 
     # -- routes ---------------------------------------------------------
 
+    def _answer_challenge(self):
+        """POST /api/claim/challenge {"nonce": hex} -> {"ok": true, "proof": hmac}.
+
+        Lets a coordinator check that this worker holds the claim token
+        before it sends its own token. See ``claim_proof``.
+        """
+        try:
+            body = self._read_json(admit=False)
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return  # _read_json already answered 400
+        if body is None:
+            return
+        nonce = body.get("nonce")
+        if not _valid_nonce(nonce):
+            self._send(400, {"ok": False,
+                             "error": "nonce must be 32-128 lowercase hex characters"})
+            return
+        self._send(200, {"ok": True, "proof": claim_proof(ClaimHandler._token, nonce)})
+
     def do_POST(self):
+        if self.path == CLAIM_CHALLENGE_PATH:
+            self._answer_challenge()
+            return
         if self.path != "/api/claim":
             self._send(404, {"error": "unknown endpoint"})
             return
@@ -535,9 +610,13 @@ class ClaimHandler(BaseHTTPRequestHandler):
 
         # Validate inputs BEFORE acquiring lock (no lock needed for read-only checks)
         token = body.get("token", "")
+        self._token_checked = True
         if not hmac.compare_digest(str(token), ClaimHandler._token):
             self._send(401, {"ok": False, "error": "wrong token"})
             return
+        # Right token: release the attempt try_admit reserved, whatever the
+        # outcome below (400/409/502 are not guesses).
+        self._rate_limiter.record_success(self._client_ip())
 
         candidates = claim_candidates(body)
         coordinator_token = body.get("coordinator_token", "")

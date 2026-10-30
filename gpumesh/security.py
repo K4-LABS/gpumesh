@@ -328,9 +328,58 @@ class RateLimiter:
                     self._attempts[ip] = []
             
             return True
-    
-    def record_failure(self, ip: str) -> bool:
-        """Record a failed attempt. Returns True if IP should be locked out."""
+
+    def try_admit(self, ip: str) -> bool:
+        """Check the lockout AND reserve one attempt, atomically.
+
+        ``is_allowed`` followed later by ``record_failure`` is a
+        check-then-act race: the gate and the accounting are separate critical
+        sections, with the expensive token check in between, so N requests
+        sent concurrently from one IP all pass the gate on the pre-burst state
+        and all get their token checked — "5 attempts per window" quietly
+        became "as many as the attacker can open in parallel". Reserving the
+        attempt here, under the same lock as the check, bounds the number of
+        token checks per window regardless of concurrency.
+
+        Pair with ``record_failure(ip, reserved=True)`` on a wrong token and
+        ``record_success(ip)`` on a right one, which clears the reservation.
+        """
+        if self.is_exempt(ip):
+            return True
+        with self._lock:
+            now = time.time()
+            if ip in self._lockouts:
+                if now < self._lockouts[ip]:
+                    return False
+                del self._lockouts[ip]
+                self._attempts[ip] = []
+            self._attempts[ip] = [
+                t for t in self._attempts[ip]
+                if now - t < self.window_seconds
+            ]
+            if len(self._attempts[ip]) >= self.max_attempts:
+                self._lockouts[ip] = now + self.lockout_seconds
+                self._attempts[ip] = []
+                return False
+            self._attempts[ip].append(now)
+            return True
+
+    def release(self, ip: str) -> None:
+        """Give back an attempt ``try_admit`` reserved for a request that was
+        answered before any token was examined (malformed body, bad framing).
+        Those are not guesses and must not count toward a lockout."""
+        if self.is_exempt(ip):
+            return
+        with self._lock:
+            if self._attempts.get(ip):
+                self._attempts[ip].pop()
+
+    def record_failure(self, ip: str, reserved: bool = False) -> bool:
+        """Record a failed attempt. Returns True if IP should be locked out.
+
+        ``reserved=True`` means ``try_admit`` already counted this attempt, so
+        only the lockout decision is made here.
+        """
         if self.is_exempt(ip):
             # Not merely "never locked out" — never *counted*, so an exempt IP
             # cannot accumulate history that would bite later if the exemption
@@ -338,15 +387,16 @@ class RateLimiter:
             return False
         with self._lock:
             now = time.time()
-            
+
             # Clean old attempts outside the window
             self._attempts[ip] = [
-                t for t in self._attempts[ip] 
+                t for t in self._attempts[ip]
                 if now - t < self.window_seconds
             ]
-            
-            # Add current attempt
-            self._attempts[ip].append(now)
+
+            # Add current attempt, unless try_admit already reserved it
+            if not reserved:
+                self._attempts[ip].append(now)
             
             # Check if we should lockout
             if len(self._attempts[ip]) >= self.max_attempts:
@@ -422,7 +472,7 @@ class SecurityManager:
     
     def __init__(self, token: str, max_attempts: int = 5,
                  allowed_ips: list = None, *, kdf: str = None,
-                 kdf_iterations: int = None):
+                 kdf_iterations: int = None, exempt_loopback: bool = True):
         """
         Args:
             token: The mesh bearer token, hashed once here and then dropped.
@@ -432,11 +482,24 @@ class SecurityManager:
                 ``"sha256"`` (legacy). Falls back to ``GPUMESH_AUTH_KDF``.
             kdf_iterations: PBKDF2 cost factor. Falls back to
                 ``GPUMESH_AUTH_KDF_ITERATIONS``, then 200000.
+            exempt_loopback: Exempt 127.0.0.0/8 and ::1 from rate limiting.
+                Must be False whenever a local agent relays remote clients
+                onto loopback (``serve --public``: the ngrok agent dials
+                127.0.0.1), or every internet client inherits the exemption.
+
+        Raises:
+            ValueError: if ``token`` is empty or blank. A missing
+                ``X-Auth-Token`` header is read as ``""``, so an empty
+                configured token would authenticate requests that send no
+                credential at all.
         """
+        if not token or not str(token).strip():
+            raise ValueError("SecurityManager requires a non-empty token")
         self.kdf = _resolve_kdf(kdf)
         self.token_hash = hash_token(token, scheme=self.kdf,
                                      iterations=kdf_iterations)
-        self.rate_limiter = RateLimiter(max_attempts=max_attempts)
+        self.rate_limiter = RateLimiter(max_attempts=max_attempts,
+                                        exempt_loopback=exempt_loopback)
         self.ip_allowlist = IPAllowlist(allowed_ips)
         # See _VerifyCache: the KDF cost is paid on the first request bearing
         # a given token and never again, so a polling worker does not turn the
@@ -478,8 +541,9 @@ class SecurityManager:
         if not self.ip_allowlist.is_allowed(ip):
             return False, f"IP not allowed: {ip} is not on the coordinator's allowlist"
 
-        # Check rate limit
-        if not self.rate_limiter.is_allowed(ip):
+        # Check rate limit and reserve this attempt in one locked step, so a
+        # concurrent burst cannot all pass the gate before any failure counts.
+        if not self.rate_limiter.try_admit(ip):
             remaining = int(self.rate_limiter.get_lockout_remaining(ip))
             return False, (
                 f"Too many attempts. This IP is rate limited for another "
@@ -493,7 +557,7 @@ class SecurityManager:
         # the full derivation.
         if not (self._verify_cache.check(token, self.token_hash)
                 or verify_token(token, self.token_hash)):
-            locked_out = self.rate_limiter.record_failure(ip)
+            locked_out = self.rate_limiter.record_failure(ip, reserved=True)
             if self.rate_limiter.is_exempt(ip):
                 # The operator's own machine. Never locked out, so do not
                 # threaten a countdown that will never arrive.

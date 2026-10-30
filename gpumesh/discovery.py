@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import math
 import socket
 import threading
 import time
@@ -289,6 +290,21 @@ class Beacon:
 
 # -- listener (coordinator side) -------------------------------------------
 
+# Upper bound on a beacon's self-reported score (GFLOP/s). Generous: a
+# current flagship GPU scores in the tens of thousands.
+_MAX_SCORE = 1e7
+
+
+def _clean_field(value: object, limit: int) -> str:
+    """Printable characters only, then truncate.
+
+    ``str.isprintable`` rejects C0 controls (ESC, BEL, CR, ...), DEL and the
+    C1 range (including the single-byte CSI 0x9b), so nothing that reaches a
+    terminal from a beacon can be interpreted as a control sequence.
+    """
+    return "".join(ch for ch in str(value) if ch.isprintable())[:limit]
+
+
 class Peer:
     """Represents a discovered peer (worker or coordinator).
 
@@ -305,19 +321,30 @@ class Peer:
         if role is None:
             raise ValueError(f"invalid discovery beacon type: {data.get('type')!r}")
         self.role = role
-        self.hostname = str(data.get("hostname", "unknown"))[:255]
-        self.device = str(data.get("device", "cpu"))[:31]
-        self.device_name = str(data.get("device_name", ""))[:127]
+        # Every string here comes from an unauthenticated UDP datagram and is
+        # printed raw to operator terminals (coordinator log, radar, the claim
+        # prompt). json.loads turns "\u001b" into a real ESC, so length
+        # clamping alone let any LAN host clear the screen, set the title,
+        # write the clipboard (OSC 52) or hide the IP column in the claim
+        # list. Keep printable characters only.
+        self.hostname = _clean_field(data.get("hostname", "unknown"), 255) or "unknown"
+        self.device = _clean_field(data.get("device", "cpu"), 31)
+        self.device_name = _clean_field(data.get("device_name", ""), 127)
         try:
             self.score = float(data.get("score", 0.0))
         except (TypeError, ValueError):
             self.score = 0.0
+        # json.loads accepts NaN and Infinity; either one always sorted a
+        # spoofed peer to the top of the radar and claim lists.
+        if not math.isfinite(self.score):
+            self.score = 0.0
+        self.score = min(max(self.score, 0.0), _MAX_SCORE)
         try:
             port = int(data.get("api_port", 8000))
             self.api_port = port if 0 <= port <= 65535 else 8000
         except (TypeError, ValueError):
             self.api_port = 8000
-        self.platform = str(data.get("platform", ""))[:255]
+        self.platform = _clean_field(data.get("platform", ""), 255)
         try:
             cport = int(data.get("claim_port", 0))
             self.claim_port = cport if 0 <= cport <= 65535 else 0

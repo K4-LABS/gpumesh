@@ -133,11 +133,21 @@ def _generate_with_cryptography(certfile: pathlib.Path,
         .sign(key, hashes.SHA256())
     )
 
-    keyfile.write_bytes(key.private_bytes(
+    # Created 0600 rather than written under the umask and chmod'd later, so
+    # the key is never readable by other users, even if the tls directory
+    # could not be restricted to 0700.
+    key_pem = key.private_bytes(
         encoding=serialization.Encoding.PEM,
         format=serialization.PrivateFormat.TraditionalOpenSSL,
         encryption_algorithm=serialization.NoEncryption(),
-    ))
+    )
+    try:
+        keyfile.unlink()
+    except FileNotFoundError:
+        pass
+    fd = os.open(keyfile, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    with os.fdopen(fd, "wb") as fh:
+        fh.write(key_pem)
     certfile.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
     return True
 
@@ -286,7 +296,12 @@ def server_context(certfile, keyfile) -> ssl.SSLContext:
 def wrap_server(httpd, certfile, keyfile):
     """Wrap a live HTTPServer's socket in TLS. Returns the SSLContext used."""
     context = server_context(certfile, keyfile)
-    httpd.socket = context.wrap_socket(httpd.socket, server_side=True)
+    # No handshake in accept(): it would run in the single serve_forever
+    # thread with no timeout, so one idle TCP connection stalled the whole
+    # coordinator. CoordinatorHandler.setup() does the handshake instead, in
+    # the per-connection thread and under the handler's socket timeout.
+    httpd.socket = context.wrap_socket(httpd.socket, server_side=True,
+                                       do_handshake_on_connect=False)
     httpd.gpumesh_tls_context = context
     httpd.gpumesh_tls_certfile = str(certfile)
     return context

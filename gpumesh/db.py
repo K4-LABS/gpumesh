@@ -349,6 +349,41 @@ class Database:
             f" will fall back to the total it registered."
         )
 
+    # The database holds every job script, cloudpickled function, payload and
+    # result -- THREAT_MODEL.md lists all of them as protected assets -- so it
+    # gets the same owner-only treatment as config.json and the TLS key.
+    # sqlite3.connect() creates files with the process umask (usually 0644),
+    # and SQLite gives -wal/-shm the main file's mode, so the main file is
+    # pre-created 0600 and every file is tightened after connect for
+    # databases created by older versions.
+    _DB_SUFFIXES = ("", "-wal", "-shm", "-journal")
+
+    @staticmethod
+    def _is_file_path(path: str) -> bool:
+        return bool(path) and path != ":memory:" and not path.startswith("file:")
+
+    @staticmethod
+    def _create_private(path: str):
+        if os.name == "nt" or not Database._is_file_path(path):
+            return
+        try:
+            fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        except FileExistsError:
+            return
+        except OSError:
+            return  # sqlite3.connect reports anything that actually matters
+        os.close(fd)
+
+    @staticmethod
+    def _restrict(path: str):
+        if os.name == "nt" or not Database._is_file_path(path):
+            return
+        for suffix in Database._DB_SUFFIXES:
+            try:
+                os.chmod(path + suffix, 0o600)
+            except OSError:
+                pass  # absent sidecar, or a file we do not own
+
     @staticmethod
     def _open_db(path: str):
         # Create the parent directory so a fresh ``~/.gpumesh`` (or any other
@@ -357,9 +392,11 @@ class Database:
         parent = os.path.dirname(os.path.abspath(path))
         if parent:
             os.makedirs(parent, exist_ok=True)
+        Database._create_private(path)
         try:
             conn = sqlite3.connect(path, check_same_thread=False)
             conn.execute("PRAGMA journal_mode=WAL")
+            Database._restrict(path)
             conn.execute("PRAGMA foreign_keys=ON")
             conn.executescript(SCHEMA)
             # Migrate: add device_name column to existing databases
@@ -554,6 +591,9 @@ class Database:
                         shutil.copy2(path + suffix, backup_path + suffix)
                     except FileNotFoundError:
                         pass
+                # copy2 preserves the source mode; the backup holds the same
+                # job code and data, so it gets the same owner-only mode.
+                Database._restrict(backup_path)
             except Exception:
                 pass
             # Remove corrupted files
@@ -567,8 +607,10 @@ class Database:
             except (FileNotFoundError, PermissionError):
                 pass
             safe_print(f"{bold('[gpumesh]')} {green('Creating fresh database...')}")
+            Database._create_private(path)
             conn = sqlite3.connect(path, check_same_thread=False)
             conn.execute("PRAGMA journal_mode=WAL")
+            Database._restrict(path)
             conn.execute("PRAGMA foreign_keys=ON")
             conn.executescript(SCHEMA)
             return conn

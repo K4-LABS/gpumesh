@@ -233,7 +233,12 @@ class GPUMesh:
         import secrets as _secrets
         from . import server, tunnel
 
-        if token is None:
+        # Treat "" the same as None. An unset env var read with a "" default
+        # used to become the coordinator's token, and since a missing
+        # X-Auth-Token header is read as "", every request that sent no
+        # credential at all then authenticated. Matches cmd_serve's
+        # `args.token or secrets.token_urlsafe(12)`.
+        if token is None or not str(token).strip():
             token = _secrets.token_urlsafe(12)
 
         # ``db_path=None`` means "the stable default": next to the saved

@@ -764,6 +764,51 @@ def _setup_coordinator_radar(device: str):
 
 # ── claim flow ─────────────────────────────────────────────────────────────
 
+def _verify_claim_peer(ip: str, claim_port: int, worker_token: str,
+                       timeout: float = 5.0) -> tuple[bool, str]:
+    """Challenge a claim server to prove it holds ``worker_token``.
+
+    Sends a fresh random nonce to ``/api/claim/challenge`` and checks the
+    returned HMAC (``claimer.claim_proof``) in constant time. Fails closed:
+    any error, an old worker without the endpoint, or a wrong proof is
+    ``(False, reason)``. Only the nonce is sent, never a token.
+
+    Residual: an attacker who relays the challenge to the real worker can
+    still pass it, the same active on-path position THREAT_MODEL.md already
+    accepts for cleartext traffic. This closes the passive case: a spoofed
+    beacon alone no longer receives the coordinator token.
+    """
+    import hmac
+    import json
+    import secrets
+    import urllib.error
+    import urllib.request
+
+    from .claimer import CLAIM_CHALLENGE_PATH, claim_proof
+
+    nonce = secrets.token_hex(32)
+    url = f"http://{ip}:{claim_port}{CLAIM_CHALLENGE_PATH}"
+    req = urllib.request.Request(
+        url, data=json.dumps({"nonce": nonce}).encode(), method="POST",
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            body = json.loads(resp.read(16 * 1024))
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            return False, "the worker does not support claim verification (upgrade it)"
+        return False, f"challenge refused (HTTP {exc.code})"
+    except Exception as exc:  # noqa: BLE001 - any failure means "not verified"
+        return False, f"challenge failed ({exc})"
+    proof = body.get("proof") if isinstance(body, dict) else None
+    if not isinstance(proof, str):
+        return False, "no proof in the worker's answer"
+    if not hmac.compare_digest(proof, claim_proof(worker_token, nonce)):
+        return False, "wrong proof (wrong token, or not the worker you meant)"
+    return True, ""
+
+
 def _claim_worker(peers: list, coordinator_url: str, coordinator_token: str):
     """Let the coordinator select a worker and send a claim request."""
     from .radar import select_worker_for_claim
@@ -799,6 +844,19 @@ def _claim_worker(peers: list, coordinator_url: str, coordinator_token: str):
         _console.print(f"  Found claim server on port {claim_port}", style="green")
 
     claim_url = f"http://{peer.ip}:{claim_port}/api/claim"
+
+    # The peer's address and port came from an unauthenticated UDP beacon,
+    # so before anything secret goes to it, make it prove it holds the
+    # worker token the operator just typed. Sending the claim (which carries
+    # our own coordinator token) straight away handed the master token to
+    # any LAN host that broadcast a fake beacon.
+    verified, why = _verify_claim_peer(peer.ip, claim_port, token)
+    if not verified:
+        _console.print(f"  [ERROR] {peer.hostname} ({peer.ip}) did not prove it holds "
+                       f"that worker token: {why}", style="red")
+        _console.print("  Nothing was sent to it. Check the token, or make sure the "
+                       "worker runs this gpumesh version.", style="yellow")
+        return
 
     # Offer every address this worker might reach us on, best first, and let
     # it choose. We cannot determine that from here: which of our addresses
