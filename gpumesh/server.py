@@ -20,6 +20,8 @@ Endpoints (all require the X-Auth-Token header):
 import json
 import math
 import os
+import socket
+import ssl
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -247,6 +249,35 @@ class _FastBindHTTPServer(ThreadingHTTPServer):
     # way the calling code already expects.
     allow_reuse_address = os.name != "nt"
 
+    # Cap on concurrently handled connections. ThreadingHTTPServer spawns a
+    # thread per accepted socket with no limit, and every one of those
+    # threads exists before authentication, so without a cap an
+    # unauthenticated peer can accumulate threads and file descriptors until
+    # accept() fails for the workers. Past the cap a new connection is closed
+    # straight away. 256 is far above any real mesh: workers hold no
+    # long-lived connections, each request is one short HTTP/1.0 exchange.
+    max_connections = 256
+
+    def __init__(self, *args, **kwargs):
+        self._conn_slots = threading.BoundedSemaphore(self.max_connections)
+        super().__init__(*args, **kwargs)
+
+    def process_request(self, request, client_address):
+        if not self._conn_slots.acquire(blocking=False):
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except BaseException:
+            self._conn_slots.release()
+            raise
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._conn_slots.release()
+
     def server_bind(self):
         from socketserver import TCPServer
 
@@ -305,9 +336,66 @@ class CoordinatorHandler(BaseHTTPRequestHandler):
         """
         self._inflight.enter()
         try:
+            if self._handshake_failed:
+                return
             BaseHTTPRequestHandler.handle(self)
         finally:
             self._inflight.leave()
+
+    _handshake_failed = False
+
+    def setup(self):
+        """Apply the socket timeout, then finish any pending TLS handshake.
+
+        ``tls.wrap_server`` wraps the listening socket with
+        ``do_handshake_on_connect=False``. With the default ``True``,
+        ``accept()`` ran the handshake inside the single ``serve_forever``
+        thread with no timeout, so one peer that connected and sent nothing
+        stopped the coordinator from accepting anyone. Here, in the
+        per-connection thread and after ``self.timeout`` is applied, a stalled
+        or broken handshake costs one bounded thread and nothing else.
+        """
+        super().setup()
+        if isinstance(self.connection, ssl.SSLSocket):
+            try:
+                self.connection.do_handshake()
+            except (ssl.SSLError, OSError):
+                self._handshake_failed = True
+                self.close_connection = True
+
+    # Wall-clock budget for the request line plus headers, which are read
+    # before _authed can run. ``timeout`` below is per read, and every byte
+    # resets it, so a peer trickling one header byte at a time used to hold
+    # its thread indefinitely without ever authenticating. Real clients send
+    # their headers in one packet; ten seconds is generous.
+    HEADER_DEADLINE = 10.0
+
+    def handle_one_request(self):
+        timer = threading.Timer(self.HEADER_DEADLINE, self._header_deadline_hit)
+        timer.daemon = True
+        self._header_timer = timer
+        timer.start()
+        try:
+            super().handle_one_request()
+        finally:
+            timer.cancel()
+
+    def parse_request(self):
+        # parse_request reads the headers; once it returns, the pre-auth
+        # header phase is over and the per-read timeout takes over again.
+        try:
+            return super().parse_request()
+        finally:
+            timer = getattr(self, "_header_timer", None)
+            if timer is not None:
+                timer.cancel()
+
+    def _header_deadline_hit(self):
+        self.close_connection = True
+        try:
+            self.connection.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
 
     # A job payload carries a cloudpickled function plus every parameter set
     # for the whole batch, so unlike the claim port's 16 KB this is a real
@@ -413,6 +501,10 @@ class CoordinatorHandler(BaseHTTPRequestHandler):
     # peer cannot use this path to make us read indefinitely.
     SWEEP_BYTES = 64 * 1024
     SWEEP_TIMEOUT = 0.25
+    # Wall-clock ceiling on the whole sweep. SWEEP_TIMEOUT is per read, so a
+    # peer trickling one byte per 0.2 s could otherwise stretch 64 KB of
+    # "already arrived" bytes into hours, and this path runs before auth.
+    SWEEP_BUDGET = 1.0
 
     def _sweep_unread(self):
         """Discard already-arrived body bytes so a close does not RST.
@@ -427,9 +519,10 @@ class CoordinatorHandler(BaseHTTPRequestHandler):
             self.connection.settimeout(self.SWEEP_TIMEOUT)
         except (AttributeError, OSError):
             return
+        deadline = time.monotonic() + self.SWEEP_BUDGET
         try:
             remaining = self.SWEEP_BYTES
-            while remaining > 0:
+            while remaining > 0 and time.monotonic() < deadline:
                 chunk = self.rfile.read(min(remaining, 8192))
                 if not chunk:
                     break
@@ -948,7 +1041,7 @@ def _discovery_printer(listener, stop: threading.Event):
 def serve(host: str, port: int, db_path: str, token: str,
           discovery: bool = False, safe_mode: bool = False,
           tls: bool = False, tls_cert: str = None,
-          tls_key: str = None) -> ThreadingHTTPServer:
+          tls_key: str = None, tunnelled: bool = False) -> ThreadingHTTPServer:
     """Start the coordinator's HTTP(S) listener.
 
     ``tls=True`` wraps the socket in TLS. With no ``tls_cert``/``tls_key`` a
@@ -957,11 +1050,18 @@ def serve(host: str, port: int, db_path: str, token: str,
     See ``gpumesh/tls.py`` for what a self-signed certificate does and does
     not buy -- in short: confidentiality on a LAN, not an identity, and not a
     licence to face the internet.
+
+    ``tunnelled=True`` means a local agent relays remote clients onto
+    loopback (``serve --public``: the ngrok agent dials 127.0.0.1). Loopback
+    then stops being proof of local access, so it loses its rate-limit
+    exemption; otherwise every internet client could guess tokens without
+    ever being locked out.
     """
     handler = type("Handler", (CoordinatorHandler,),
                    {"db": Database(db_path), "token": token,
                     "safe_mode": safe_mode,
-                    "gpumesh_security": SecurityManager(token)})
+                    "gpumesh_security": SecurityManager(
+                        token, exempt_loopback=not tunnelled)})
     handler.start_time = time.monotonic()
     handler._shutdown_event = threading.Event()
     # Per-coordinator, not shared with the class default — see _InFlight.

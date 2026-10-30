@@ -60,6 +60,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   consults `peer.platform`, and the radar has never displayed it. (#17)
 
 ### Security
+Fixes from a full security audit of the codebase. Each one has a regression test in `tests/test_audit_fixes.py`.
+- **`gpumesh setup` no longer sends the coordinator token to an unverified peer.** In LAN mode the claim went to an address and port taken from an unauthenticated UDP beacon, so any host that broadcast a fake beacon received the master token. The coordinator now first sends a random nonce to `/api/claim/challenge` and requires an HMAC of it under the worker token the operator typed. Nothing secret is sent until that proof checks out. Workers must run this version to be claimed by it; an older worker is refused with an "upgrade it" message.
+- **An empty token is never accepted.** `GPUMesh.start_coordinator(token="")` used the empty string as the token, and a missing `X-Auth-Token` header is read as `""`, so requests with no credential were authenticated. An empty or blank token is now replaced with a random one, and `SecurityManager` refuses it.
+- **`serve --public` no longer exempts internet clients from the brute-force lockout.** The ngrok agent dials 127.0.0.1, so every tunnelled client looked like loopback, which is never rate limited. `serve(tunnelled=True)` now turns the loopback exemption off.
+- **The 5-attempt lockout now holds under concurrency.** The check and the failure count were separate steps, so parallel requests all passed the check before any failure was recorded. `RateLimiter.try_admit` checks and reserves an attempt in one locked step, on both the coordinator and the claim port. Answering a claim challenge never resets the count.
+- **`--tls`: one idle connection no longer stalls the coordinator.** The TLS handshake ran in `accept()` with no timeout. It now runs in the per-connection thread under the handler timeout.
+- **Pre-auth limits on the coordinator.** A 10 s wall-clock deadline for request line and headers, a wall-clock budget on the pre-close sweep, and a cap of 256 concurrent connections. Trickling header bytes used to hold a thread indefinitely.
+- **Discovery beacons are sanitized.** Control characters are stripped from beacon strings, so a beacon cannot clear the screen, set the window title, write the clipboard (OSC 52) or hide the IP column. Scores are clamped to a finite range.
+- **The coordinator's ticker log is bounded.** It kept every line, including one per unauthenticated beacon, for the life of the process.
+- **`%mesh_status` no longer prints any of the token** (#83). It printed the first 12 characters into notebook output.
+- **`~/.gpumesh` is 0700 and the job database is 0600** (#56). The database, its `-wal`/`-shm` files and `.corrupted` backups were created world-readable under the usual umask; existing files are tightened on open. The generated TLS key is now created 0600 instead of being chmod'd after writing.
+
 - **The two-node Docker example shipped a hardcoded token and published on
   every interface.** `examples/docker-2node/docker-compose.yaml` ran
   `--token my-secret-mesh-token`, a value printed in this repository, and

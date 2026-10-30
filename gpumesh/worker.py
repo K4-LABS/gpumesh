@@ -1319,6 +1319,9 @@ def run_worker_broadcast(token: str, claim_port: int = 0,
         if not hmac.compare_digest(str(token_val), ClaimHandler._token):
             self._send(401, {"ok": False, "error": "wrong token"})
             return
+        # Right token: release the rate-limit attempt _read_json reserved
+        # (same as claimer.ClaimHandler.do_POST).
+        self._rate_limiter.record_success(self._client_ip())
 
         from .claimer import claim_candidates
 

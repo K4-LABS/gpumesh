@@ -33,7 +33,15 @@ _DB_PATH = os.path.join(_CONFIG_DIR, "gpumesh.db")
 
 
 def _ensure_dir():
-    os.makedirs(_CONFIG_DIR, exist_ok=True)
+    # Owner-only. This directory holds the token (config.json), the TLS key
+    # and the job database -- job code, payloads and results -- so a 0755
+    # directory under the usual umask let other local users list and read it.
+    os.makedirs(_CONFIG_DIR, mode=0o700, exist_ok=True)
+    if os.name != "nt":
+        try:
+            os.chmod(_CONFIG_DIR, 0o700)
+        except OSError as exc:
+            _warn_permissions(f"its directory could not be restricted to 0700: {exc}")
 
 
 def default_db_path() -> str:

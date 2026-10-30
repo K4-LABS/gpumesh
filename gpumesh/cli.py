@@ -720,7 +720,10 @@ def cmd_serve(args):
                              safe_mode=args.safe_mode,
                              tls=getattr(args, "tls", False),
                              tls_cert=getattr(args, "tls_cert", "") or None,
-                             tls_key=getattr(args, "tls_key", "") or None)
+                             tls_key=getattr(args, "tls_key", "") or None,
+                             # The ngrok agent dials 127.0.0.1, so under
+                             # --public loopback is every internet client.
+                             tunnelled=(tunnel_mode == "ngrok"))
     except sqlite3.Error as exc:
         # An unwritable --db path surfaces as sqlite3.OperationalError, which
         # is NOT an OSError — the port-in-use handler below never saw it, so

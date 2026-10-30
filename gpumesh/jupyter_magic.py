@@ -78,7 +78,13 @@ def _mesh_status(args: str):
     saved = connection_manager.load_connection()
     if saved:
         print(f"[gpumesh] Connected to: {saved.get('url', '?')}")
-        print(f"  Token: {saved.get('token', '?')[:12]}...")
+        # Never print token material: cell output is saved in the .ipynb and
+        # notebooks get committed and shared. A 12-char prefix was 12 of the
+        # default 16 characters, and the whole of any token of 12 or fewer.
+        # Same rule as `gpumesh doctor`, which reports only the length.
+        token = saved.get("token") or ""
+        print(f"  Token: configured ({len(token)} chars, hidden)"
+              if token else "  Token: not set")
         print(f"  Total devices (including you): {_device_count()}")
     else:
         print("[gpumesh] Not connected to any coordinator.")
