@@ -743,7 +743,7 @@ class TestCLIArgumentParsing:
             mock_serve.assert_called_once_with(
                 "127.0.0.1", 9000, default_db_path(), "test123",
                 discovery=True, safe_mode=False,
-                tls=False, tls_cert=None, tls_key=None,
+                tls=False, tls_cert=None, tls_key=None, tunnelled=False,
             )
 
     def test_serve_token_argument(self):
@@ -765,7 +765,7 @@ class TestCLIArgumentParsing:
             mock_serve.assert_called_once_with(
                 "127.0.0.1", 8000, default_db_path(), "mysecrettoken",
                 discovery=True, safe_mode=False,
-                tls=False, tls_cert=None, tls_key=None,
+                tls=False, tls_cert=None, tls_key=None, tunnelled=False,
             )
 
     def test_serve_default_token_generated(self):
@@ -788,7 +788,7 @@ class TestCLIArgumentParsing:
             mock_serve.assert_called_once_with(
                 "127.0.0.1", 8000, default_db_path(), "generatedtoken123",
                 discovery=True, safe_mode=False,
-                tls=False, tls_cert=None, tls_key=None,
+                tls=False, tls_cert=None, tls_key=None, tunnelled=False,
             )
 
     def test_serve_reads_token_from_environment(self, monkeypatch):
@@ -816,7 +816,7 @@ class TestCLIArgumentParsing:
             mock_serve.assert_called_once_with(
                 "127.0.0.1", 8000, default_db_path(), "token-from-env",
                 discovery=True, safe_mode=False,
-                tls=False, tls_cert=None, tls_key=None,
+                tls=False, tls_cert=None, tls_key=None, tunnelled=False,
             )
 
     def test_serve_explicit_token_beats_environment(self, monkeypatch):
@@ -838,7 +838,7 @@ class TestCLIArgumentParsing:
             mock_serve.assert_called_once_with(
                 "127.0.0.1", 8000, default_db_path(), "explicit",
                 discovery=True, safe_mode=False,
-                tls=False, tls_cert=None, tls_key=None,
+                tls=False, tls_cert=None, tls_key=None, tunnelled=False,
             )
 
     def test_quickjoin_token_required(self):

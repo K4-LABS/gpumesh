@@ -291,6 +291,8 @@ class ClaimHandler(BaseHTTPRequestHandler):
     # (claim requests only). Only then does _send account the outcome, so a
     # challenge answered 200 can never clear a peer's failure history.
     _admitted = False
+    # Set once the claim token has been compared, right or wrong.
+    _token_checked = False
 
     def handle_one_request(self):
         # BaseHTTPRequestHandler reuses one handler instance for every
@@ -299,6 +301,7 @@ class ClaimHandler(BaseHTTPRequestHandler):
         self._responded = False
         self._body_consumed = False
         self._admitted = False
+        self._token_checked = False
         super().handle_one_request()
 
     def _client_ip(self) -> str:
@@ -327,11 +330,16 @@ class ClaimHandler(BaseHTTPRequestHandler):
         # for a completed claim, so the mapping is unambiguous.
         ip = self._client_ip()
         if self._admitted:
+            self._admitted = False  # account each reservation exactly once
             if code == 401:
                 # try_admit already counted this attempt; decide the lockout.
                 self._rate_limiter.record_failure(ip, reserved=True)
             elif code == 200:
                 self._rate_limiter.record_success(ip)
+            elif not self._token_checked:
+                # Answered before the token was looked at (bad framing, bad
+                # JSON, wrong shape): not a guess, so hand the attempt back.
+                self._rate_limiter.release(ip)
 
         data = (
             json.dumps(body, ensure_ascii=False).encode("utf-8")
@@ -602,6 +610,7 @@ class ClaimHandler(BaseHTTPRequestHandler):
 
         # Validate inputs BEFORE acquiring lock (no lock needed for read-only checks)
         token = body.get("token", "")
+        self._token_checked = True
         if not hmac.compare_digest(str(token), ClaimHandler._token):
             self._send(401, {"ok": False, "error": "wrong token"})
             return

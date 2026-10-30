@@ -1316,6 +1316,7 @@ def run_worker_broadcast(token: str, claim_port: int = 0,
 
         # Validate token OUTSIDE the lock (read-only check, no lock needed)
         token_val = body.get("token", "")
+        self._token_checked = True
         if not hmac.compare_digest(str(token_val), ClaimHandler._token):
             self._send(401, {"ok": False, "error": "wrong token"})
             return

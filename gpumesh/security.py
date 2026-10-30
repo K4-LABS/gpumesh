@@ -364,6 +364,16 @@ class RateLimiter:
             self._attempts[ip].append(now)
             return True
 
+    def release(self, ip: str) -> None:
+        """Give back an attempt ``try_admit`` reserved for a request that was
+        answered before any token was examined (malformed body, bad framing).
+        Those are not guesses and must not count toward a lockout."""
+        if self.is_exempt(ip):
+            return
+        with self._lock:
+            if self._attempts.get(ip):
+                self._attempts[ip].pop()
+
     def record_failure(self, ip: str, reserved: bool = False) -> bool:
         """Record a failed attempt. Returns True if IP should be locked out.
 
