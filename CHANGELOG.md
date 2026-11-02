@@ -70,6 +70,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now `${GPUMESH_TOKEN:?set GPUMESH_TOKEN}` and the publish is
   `${GPUMESH_BIND:-127.0.0.1}`, matching the compose file at the repository
   root, which had always been careful about exactly this.
+- **`--public` turned the token lockout off for the whole internet.** The
+  ngrok agent connects to the coordinator from `127.0.0.1`, and loopback is
+  exempt from rate limiting, so every token guess through the public URL got
+  a 401 and none ever got locked out. Found through a real ngrok tunnel: 8
+  wrong guesses, 8 rejections, no lockout. A loopback peer that sends `X-Forwarded-For` is now treated
+  as a proxy: all proxied callers share one rate-limited bucket. The header's
+  value is never trusted, only its presence. The local CLI and the
+  coordinator's own worker send no such header and keep their exemption. The
+  same fix covers any reverse proxy on the coordinator host.
 
 ### Fixed (docs)
 - **`DOCKER_HUB_README.md` claimed token hashes were plain SHA-256.** They have

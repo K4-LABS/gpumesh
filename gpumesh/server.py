@@ -31,7 +31,7 @@ from . import (
 )
 from .ansi import green, yellow, red, cyan, bold, dim
 from .db import Database
-from .security import SecurityManager
+from .security import SecurityManager, is_loopback
 
 REAP_INTERVAL = 5.0
 
@@ -534,8 +534,25 @@ class CoordinatorHandler(BaseHTTPRequestHandler):
             self._sweep_unread()
         self._send(code, body)
 
-    def _authed(self) -> bool:
+    def _peer_ip(self) -> str:
+        """The address auth and rate limiting should judge this request by.
+
+        A loopback peer that carries ``X-Forwarded-For`` is a reverse proxy
+        on this host relaying someone else: the ``--public`` ngrok agent, or
+        any nginx/caddy the operator put in front. Taken at its loopback
+        address, every internet guess was exempt from the lockout. The
+        header's value is not trusted, since the far client wrote it; its
+        presence only says "not the operator". Every proxied caller shares
+        one non-loopback bucket, so a lockout there never touches the local
+        CLI or the coordinator's own worker, which send no such header.
+        """
         ip = self.client_address[0]
+        if self.headers.get("X-Forwarded-For") and is_loopback(ip):
+            return "proxied-via-loopback"
+        return ip
+
+    def _authed(self) -> bool:
+        ip = self._peer_ip()
         allowed, msg = self.gpumesh_security.verify_request(
             self.headers.get("X-Auth-Token", ""), ip
         )

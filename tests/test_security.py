@@ -253,6 +253,44 @@ class TestLoopbackRateLimitExemption:
         assert limiter.is_allowed("192.168.1.7") is False
         assert limiter.get_lockout_remaining("192.168.1.7") > 0
 
+    def test_proxied_loopback_is_rate_limited(self, tmp_path):
+        """What --public traffic looks like: loopback peer + X-Forwarded-For.
+
+        ngrok terminates on 127.0.0.1, so before the fix every token guess
+        from the internet rode the loopback exemption and none hit a 429.
+        """
+        import http.client
+        import threading
+        from gpumesh.server import serve
+
+        httpd = serve("127.0.0.1", 0, str(tmp_path / "m.db"), "right-token")
+        port = httpd.server_address[1]
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+
+        def status(token, xff=None):
+            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=30)
+            headers = {"X-Auth-Token": token}
+            if xff:
+                headers["X-Forwarded-For"] = xff
+            try:
+                conn.request("GET", "/api/workers", headers=headers)
+                resp = conn.getresponse()
+                return resp.status, resp.read().decode()
+            finally:
+                conn.close()
+
+        try:
+            for _ in range(5):
+                assert status("wrong", "203.0.113.9")[0] == 401
+            # Locked out, whatever address the far client claims next.
+            code, body = status("right-token", "198.51.100.1")
+            assert code == 401 and "not checked" in body
+            # The operator's own unproxied loopback is untouched.
+            assert status("right-token")[0] == 200
+        finally:
+            httpd.gpumesh_stop.set()
+            httpd.shutdown()
+
 
 class TestIPAllowlist:
     """Tests for IP allowlist functionality."""
