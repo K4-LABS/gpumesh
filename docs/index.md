@@ -33,6 +33,7 @@ new. Each page below takes one topic and goes further than the README does.
 :caption: Guides
 
 architecture
+gui
 cli
 protocol
 mcp

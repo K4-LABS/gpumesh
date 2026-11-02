@@ -8,6 +8,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`gpumesh gui`: a mesh you can set up without typing a token.** A local
+  dashboard (browser page on `127.0.0.1` only, plus a tray icon with the new
+  `gui` extra) with three steps: start sharing this computer, show a 6-digit
+  code, join a mesh found on the network with that code. The token is never
+  shown on the page or put on a command line; a worker started from the
+  dashboard gets it through `GPUMESH_TOKEN`. Walkthrough in
+  [docs/gui.md](docs/gui.md), and `examples/gui_demo_sweep.py` shows which
+  machine ran each task.
+- **Pairing codes.** `POST /api/pair/request` (needs the token) mints a
+  6-digit code that works once and expires after 5 minutes.
+  `POST /api/pair/claim` trades it for the token with no token header. The
+  rate limit is checked before the body is read, failures burn the same
+  per-IP budget as wrong tokens, and wrong, used and expired codes all get
+  the same 403. `gpumesh quickjoin URL --code 482916` is the CLI side. Codes
+  live in memory, so a coordinator restart cancels them. New endpoints only,
+  so `PROTOCOL_VERSION` is unchanged.
 - **`gpumesh mcp-serve`: drive a mesh from an AI coding assistant.** Exposes
   the mesh to Claude Code, Cursor and any other MCP client as seven tools:
   `workers`, `mesh_status`, `submit_job`, `job_status`, `job_result`,

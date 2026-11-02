@@ -2076,6 +2076,25 @@ def cmd_worker(args):
 def cmd_quickjoin(args):
     """One-click setup: install dependencies, detect GPU, and join mesh."""
     token = args.token
+    code = (getattr(args, "code", "") or "").strip()
+    if code and token:
+        print(red("[ERROR] Use either --token or --code, not both"))
+        sys.exit(1)
+    if not code and not token:
+        print(red("[ERROR] --token or --code is required"))
+        sys.exit(1)
+
+    # A 6-digit value is the shape of a pairing code, not a mesh token. Getting
+    # these two the wrong way round fails at registration with "authentication
+    # failed ... the coordinator restarted with a different one", which sends
+    # people to check firewalls and restart coordinators for a problem that is
+    # one flag wide. Warn, do not refuse: a six-digit token someone set on
+    # purpose is still a working setup.
+    if token and not code and token.isdigit() and len(token) == 6:
+        print(yellow("[!] That token is 6 digits, which is the shape of a "
+                     "pairing code, not a mesh token."))
+        print(dim("   If it came from the dashboard, use the code flag instead:"))
+        print(dim(f"   gpumesh quickjoin URL --code {token}"))
 
     # Determine URL: explicit URL takes precedence over --tailscale
     if args.url:
@@ -2094,9 +2113,46 @@ def cmd_quickjoin(args):
         # Use Tailscale IP with specified port
         url = f"http://{tailscale_ip}:{args.port}"
         print(dim(f"   Found Tailscale IP: {tailscale_ip}"))
+    elif code:
+        # A pairing code carries no address, so fall back to the saved
+        # connection (or GPUMESH_URL) instead of demanding a URL.
+        url, _ = connection_manager.get_connection(None, None)
+        if not url:
+            print(red("[ERROR] URL required with --code unless a connection is saved"))
+            print(dim("   Pass a URL, use --tailscale, or save one first with:"))
+            print(dim("   gpumesh join URL --token TOKEN"))
+            sys.exit(1)
+        if not url.startswith(("http://", "https://")):
+            print(red("[ERROR] Saved URL must start with http:// or https://"))
+            sys.exit(1)
+        print(dim(f"   Using saved coordinator URL: {url}"))
     else:
         print(red("[ERROR] URL required or use --tailscale flag"))
         sys.exit(1)
+
+    if code:
+        # Trade the short code for the real token before doing anything else.
+        # MeshClient with an empty token: the claim route ignores the header.
+        from .worker import MeshClient
+
+        print(dim("   Claiming pairing code..."))
+        try:
+            payload = MeshClient(url, "").call(
+                "POST", "/api/pair/claim",
+                {"code": code, "hostname": socket.gethostname()},
+            )
+        except urllib.error.HTTPError as exc:
+            print(red(f"[ERROR] Pairing code rejected (HTTP {exc.code})"))
+            sys.exit(1)
+        except (urllib.error.URLError, OSError) as exc:
+            print(red(f"[ERROR] Could not reach coordinator: {exc}"))
+            sys.exit(1)
+        token = payload.get("token", "") if isinstance(payload, dict) else ""
+        if not token:
+            print(red("[ERROR] Coordinator did not return a token"))
+            sys.exit(1)
+        connection_manager.save_connection(url, token)
+        print(green("   [OK] Pairing code accepted — connection saved"))
 
     print(bold("   Quick Join -- Setting up your machine as a worker..."))
     print()
@@ -2238,6 +2294,13 @@ def cmd_radar(args):
             print(dim("   Radar stopped."))
         finally:
             listener.stop()
+
+
+def cmd_gui(args):
+    """Open the local dashboard and tray (delegates to gpumesh.gui)."""
+    from . import gui as _gui
+
+    return _gui.cmd_gui(args)
 
 
 def main():
@@ -2477,8 +2540,12 @@ def main():
                        description="Automatically install dependencies, detect hardware, and join.")
     p.add_argument("url", nargs="?", default="",
                    help="coordinator URL (optional with --tailscale)")
-    p.add_argument("--token", required=True,
-                   help="shared auth token")
+    p.add_argument("--token", default="",
+                   help="shared auth token (or use --code for a pairing code)")
+    p.add_argument("--code", default="",
+                   help="6-digit pairing code from the coordinator "
+                        "(alternative to --token; --url optional when a "
+                        "connection is already saved)")
     p.add_argument("--tailscale", action="store_true",
                    help="auto-detect coordinator via Tailscale")
     p.add_argument("--port", type=int, default=8000,
@@ -2519,6 +2586,22 @@ def main():
     p.add_argument("--safe-mode", action="store_true",
                    help="disable function distribution; scripts only")
     p.set_defaults(func=cmd_worker)
+
+    p = sub.add_parser("gui",
+                       help="open the local dashboard and tray",
+                       description="Show this computer's mesh dashboard "
+                                   "in a browser (127.0.0.1 only) with an "
+                                   "optional tray icon. The secret key is "
+                                   "never shown.")
+    p.add_argument("--port", type=int, default=8080,
+                   help="dashboard port on this computer only (default: 8080)")
+    p.add_argument("--mesh-port", type=int, default=8000,
+                   help="mesh port used when creating from the tray (default: 8000)")
+    p.add_argument("--no-tray", action="store_true",
+                   help="serve the dashboard without a tray icon")
+    p.add_argument("--no-browser", action="store_true",
+                   help="do not open a browser automatically")
+    p.set_defaults(func=cmd_gui)
 
     args = ap.parse_args()
     # Before anything prints, including the log formatter's own colour
