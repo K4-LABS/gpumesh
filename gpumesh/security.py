@@ -384,6 +384,58 @@ class RateLimiter:
             return 0
 
 
+# Pairing codes are six digits by design: readable over the phone, and the
+# 10^6 space is safe inside a 5-minute window under the same 5-fails
+# lockout that guards the token itself.
+PAIRING_CODE_TTL_SECONDS = 300
+PAIRING_CODE_LENGTH = 6
+
+
+class PairingCodes:
+    """In-memory single-use pairing codes for bootstrapping workers.
+
+    A token holder mints a code (``issue``); a worker knowing only the
+    code trades it for the token (``redeem``), once. Codes live in this
+    process only — a coordinator restart invalidates outstanding ones.
+
+    Guessing resistance comes from elsewhere on purpose: the space is
+    small by design, so every failed redeem must feed the shared
+    ``RateLimiter`` in the caller (see ``server``), like a failed token
+    guess. This class only guarantees single-use and expiry.
+    """
+
+    def __init__(self, ttl_seconds: int = PAIRING_CODE_TTL_SECONDS):
+        self.ttl_seconds = ttl_seconds
+        self._codes = {}  # code -> expiry as time.time()
+        self._lock = threading.Lock()
+
+    def issue(self) -> str:
+        """Mint a fresh code valid for ``ttl_seconds``."""
+        with self._lock:
+            now = time.time()
+            # Opportunistic purge: redeem() pops whatever it touches, but a
+            # code nobody ever claims would otherwise sit here forever.
+            for stale in [c for c, exp in self._codes.items() if exp <= now]:
+                del self._codes[stale]
+            while True:
+                code = f"{secrets.randbelow(10 ** PAIRING_CODE_LENGTH):06d}"
+                if code not in self._codes:
+                    self._codes[code] = now + self.ttl_seconds
+                    return code
+
+    def redeem(self, code: str) -> bool:
+        """Consume ``code``. True only for a live code, and only once.
+
+        Wrong, expired, and used codes all answer False alike — the caller
+        must report them identically so the response is not an oracle.
+        """
+        with self._lock:
+            expiry = self._codes.pop(str(code or "").strip(), None)
+            if expiry is None:
+                return False
+            return time.time() <= expiry
+
+
 class IPAllowlist:
     """Optional IP allowlist for restricting access."""
     
@@ -438,6 +490,10 @@ class SecurityManager:
                                      iterations=kdf_iterations)
         self.rate_limiter = RateLimiter(max_attempts=max_attempts)
         self.ip_allowlist = IPAllowlist(allowed_ips)
+        # Short pairing codes share this manager's rate limiter: a failed
+        # code redeem burns the same per-IP budget as a failed token guess,
+        # so code-guessing is locked out by the policy the operator knows.
+        self.pairing = PairingCodes()
         # See _VerifyCache: the KDF cost is paid on the first request bearing
         # a given token and never again, so a polling worker does not turn the
         # cost factor into a self-inflicted denial of service.

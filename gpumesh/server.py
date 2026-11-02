@@ -1,6 +1,6 @@
 """Coordinator: threaded HTTP server exposing a JSON API.
 
-Endpoints (all require the X-Auth-Token header):
+Endpoints (all require the X-Auth-Token header, except /api/pair/claim):
   POST /api/register            {hostname, device, score, protocol_version?, ...}
                                 -> {worker_id, protocol_version,
                                     min_protocol_version}
@@ -15,6 +15,9 @@ Endpoints (all require the X-Auth-Token header):
   POST /api/retry               {job_id} -> {requeued, counts}
   GET  /api/workers             -> live worker list
   GET  /api/events              -> recent join/leave events (last 100)
+  POST /api/pair/request        -> {code, expires_in} (a short single-use code)
+  POST /api/pair/claim          {code, ...} -> {token} (NO token header;
+                                 rate-limited BEFORE the body is read)
 """
 
 import json
@@ -561,6 +564,70 @@ class CoordinatorHandler(BaseHTTPRequestHandler):
         self._refuse_early(401, {"error": msg})
         return False
 
+    # A claim is a 6-digit code plus identity labels — under a kilobyte.
+    # Like the claim port's 16 KB cap: an unauthenticated peer must not
+    # make us allocate anything bigger before we decide to read the body.
+    PAIR_CLAIM_MAX_BYTES = 16 * 1024
+
+    def _handle_pair_claim(self):
+        """Trade a single-use pairing code for the mesh token. No auth header.
+
+        The rate limit is checked BEFORE a body byte is read (the claimer
+        precedent): the secret is the code *in the body*, so the IP lockout
+        is the only pre-body gate available. Failures feed the SAME
+        RateLimiter as the token path. Wrong/expired/used codes answer an
+        identical 403, and the token leaves only in the one 200 body —
+        never in an error or a log line.
+        """
+        ip = self._peer_ip()
+        sec = self.gpumesh_security
+        if not sec.rate_limiter.is_allowed(ip):
+            remaining = int(sec.rate_limiter.get_lockout_remaining(ip))
+            self._refuse_early(429, {"error": (
+                "Too many failed pairing attempts from this address. "
+                f"Locked out for another {remaining}s. The code in this "
+                "request was not checked at all."
+            )})
+            return
+        raw_length = self.headers.get("Content-Length")
+        if raw_length is not None:
+            try:
+                claimed_length = int(raw_length)
+            except (ValueError, TypeError):
+                claimed_length = -1
+            if claimed_length < 0:
+                self._send(400, {"error": "invalid Content-Length"})
+                return
+            if claimed_length > self.PAIR_CLAIM_MAX_BYTES:
+                self._drain(claimed_length)
+                self._send(413, {"error": "request too large"})
+                return
+        try:
+            body = self._read_json()
+        except UnicodeDecodeError:
+            self._send(400, {"error": "request body must be UTF-8"})
+            return
+        except json.JSONDecodeError:
+            self._send(400, {"error": "invalid JSON"})
+            return
+        if body is None:
+            return
+        if not isinstance(body, dict):
+            self._send(400, {"error": "JSON body must be an object"})
+            return
+        code = body.get("code", "")
+        if not isinstance(code, str) or not code.strip():
+            # A shape error, not a guess: like the claim port's 400s, these
+            # do not burn the caller's lockout budget.
+            self._send(400, {"error": "need a pairing 'code'"})
+            return
+        if sec.pairing.redeem(code):
+            sec.rate_limiter.record_success(ip)
+            self._send(200, {"token": self.token})
+        else:
+            sec.rate_limiter.record_failure(ip)
+            self._send(403, {"error": "invalid or expired pairing code"})
+
     def log_message(self, fmt, *args):
         pass  # quiet; the CLI prints its own status lines
 
@@ -618,6 +685,11 @@ class CoordinatorHandler(BaseHTTPRequestHandler):
                 and self._shutdown_event.is_set()
                 and self.path not in self._SHUTDOWN_EXEMPT_POST_PATHS):
             self._refuse_early(503, {"error": "server shutting down"})
+            return
+        if self.path == "/api/pair/claim":
+            # Deliberately before _authed: the caller proves itself with the
+            # code in the body, not with a token header it cannot have yet.
+            self._handle_pair_claim()
             return
         if not self._authed():
             return
@@ -853,6 +925,17 @@ class CoordinatorHandler(BaseHTTPRequestHandler):
                     self._send(404, {"error": "job not found"})
                 else:
                     self._send(200, result)
+
+            elif self.path == "/api/pair/request":
+                # Minting costs a code, not a guess: this stays behind _authed
+                # above, so only a token holder can create codes. The code is
+                # returned to the caller and never logged — the operator reads
+                # it from this response, not from the coordinator's console.
+                code = self.gpumesh_security.pairing.issue()
+                self._send(200, {
+                    "code": code,
+                    "expires_in": self.gpumesh_security.pairing.ttl_seconds,
+                })
 
             elif self.path == "/api/kill":
                 force = body.get("force")

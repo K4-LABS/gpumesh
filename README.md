@@ -96,7 +96,8 @@ pip install gpumesh[tunnel]    # ngrok for public URLs
 pip install gpumesh[sysinfo]   # System info (psutil)
 pip install gpumesh[notebook]  # DataFrame support (pandas)
 pip install gpumesh[ui]        # Setup wizard (rich + questionary)
-pip install gpumesh[all]       # Everything above
+pip install gpumesh[gui]       # Dashboard + tray icon (pystray, Pillow)
+pip install gpumesh[all]       # Everything above except [gui], which needs a desktop
 ```
 
 Or with Docker:
@@ -133,6 +134,10 @@ python -c "import sysconfig; print(sysconfig.get_paths()['scripts'])"
 ---
 
 ## Quickstart
+
+> **Prefer a window over a terminal?** `pip install "gpumesh[gui]"`, run `gpumesh gui`,
+> and follow the three-laptop walkthrough in [`docs/gui.md`](docs/gui.md): Create → Join with
+> a code → dashboard → demo sweep. Everything below still applies — the window drives the same mesh.
 
 **One machine is enough.** `gpumesh serve` joins your own CPU/GPU to the pool
 by default, so a mesh of one runs exactly the same code path as a mesh of ten
